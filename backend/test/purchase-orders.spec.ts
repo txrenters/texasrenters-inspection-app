@@ -81,7 +81,7 @@ function database() {
 
   const requisitionOf = (requisitionId: unknown) => {
     const requisition = requisitions.find((row) => row.id === requisitionId)!;
-    return { ...requisition, lines: requisitionLines.filter((line) => line.requisitionId === requisitionId) };
+    return { ...requisition, lines: requisitionLines.filter((line) => line.requisitionId === requisitionId).map((line) => ({ ...line, vendor: vendors.find((vendor) => vendor.id === line.vendorId) ?? null })) };
   };
   function matches(row: Row, where: Where): boolean {
     return Object.entries(where).every(([key, value]) => {
@@ -182,7 +182,7 @@ function database() {
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
   const mail = { sendPurchaseOrder: jest.fn<Promise<{ status: string; message: string }>, [Row]>(async () => ({ status: 'SENT', message: 'Email sent successfully.' })) };
-  return { db, mail, orders, lines, requisitions, deliveries, audits, service: new PurchaseOrdersService(db as never, mail as never) };
+  return { db, mail, orders, lines, requisitions, requisitionLines, quotes, vendors, deliveries, audits, service: new PurchaseOrdersService(db as never, mail as never) };
 }
 
 const line = (itemId: string, quantity: number, unitPriceCents: number) => ({ itemId, quantity, unitPriceCents });
@@ -223,6 +223,18 @@ describe('making an order', () => {
     expect(draft.can).toMatchObject({ edit: true, submit: true, approve: false, send: false, cancel: true });
     expect(requisitions[0]).toMatchObject({ status: 'ORDERED' });
     expect(audits.map((audit) => [audit.action, audit.entityType])).toEqual([['PURCHASE_ORDER_CREATED', 'PurchaseOrder'], ['PURCHASE_REQUISITION_ORDERED', 'PurchaseRequisition']]);
+  });
+
+  it('goes to the one vendor every line names when no quote was chosen, and to none when the lines name several (2026-11-20)', async () => {
+    const made = database();
+    made.quotes.splice(0, made.quotes.length);
+    for (const line of made.requisitionLines) line.vendorId = ALAMO;
+    expect(await made.service.createFromRequisition(buyer, REQUISITION)).toMatchObject({ vendor: { id: ALAMO } });
+
+    const mixed = database();
+    mixed.quotes.splice(0, mixed.quotes.length);
+    mixed.requisitionLines.forEach((line, index) => (line.vendorId = index === 0 ? ALAMO : HILL));
+    expect(await mixed.service.createFromRequisition(buyer, REQUISITION)).toMatchObject({ vendor: null });
   });
 
   it('is made once a requisition, and never from one that is not approved', async () => {

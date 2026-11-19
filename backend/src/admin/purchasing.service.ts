@@ -8,6 +8,7 @@ import {
   averageCostCents,
   formatMoney,
   requisitionNumber,
+  requisitionerCode,
   requisitionSubmitProblem,
   requisitionTotalCents,
   type PurchasingSettings,
@@ -23,6 +24,7 @@ import {
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
+import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 
@@ -46,6 +48,7 @@ import { PrismaService } from '../common/prisma.service';
 const APPROVE = 'purchasing:approve';
 const ORDER = 'purchasing:order';
 const APPROVE_ANY = 'purchasing:approve-any';
+const MAKE_ITEM_CODES = 'inventory:manage';
 const ENTITY = 'PurchaseRequisition';
 /** The requisitions that are finished with, newest first: enough to look back, and no more. */
 const CLOSED_SHOWN = 200;
@@ -70,28 +73,46 @@ const ROW = {
   decidedAt: true,
   decisionNote: true,
   createdAt: true,
+  documentDate: true,
   requestedBy: { select: { displayName: true } },
   decidedBy: { select: { displayName: true } },
-  deliverTo: { select: { id: true, name: true } },
+  deliverTo: { select: { id: true, name: true, code: true } },
+  requestCode: { select: { id: true, code: true, name: true } },
+  costCenter: { select: { id: true, code: true, name: true } },
   lines: {
     orderBy: { position: 'asc' },
-    select: { id: true, description: true, quantity: true, estimatedUnitCostCents: true, item: { select: { id: true, code: true, name: true, unit: true, reorderLevel: true } } },
+    select: {
+      id: true,
+      description: true,
+      quantity: true,
+      estimatedUnitCostCents: true,
+      expectedOn: true,
+      notes: true,
+      item: { select: { id: true, code: true, name: true, unit: true, reorderLevel: true, lineType: { select: { code: true, name: true, keepsStock: true } } } },
+      place: { select: { id: true, code: true, name: true } },
+      vendor: { select: { id: true, number: true, name: true } },
+      department: { select: { id: true, code: true, name: true } },
+    },
   },
   quotes: { orderBy: { totalCents: 'asc' }, select: { id: true, totalCents: true, delivery: true, chosen: true, vendor: { select: { id: true, name: true } } } },
 } satisfies Prisma.PurchaseRequisitionSelect;
 type Requisition = Prisma.PurchaseRequisitionGetPayload<{ select: typeof ROW }>;
 
-function row(requisition: Requisition, companies: ReadonlyMap<string, string>): RequisitionRow {
+/** A company's name and purchaser code, by its Xero tenant. */
+type Companies = ReadonlyMap<string, { name: string; purchaserCode: string | null }>;
+
+function row(requisition: Requisition, companies: Companies): RequisitionRow {
+  const company = requisition.xeroTenantId ? companies.get(requisition.xeroTenantId) : undefined;
   return {
     id: requisition.id,
     number: requisition.number,
     status: requisition.status,
-    requestedBy: { id: requisition.requestedById, name: requisition.requestedBy.displayName },
+    requestedBy: { id: requisition.requestedById, name: requisition.requestedBy.displayName, code: requisitionerCode(requisition.requestedBy.displayName) },
     submittedAt: requisition.submittedAt?.toISOString() ?? null,
     createdAt: requisition.createdAt.toISOString(),
-    company: requisition.xeroTenantId ? { tenantId: requisition.xeroTenantId, name: companies.get(requisition.xeroTenantId) ?? 'A company' } : null,
+    company: requisition.xeroTenantId ? { tenantId: requisition.xeroTenantId, name: company?.name ?? 'A company', purchaserCode: company?.purchaserCode ?? null } : null,
     neededBy: dayOf(requisition.neededBy),
-    summary: requisition.lines.map((line) => `${line.item?.name ?? line.description ?? ''} × ${line.quantity}`).join(', '),
+    summary: requisition.lines.map((line) => `${line.description ?? line.item?.name ?? ''} × ${line.quantity}`).join(', '),
     lineCount: requisition.lines.length,
     quoteCount: requisition.quotes.length,
     estimatedTotalCents: requisitionTotalCents(requisition.lines),
@@ -141,8 +162,11 @@ export class PurchasingService {
   }
 
   private async companies(organizationId: string) {
-    const rows = await this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, status: true }, orderBy: { name: 'asc' } });
-    return { names: new Map(rows.map((entry) => [entry.xeroTenantId, entry.name])), connected: rows.filter((entry) => entry.status === 'CONNECTED').map((entry) => ({ tenantId: entry.xeroTenantId, name: entry.name })) };
+    const rows = await this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, status: true, purchaserCode: true }, orderBy: { name: 'asc' } });
+    return {
+      names: new Map(rows.map((entry) => [entry.xeroTenantId, { name: entry.name, purchaserCode: entry.purchaserCode }])) as Companies,
+      connected: rows.filter((entry) => entry.status === 'CONNECTED').map((entry) => ({ tenantId: entry.xeroTenantId, name: entry.name, purchaserCode: entry.purchaserCode })),
+    };
   }
 
   /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
@@ -222,12 +246,22 @@ export class PurchasingService {
       ...summary,
       reason: requisition.reason,
       deliverTo: requisition.deliverTo,
+      requestCode: requisition.requestCode,
+      costCenter: requisition.costCenter,
+      requisitionDate: businessDate(requisition.createdAt),
+      documentDate: dayOf(requisition.documentDate),
       lines: requisition.lines.map((line) => ({
         id: line.id,
         item: line.item ? { id: line.item.id, code: line.item.code, name: line.item.name, unit: line.item.unit } : null,
-        description: line.description,
+        description: line.description ?? line.item?.name ?? null,
         quantity: line.quantity,
         estimatedUnitCostCents: line.estimatedUnitCostCents,
+        lineType: line.item?.lineType ?? null,
+        place: line.place,
+        expectedOn: dayOf(line.expectedOn),
+        vendor: line.vendor,
+        department: line.department,
+        notes: line.notes,
         onHand: line.item ? (onHand.get(line.item.id) ?? 0) : null,
         reorderLevel: line.item?.reorderLevel ?? null,
       })),
@@ -241,25 +275,52 @@ export class PurchasingService {
     };
   }
 
-  /** What the form chooses from: four reads, whatever the number of items. */
+  /**
+   * What the form chooses from: nine reads, whatever the number of items --
+   * the items with what is on hand where, what is still to come on open
+   * orders and the order that last asked for each, and the codes in use.
+   */
   async choices(user: AuthenticatedUser): Promise<RequisitionChoices> {
     const organizationId = user.organizationId;
-    const [items, levels, places, companies, vendors, settings] = await Promise.all([
+    const [items, levels, places, companies, vendors, settings, codes, categories, ordered] = await Promise.all([
       this.prisma.stockItem.findMany({
         where: { organizationId, active: true },
-        select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true, priceCents: true },
+        select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true, priceCents: true, lineTypeId: true, categoryId: true, usualVendorId: true },
         orderBy: { codeKey: 'asc' },
       }),
-      this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId }, _sum: { quantity: true, valueCents: true } }),
-      this.prisma.stockPlace.findMany({ where: { organizationId, active: true }, select: { id: true, name: true }, orderBy: [{ kind: 'asc' }, { nameKey: 'asc' }] }),
+      this.prisma.stockLevel.findMany({ where: { organizationId, quantity: { not: 0 } }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
+      this.prisma.stockPlace.findMany({ where: { organizationId, active: true }, select: { id: true, name: true, code: true }, orderBy: [{ kind: 'asc' }, { nameKey: 'asc' }] }),
       this.companies(organizationId),
-      this.prisma.vendor.findMany({ where: { organizationId, active: true }, select: { id: true, name: true }, orderBy: { nameKey: 'asc' } }),
+      this.prisma.vendor.findMany({ where: { organizationId, active: true }, select: { id: true, name: true, number: true }, orderBy: { nameKey: 'asc' } }),
       this.settings(this.prisma, organizationId),
+      this.prisma.purchasingCode.findMany({ where: { organizationId, active: true }, select: { id: true, kind: true, code: true, name: true, keepsStock: true }, orderBy: { code: 'asc' } }),
+      this.prisma.stockCategory.findMany({ where: { organizationId, active: true }, select: { id: true, name: true }, orderBy: { nameKey: 'asc' } }),
+      // Every line of an order still open, newest first: what is to come, and which order last asked.
+      this.prisma.purchaseOrderLine.findMany({
+        where: { organizationId, order: { status: { notIn: ['CANCELLED', 'DRAFT'] } } },
+        select: { itemId: true, quantity: true, receivedQuantity: true, order: { select: { number: true, status: true, createdAt: true } } },
+        orderBy: { order: { createdAt: 'desc' } },
+        take: 5000,
+      }),
     ]);
-    const held = new Map(levels.map((level) => [level.itemId, { quantity: level._sum.quantity ?? 0, valueCents: level._sum.valueCents ?? 0 }]));
+    const held = new Map<string, { quantity: number; valueCents: number; places: { placeId: string; quantity: number }[] }>();
+    for (const level of levels) {
+      const kept = held.get(level.itemId) ?? { quantity: 0, valueCents: 0, places: [] };
+      kept.quantity += level.quantity;
+      kept.valueCents += level.valueCents;
+      kept.places.push({ placeId: level.placeId, quantity: level.quantity });
+      held.set(level.itemId, kept);
+    }
+    const onOrder = new Map<string, number>();
+    const lastOrdered = new Map<string, string>();
+    for (const line of ordered) {
+      if (line.order.number && !lastOrdered.has(line.itemId)) lastOrdered.set(line.itemId, line.order.number);
+      if (!['RECEIVED', 'CLOSED'].includes(line.order.status)) onOrder.set(line.itemId, (onOrder.get(line.itemId) ?? 0) + Math.max(0, line.quantity - line.receivedQuantity));
+    }
+    const ofKind = (kind: string) => codes.filter((code) => code.kind === kind).map(({ id, code, name }) => ({ id, code, name }));
     return {
       items: items.map((item) => {
-        const level = held.get(item.id) ?? { quantity: 0, valueCents: 0 };
+        const level = held.get(item.id) ?? { quantity: 0, valueCents: 0, places: [] };
         return {
           id: item.id,
           code: item.code,
@@ -271,12 +332,25 @@ export class PurchasingService {
           reorderQuantity: item.reorderQuantity,
           averageCostCents: averageCostCents(level.valueCents, level.quantity),
           priceCents: item.priceCents,
+          lineTypeId: item.lineTypeId,
+          categoryId: item.categoryId,
+          usualVendorId: item.usualVendorId,
+          held: level.places,
+          onOrder: onOrder.get(item.id) ?? 0,
+          lastOrdered: lastOrdered.get(item.id) ?? null,
         };
       }),
       places,
       companies: companies.connected,
       vendors,
       settings,
+      lineTypes: codes.filter((code) => code.kind === 'LINE_TYPE').map(({ id, code, name, keepsStock }) => ({ id, code, name, keepsStock })),
+      requestCodes: ofKind('REQUEST'),
+      departments: ofKind('DEPARTMENT'),
+      costCenters: ofKind('COST_CENTER'),
+      categories,
+      me: { id: user.id, name: user.displayName, code: requisitionerCode(user.displayName) },
+      canMakeItemCodes: may(user, MAKE_ITEM_CODES),
     };
   }
 
@@ -307,6 +381,21 @@ export class PurchasingService {
     const vendorIds = [...new Set(input.quotes.map((quote) => quote.vendorId))];
     if (vendorIds.length && (await db.vendor.count({ where: { organizationId, id: { in: vendorIds } } })) !== vendorIds.length)
       throw new ApplicationError(400, 'VENDOR_NOT_FOUND', 'One of the quotes names a vendor that is not on the list.');
+
+    // The codes and places it names (2026-11-20): each this office's own, in use, and on its own list.
+    const code = async (id: string | null | undefined, kind: 'REQUEST' | 'COST_CENTER' | 'DEPARTMENT', words: string) => {
+      if (id && !(await db.purchasingCode.findFirst({ where: { organizationId, id, kind, active: true }, select: { id: true } })))
+        throw new ApplicationError(400, 'REQUISITION_CODE_NOT_FOUND', `That ${words} is not on the list, or is switched off.`);
+    };
+    await code(input.requestCodeId, 'REQUEST', 'request code');
+    await code(input.costCenterId, 'COST_CENTER', 'cost center code');
+    for (const id of new Set(input.lines.flatMap((line) => (line.departmentId ? [line.departmentId] : [])))) await code(id, 'DEPARTMENT', 'department code');
+    const linePlaces = [...new Set(input.lines.flatMap((line) => (line.placeId ? [line.placeId] : [])))];
+    if (linePlaces.length && (await db.stockPlace.count({ where: { organizationId, id: { in: linePlaces }, active: true } })) !== linePlaces.length)
+      throw new ApplicationError(400, 'REQUISITION_PLACE_NOT_FOUND', 'A line goes to a place that is not in use.');
+    const lineVendors = [...new Set(input.lines.flatMap((line) => (line.vendorId ? [line.vendorId] : [])))];
+    if (lineVendors.length && (await db.vendor.count({ where: { organizationId, id: { in: lineVendors }, active: true } })) !== lineVendors.length)
+      throw new ApplicationError(400, 'VENDOR_NOT_FOUND', 'A line names a vendor that is not on the list, or is switched off.');
     if (input.quotes.filter((quote) => quote.chosen).length > 1) throw new ApplicationError(400, 'REQUISITION_QUOTES_CHOSEN', 'Only one quote can be the chosen one.');
   }
 
@@ -315,6 +404,10 @@ export class PurchasingService {
       xeroTenantId: input.xeroTenantId ?? null,
       neededBy: input.neededBy ? dateOf(input.neededBy) : null,
       deliverToPlaceId: input.deliverToPlaceId ?? null,
+      requestCodeId: input.requestCodeId ?? null,
+      costCenterId: input.costCenterId ?? null,
+      // The day on the paper: today in Texas unless another was given.
+      documentDate: dateOf(input.documentDate ?? businessDate()),
       reason: input.reason.trim(),
     };
   }
@@ -329,6 +422,12 @@ export class PurchasingService {
           itemId: line.itemId,
           quantity: line.quantity,
           estimatedUnitCostCents: line.estimatedUnitCostCents,
+          description: text(line.description),
+          placeId: line.placeId ?? null,
+          expectedOn: line.expectedOn ? dateOf(line.expectedOn) : null,
+          vendorId: line.vendorId ?? null,
+          departmentId: line.departmentId ?? null,
+          notes: line.notes?.trim() || null,
         })),
       });
     if (input.quotes.length)
@@ -341,14 +440,19 @@ export class PurchasingService {
     return db.auditLog.create({ data: { organizationId: user.organizationId, ...auditActor(user), action, entityType: ENTITY, entityId: requisitionId, metadata } });
   }
 
-  /** A draft, the caller's own. */
+  /**
+   * A draft, the caller's own. It takes its number now, as in NAV (2026-11-20),
+   * so a draft can be found and talked about by it; a draft that is deleted
+   * leaves a gap in the numbers.
+   */
   async create(user: AuthenticatedUser, input: SaveRequisitionInput): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
     const created = await this.prisma.$transaction(async (tx) => {
       await this.checked(tx, organizationId, input);
-      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, ...this.fields(input) }, select: { id: true } });
+      const number = requisitionNumber(await nextDocumentNumber(tx, organizationId, 'PR'));
+      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input) }, select: { id: true } });
       await this.writeLinesAndQuotes(tx, organizationId, requisition.id, input);
-      await this.audit(tx, user, 'PURCHASE_REQUISITION_CREATED', requisition.id, { lines: input.lines.length, totalCents: requisitionTotalCents(input.lines) });
+      await this.audit(tx, user, 'PURCHASE_REQUISITION_CREATED', requisition.id, { number, lines: input.lines.length, totalCents: requisitionTotalCents(input.lines) });
       return requisition;
     });
     return this.detail(user, created.id);
@@ -389,7 +493,7 @@ export class PurchasingService {
     return this.detail(user, requisitionId);
   }
 
-  /** Hands it to the approvers. It takes its number the first time, and keeps it if it comes back and goes again. */
+  /** Hands it to the approvers. A draft from before numbers were given at saving takes its number now; one comes back and goes again with the same. */
   async submit(user: AuthenticatedUser, requisitionId: string): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
     await this.prisma.$transaction(async (tx) => {

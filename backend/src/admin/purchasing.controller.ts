@@ -27,6 +27,13 @@ export class RequisitionLineDto implements Required<RequisitionLineInput> {
   @IsUUID() itemId!: string;
   @IsInt() @Min(1) @Max(MOST_STOCK_QUANTITY) quantity!: number;
   @IsInt() @Min(0) @Max(MOST_UNIT_COST_CENTS) estimatedUnitCostCents!: number;
+  // 2026-11-20: optional, so a caller that sends only the three above is read as before. Null or left out is "none".
+  @IsOptional() @IsString() @MaxLength(200) description!: string | null;
+  @IsOptional() @IsUUID() placeId!: string | null;
+  @IsOptional() @Matches(DAY) expectedOn!: string | null;
+  @IsOptional() @IsUUID() vendorId!: string | null;
+  @IsOptional() @IsUUID() departmentId!: string | null;
+  @IsOptional() @IsString() @MaxLength(1000) notes!: string | null;
 }
 
 export class RequisitionQuoteDto implements Required<RequisitionQuoteInput> {
@@ -44,6 +51,9 @@ export class SaveRequisitionDto implements Required<SaveRequisitionInput> {
   @ValidateIf(GIVEN) @IsString() @MaxLength(80) xeroTenantId!: string | null;
   @ValidateIf(GIVEN) @Matches(DAY) neededBy!: string | null;
   @ValidateIf(GIVEN) @IsUUID() deliverToPlaceId!: string | null;
+  @IsOptional() @IsUUID() requestCodeId!: string | null;
+  @IsOptional() @IsUUID() costCenterId!: string | null;
+  @IsOptional() @Matches(DAY) documentDate!: string | null;
   @IsString() @MaxLength(2000) reason!: string;
   @IsArray() @ArrayMaxSize(MOST_REQUISITION_LINES) @ValidateNested({ each: true }) @Type(() => RequisitionLineDto) lines!: RequisitionLineDto[];
   @IsArray() @ArrayMaxSize(MOST_REQUISITION_QUOTES) @ValidateNested({ each: true }) @Type(() => RequisitionQuoteDto) quotes!: RequisitionQuoteDto[];

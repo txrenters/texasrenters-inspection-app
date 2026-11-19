@@ -64,6 +64,16 @@ function database() {
     { id: OLD, organizationId: ORG, code: 'OLD-1', codeKey: 'old-1', name: 'Discontinued filter', unit: 'each', xeroTenantId: THMP, reorderLevel: 0, reorderQuantity: 0, active: false },
   ];
   const levels = [{ itemId: BATTERY, _sum: { quantity: 5, valueCents: 925 } }];
+  // Where it is (2026-11-20): the batteries are all in the stockroom.
+  const placeLevels = [{ itemId: BATTERY, placeId: STOCKROOM, quantity: 5, valueCents: 925 }];
+  const codes: Row[] = [
+    { id: id(51), organizationId: ORG, kind: 'REQUEST', code: 'RESTOCK', name: 'Restock the storeroom', active: true, keepsStock: true },
+    { id: id(52), organizationId: ORG, kind: 'COST_CENTER', code: 'MAINT', name: 'Maintenance', active: true, keepsStock: true },
+    { id: id(53), organizationId: ORG, kind: 'DEPARTMENT', code: 'HVAC', name: 'HVAC', active: true, keepsStock: true },
+    { id: id(54), organizationId: ORG, kind: 'REQUEST', code: 'OLD', name: 'Old kind', active: false, keepsStock: true },
+    { id: id(55), organizationId: ORG, kind: 'LINE_TYPE', code: 'ITEM', name: 'Item', active: true, keepsStock: true },
+    { id: id(56), organizationId: OTHER_ORG, kind: 'REQUEST', code: 'THEIRS', name: 'Theirs', active: true, keepsStock: true },
+  ];
   const vendors: Row[] = [
     { id: HILL, organizationId: ORG, name: 'Hill Country Supply', active: true },
     { id: ALAMO, organizationId: ORG, name: 'Alamo Trade Parts', active: true },
@@ -81,11 +91,21 @@ function database() {
     ...requisition,
     requestedBy: { displayName: PEOPLE.find((one) => one.id === requisition.requestedById)!.displayName },
     decidedBy: requisition.decidedById ? { displayName: PEOPLE.find((one) => one.id === requisition.decidedById)!.displayName } : null,
-    deliverTo: requisition.deliverToPlaceId ? { id: STOCKROOM, name: 'Stockroom' } : null,
+    deliverTo: requisition.deliverToPlaceId ? { id: STOCKROOM, name: 'Stockroom', code: 'STORE' } : null,
+    requestCode: codes.find((code) => code.id === requisition.requestCodeId) ?? null,
+    costCenter: codes.find((code) => code.id === requisition.costCenterId) ?? null,
     lines: lines
       .filter((line) => line.requisitionId === requisition.id)
       .sort((left, right) => (left.position as number) - (right.position as number))
-      .map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) ?? null })),
+      .map((line) => ({
+        expectedOn: null,
+        notes: null,
+        ...line,
+        item: items.find((item) => item.id === line.itemId) ?? null,
+        place: line.placeId ? { id: STOCKROOM, code: 'STORE', name: 'Stockroom' } : null,
+        vendor: vendors.find((vendor) => vendor.id === line.vendorId) ?? null,
+        department: codes.find((code) => code.id === line.departmentId) ?? null,
+      })),
     quotes: quotes.filter((quote) => quote.requisitionId === requisition.id).map((quote) => ({ ...quote, vendor: vendors.find((vendor) => vendor.id === quote.vendorId) })),
   });
 
@@ -122,10 +142,23 @@ function database() {
     // No order has been made from any of these.
     purchaseOrder: { findFirst: jest.fn(async () => null) },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
-    stockLevel: { groupBy: jest.fn(async () => levels) },
+    stockLevel: { groupBy: jest.fn(async () => levels), findMany: jest.fn(async () => placeLevels) },
     stockPlace: {
       findFirst: jest.fn(async ({ where }: { where: Where }) => (where.id === STOCKROOM && where.organizationId === ORG ? { id: STOCKROOM } : null)),
-      findMany: jest.fn(async () => [{ id: STOCKROOM, name: 'Stockroom' }]),
+      findMany: jest.fn(async () => [{ id: STOCKROOM, name: 'Stockroom', code: 'STORE' }]),
+      count: jest.fn(async ({ where }: { where: { organizationId: string; id: { in: string[] } } }) => (where.organizationId === ORG ? where.id.in.filter((one) => one === STOCKROOM).length : 0)),
+    },
+    stockCategory: { findMany: jest.fn(async () => [{ id: id(61), name: 'Filters' }]) },
+    purchasingCode: {
+      findFirst: jest.fn(async ({ where }: { where: Where }) => codes.find((row) => matches(row, where)) ?? null),
+      findMany: jest.fn(async ({ where }: { where: Where }) => codes.filter((row) => matches(row, where))),
+    },
+    // One order still to come for the filters, and an older one that came.
+    purchaseOrderLine: {
+      findMany: jest.fn(async () => [
+        { itemId: FILTER, quantity: 36, receivedQuantity: 12, order: { number: 'PO-0007', status: 'PARTLY_RECEIVED', createdAt: new Date('2026-11-18') } },
+        { itemId: FILTER, quantity: 24, receivedQuantity: 24, order: { number: 'PO-0003', status: 'RECEIVED', createdAt: new Date('2026-11-10') } },
+      ]),
     },
     vendor: {
       count: jest.fn(async ({ where }: { where: Where }) => vendors.filter((row) => matches(row, where)).length),
@@ -152,7 +185,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, requisitions, lines, quotes, audits, service: new PurchasingService(db as never) };
+  return { db, requisitions, lines, quotes, audits, codes, service: new PurchasingService(db as never) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -175,7 +208,8 @@ describe('a requisition', () => {
     const { service, audits } = database();
     const draft = await service.create(asker, small());
 
-    expect(draft).toMatchObject({ status: 'DRAFT', number: null, requestedBy: { name: 'Sample Requester' }, company: { name: 'THMP' }, neededBy: '2026-11-24', estimatedTotalCents: 18480, lineCount: 2 });
+    // Numbered when first saved (2026-11-20), and the requisitioner ID made from the name.
+    expect(draft).toMatchObject({ status: 'DRAFT', number: 'PR-00001', requestedBy: { name: 'Sample Requester', code: 'SREQUESTER' }, company: { name: 'THMP' }, neededBy: '2026-11-24', estimatedTotalCents: 18480, lineCount: 2 });
     expect(draft.summary).toBe('Filter 20x25x1 × 36, Battery, 9 V × 24');
     expect(draft.lines.map((one) => [one.item?.code, one.onHand, one.reorderLevel])).toEqual([['FLT-20251', 0, 18], ['BAT-9V', 5, 12]]);
     expect(draft.can).toMatchObject({ edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false });
@@ -199,29 +233,66 @@ describe('a requisition', () => {
     await expect(service.detail(outsider, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
   });
 
-  it('takes the office\'s next number when first submitted, and keeps it', async () => {
-    const { service } = database();
+  it('takes the office\'s next number when first saved, and keeps it through submitting and coming back (2026-11-20)', async () => {
+    const { service, requisitions } = database();
     const first = await service.create(asker, small());
     const second = await service.create(colleague, small());
+    expect([first.number, second.number]).toEqual(['PR-00001', 'PR-00002']);
 
-    expect(await service.submit(colleague, second.id)).toMatchObject({ number: 'PR-0001', status: 'SUBMITTED' });
-    expect(await service.submit(asker, first.id)).toMatchObject({ number: 'PR-0002' });
-
+    expect(await service.submit(colleague, second.id)).toMatchObject({ number: 'PR-00002', status: 'SUBMITTED' });
+    await service.submit(asker, first.id);
     await service.decide(manager, first.id, 'SENT_BACK', { note: 'Which model?' });
-    expect(await service.submit(asker, first.id)).toMatchObject({ number: 'PR-0002', status: 'SUBMITTED', decisionNote: null });
+    expect(await service.submit(asker, first.id)).toMatchObject({ number: 'PR-00001', status: 'SUBMITTED', decisionNote: null });
+
+    // A draft from before numbers came with saving takes the next one when it is submitted.
+    const old = await service.create(asker, small());
+    requisitions.find((row) => row.id === old.id)!.number = null;
+    expect(await service.submit(asker, old.id)).toMatchObject({ number: 'PR-00004' });
   });
 
-  it('cannot be submitted without a reason, without a line, or by anybody but its author', async () => {
+  it('cannot be submitted without a line, or by anybody but its author; a reason is a note, not a requirement', async () => {
     const { service } = database();
     const draft = await service.create(asker, small({ reason: '  ' }));
-    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Say why it is needed.' });
-
-    await service.update(asker, draft.id, small({ lines: [] }));
+    await service.update(asker, draft.id, small({ reason: '', lines: [] }));
     await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Add at least one item.' });
 
-    await service.update(asker, draft.id, small());
+    await service.update(asker, draft.id, small({ reason: '' }));
     await expect(service.submit(manager, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
     await expect(service.update(colleague, draft.id, small())).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+    expect(await service.submit(asker, draft.id)).toMatchObject({ status: 'SUBMITTED', reason: '' });
+  });
+
+  it('keeps its General codes and each line\'s location, date, vendor, department and note (2026-11-20)', async () => {
+    const { service, lines } = database();
+    const draft = await service.create(
+      asker,
+      small({
+        requestCodeId: id(51),
+        costCenterId: id(52),
+        documentDate: '2026-11-19',
+        lines: [
+          { ...line(FILTER, 36, 390), description: ' Filter 20x25x1, MERV 8 ', placeId: STOCKROOM, expectedOn: '2026-11-26', vendorId: HILL, departmentId: id(53), notes: ' Back door ' },
+          line(BATTERY, 24, 185),
+        ],
+      }),
+    );
+    expect(draft).toMatchObject({ requestCode: { code: 'RESTOCK' }, costCenter: { code: 'MAINT' }, documentDate: '2026-11-19', deliverTo: { code: 'STORE' } });
+    expect(lines[0]).toMatchObject({ description: 'Filter 20x25x1, MERV 8', placeId: STOCKROOM, vendorId: HILL, departmentId: id(53), notes: 'Back door' });
+    expect(draft.lines[0]).toMatchObject({ description: 'Filter 20x25x1, MERV 8', place: { code: 'STORE' }, vendor: { name: 'Hill Country Supply' }, department: { code: 'HVAC' }, notes: 'Back door' });
+    // A line given no description reads as its item.
+    expect(draft.lines[1]).toMatchObject({ description: 'Battery, 9 V', place: null, vendor: null, department: null });
+  });
+
+  it('names only codes, places and vendors of this office, in use and on their own list (2026-11-20)', async () => {
+    const { service } = database();
+    const refused = (over: Partial<SaveRequisitionInput>) => service.create(asker, small(over));
+    await expect(refused({ requestCodeId: id(54) })).rejects.toMatchObject({ code: 'REQUISITION_CODE_NOT_FOUND', message: 'That request code is not on the list, or is switched off.' });
+    await expect(refused({ requestCodeId: id(52) })).rejects.toMatchObject({ code: 'REQUISITION_CODE_NOT_FOUND' });
+    await expect(refused({ requestCodeId: id(56) })).rejects.toMatchObject({ code: 'REQUISITION_CODE_NOT_FOUND' });
+    await expect(refused({ costCenterId: id(53) })).rejects.toMatchObject({ code: 'REQUISITION_CODE_NOT_FOUND', message: 'That cost center code is not on the list, or is switched off.' });
+    await expect(refused({ lines: [{ ...line(FILTER, 1, 1), departmentId: id(51) }] })).rejects.toMatchObject({ message: 'That department code is not on the list, or is switched off.' });
+    await expect(refused({ lines: [{ ...line(FILTER, 1, 1), placeId: id(99) }] })).rejects.toMatchObject({ code: 'REQUISITION_PLACE_NOT_FOUND' });
+    await expect(refused({ lines: [{ ...line(FILTER, 1, 1), vendorId: id(23) }] })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
   });
 
   it('is fixed once submitted, and opens again for its author when it is sent back', async () => {
@@ -373,6 +444,20 @@ describe('the limits and the form\'s choices', () => {
     expect(choices.items.find((item) => item.code === 'FLT-20251')).toMatchObject({ priceCents: 425 });
     expect(choices.vendors.map((vendor) => vendor.name)).toEqual(['Hill Country Supply', 'Alamo Trade Parts']);
   });
+
+  it('offer what is where, what is still to come, the order that last asked, and the codes in use (2026-11-20)', async () => {
+    const { service } = database();
+    const choices = await service.choices(asker);
+    expect(choices.items.find((item) => item.code === 'BAT-9V')).toMatchObject({ held: [{ placeId: STOCKROOM, quantity: 5 }], onOrder: 0, lastOrdered: null });
+    // 36 ordered, 12 come: 24 still to come. The newest order is the last that asked.
+    expect(choices.items.find((item) => item.code === 'FLT-20251')).toMatchObject({ held: [], onOrder: 24, lastOrdered: 'PO-0007' });
+    expect(choices.requestCodes?.map((code) => code.code)).toEqual(['RESTOCK']);
+    expect(choices.costCenters?.map((code) => code.code)).toEqual(['MAINT']);
+    expect(choices.departments?.map((code) => code.code)).toEqual(['HVAC']);
+    expect(choices.lineTypes).toEqual([{ id: id(55), code: 'ITEM', name: 'Item', keepsStock: true }]);
+    expect(choices.me).toEqual({ id: asker.id, name: 'Sample Requester', code: 'SREQUESTER' });
+    expect(choices.canMakeItemCodes).toBe(false);
+  });
 });
 
 describe('the requests the page sends', () => {
@@ -380,7 +465,13 @@ describe('the requests the page sends', () => {
   const check = (body: unknown, metatype: new () => object) => pipe.transform(body, { type: 'body', metatype });
 
   it('name every field of their contracts', async () => {
-    const requisition: Required<SaveRequisitionInput> = large();
+    const requisition: Required<SaveRequisitionInput> = {
+      ...large(),
+      requestCodeId: id(51),
+      costCenterId: id(52),
+      documentDate: '2026-11-19',
+      lines: [{ ...line(ALARM, 40, 1530), description: 'Smoke alarm', placeId: STOCKROOM, expectedOn: '2026-11-26', vendorId: HILL, departmentId: id(53), notes: 'Back door' }],
+    };
     const decision: Required<RequisitionDecisionInput> = { note: 'Which model?' };
     const limits: Required<SavePurchasingSettingsInput> = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
 
@@ -395,7 +486,8 @@ describe('the requests the page sends', () => {
     const words = { itemId: null, description: 'Label printer', quantity: 1, estimatedUnitCostCents: 12900 };
     await expect(check({ ...small(), lines: [words] }, SaveRequisitionDto)).rejects.toBeDefined();
     await expect(check({ ...small(), lines: [{ quantity: 1, estimatedUnitCostCents: 12900 }] }, SaveRequisitionDto)).rejects.toBeDefined();
-    await expect(check({ ...small(), lines: [{ ...line(FILTER, 1, 390), description: 'Any filter' }] }, SaveRequisitionDto)).rejects.toBeDefined();
+    // A line has its own description since 2026-11-20, beside its item code -- never instead of it.
+    await expect(check({ ...small(), lines: [{ ...line(FILTER, 1, 390), description: 'Filter 20x25x1, MERV 8' }] }, SaveRequisitionDto)).resolves.toBeDefined();
   });
 
   it('refuse a status or a number sent with a requisition, none of an item, and a part of one', async () => {
