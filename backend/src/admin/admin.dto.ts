@@ -9,11 +9,18 @@ import {
   Severity,
   SkillRequirementLevel,
 } from '@prisma/client';
-import { MAX_BOOKING_FILTER_QUANTITY } from '@texasrenters/shared';
+import {
+  JOB_INSPECTION_TYPES,
+  JOB_NUMBER_MAX_LENGTH,
+  JOB_TITLE_MAX_LENGTH,
+  MAX_BOOKING_FILTER_QUANTITY,
+  type JobInspectionType,
+} from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -277,6 +284,37 @@ export class CreateAdminInspectionDto {
    * Ignored alongside `jobberBooking`, which carries its own.
    */
   @IsOptional() @ValidateNested() @Type(() => VisitServicesDto) visitServices?: VisitServicesDto;
+}
+
+/**
+ * A job: `CreateJobInput` in shared. Every field of it is named here, because
+ * the pipe refuses a field this class does not declare.
+ */
+export class CreateAdminJobDto {
+  @IsUUID() propertyId!: string;
+  @IsOptional() @IsUUID() unitId?: string;
+  @IsOptional() @IsUUID() leaseId?: string;
+  @IsDateString() scheduledAt!: string;
+  @IsOptional() @IsUUID() technicianId?: string;
+  @IsOptional() @IsString() @MaxLength(JOB_TITLE_MAX_LENGTH) title?: string;
+  @IsOptional() @IsString() @MaxLength(JOB_NUMBER_MAX_LENGTH) number?: string;
+  @IsArray()
+  @ArrayMinSize(1, {
+    message: 'Tick at least one inspection. A job of services alone comes with the next phone update.',
+  })
+  @ArrayMaxSize(JOB_INSPECTION_TYPES.length)
+  @ArrayUnique({ message: 'Each kind of inspection can be ticked once in a job.' })
+  @IsIn(JOB_INSPECTION_TYPES, { each: true })
+  inspectionTypes!: JobInspectionType[];
+  /** The services, for a job not booked in Jobber; ignored beside `jobberBooking`, which carries its own. */
+  @IsOptional() @ValidateNested() @Type(() => VisitServicesDto) visitServices?: VisitServicesDto;
+  /** Book the job's one Jobber visit, on its lead inspection. */
+  @IsOptional() @ValidateNested() @Type(() => JobberBookingDto) jobberBooking?: JobberBookingDto;
+  @IsOptional() @IsIn(['STANDARD', 'HIGH']) priority?: 'STANDARD' | 'HIGH';
+  @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string;
+  @IsOptional() @IsBoolean() allowTechnicianAreaCapture?: boolean;
+  /** One press of Save: a retry with the same key returns the job it made. */
+  @IsString() @MinLength(8) @MaxLength(120) requestKey!: string;
 }
 
 /** The visit's title and Details, as edited in the console. */

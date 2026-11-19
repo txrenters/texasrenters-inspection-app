@@ -211,7 +211,18 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
     } satisfies TechnicianPresenceEvent);
   }
 
-  publish(technicianId: string, inspectionId: string, kind: TechnicianInspectionEventKind, detail?: string) {
+  /**
+   * `push: false` tells an open app and nothing else: a job of four inspections
+   * is one alert on the phone, sent for its lead, and the other three only
+   * refresh the list (2026-11-20).
+   */
+  publish(
+    technicianId: string,
+    inspectionId: string,
+    kind: TechnicianInspectionEventKind,
+    detail?: string,
+    options: { push?: boolean } = {},
+  ) {
     const event: TechnicianInspectionEvent = {
       inspectionId,
       kind,
@@ -222,7 +233,7 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
     // The service decides which kinds are worth a push; the gateway just tells
     // it what happened. Pushing only ASSIGNED was why a reopened inspection or
     // an evidence request reached nobody whose app was closed.
-    void this.mobilePush?.send(kind, technicianId, inspectionId, detail);
+    if (options.push !== false) void this.mobilePush?.send(kind, technicianId, inspectionId, detail);
   }
 
   /** Broadcast to the organization's administrators, not to any technician. */

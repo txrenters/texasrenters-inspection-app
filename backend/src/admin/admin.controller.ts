@@ -60,6 +60,7 @@ import {
   ChargeRuleDto,
   CommitInspectionImportDto,
   CreateAdminInspectionDto,
+  CreateAdminJobDto,
   JobberBookingContextQueryDto,
   UpdateJobberVisitDto,
   AdminChecklistAssessmentDto,
@@ -626,6 +627,23 @@ export class AdminController {
   @RequirePermissions('inspections:manage')
   createInspection(@Req() request: AuthenticatedRequest, @Body() body: CreateAdminInspectionDto) {
     return this.service.createInspection(request.user, body);
+  }
+  /** A job and every inspection ticked in it, in one booking (2026-11-20). */
+  @Post('jobs')
+  @RequirePermissions('inspections:manage')
+  createJob(@Req() request: AuthenticatedRequest, @Body() body: CreateAdminJobDto) {
+    return this.service.createJob(request.user, body);
+  }
+  /** The number a new job would be given now. Declared before `:jobId`, which would swallow it. */
+  @Get('jobs/next-number')
+  @RequirePermissions('inspections:manage')
+  nextJobNumber(@Req() request: AuthenticatedRequest) {
+    return this.service.nextJobNumber(request.user);
+  }
+  @Get('jobs/:jobId')
+  @RequirePermissions('inspections:read')
+  job(@Req() request: AuthenticatedRequest, @Param('jobId', ParseUUIDPipe) id: string) {
+    return this.service.job(request.user, id);
   }
   /** What a Jobber booking can start from. Declared before `:inspectionId`, which would swallow it. */
   @Get('inspections/jobber-booking-context')

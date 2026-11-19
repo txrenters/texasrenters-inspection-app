@@ -39,6 +39,8 @@ function anyFieldContains(word: string): Prisma.InspectionWhereInput[] {
   const jobNumber = /^#?(\d+)$/.exec(word)?.[1];
   return [
     ...(jobNumber ? [{ jobberJobNumber: jobNumber }] : []),
+    // The console's own job number, "J-00042", whole as well.
+    { job: { number: { equals: word, mode: 'insensitive' as const } } },
     { propertywareBuilding: { name: match } },
     { propertywareBuilding: { addressLine1: match } },
     { propertywareBuilding: { city: match } },

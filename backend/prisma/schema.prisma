@@ -426,6 +426,7 @@ model Organization {
   vendorBills VendorBill[]
   stockSlips StockSlip[]
   stockCounts StockCount[]
+  jobs Job[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -1429,6 +1430,11 @@ model Inspection {
   /// and follows it -- day, technician, Details, removal -- and Jobber is told
   /// the visit is complete only once both are in.
   jobberCompanionOfId        String?                 @db.Uuid
+  /// The job this inspection was booked in (2026-11-20): the number and title
+  /// the office books under, holding every inspection made in one booking.
+  /// Null for visits booked before jobs, which read as a job of one. The
+  /// database keeps it in the same company and at the job's own property.
+  jobId                      String?                 @db.Uuid
   /// UNUSED, and never written. Kept only because dropping a column is a
   /// migration production also has to run.
   ///
@@ -1544,6 +1550,7 @@ model Inspection {
   followUpInspections        Inspection[]            @relation("InspectionFollowUp")
   jobberCompanionOf          Inspection?             @relation("JobberCompanion", fields: [jobberCompanionOfId], references: [id], onDelete: SetNull)
   jobberCompanions           Inspection[]            @relation("JobberCompanion")
+  job                        Job?                    @relation(fields: [organizationId, jobId], references: [organizationId, id], onDelete: Restrict)
   finalizedBy                UserProfile?            @relation("InspectionFinalizedBy", fields: [finalizedById], references: [id])
   assignments                InspectionAssignment[]
   areas                      InspectionArea[]
@@ -1561,6 +1568,11 @@ model Inspection {
   /// One visit per work order, for the same reason as the Jobber visit above.
   @@unique([organizationId, workOrderKey])
   @@index([jobberCompanionOfId])
+  /// NOT DECLARED HERE either: `Inspection_one_kind_a_job`, a partial unique
+  /// index on (jobId, inspectionType) for live rows that are not work orders,
+  /// and the trigger `Inspection_job_same_property`. Both live only in
+  /// migration 202611200011_jobs.
+  @@index([jobId])
   /// NOT DECLARED HERE: `Inspection_scheduled_booking_key`, a partial unique
   /// index on (organization, building, unit, type, scheduledAt) WHERE status =
   /// 'SCHEDULED' AND source <> 'WORK_ORDER', with NULLS NOT DISTINCT. Prisma
@@ -1590,6 +1602,46 @@ model Inspection {
   stockSlips                 StockSlip[]
   /// This visit is the booking-again of another's request.
   rebookOf                   RescheduleRequest[]     @relation("RescheduleRequestRebook")
+}
+
+/// What the office books (2026-11-20): a number, a title and one property,
+/// holding every inspection made in that one booking -- an occupied visit with
+/// its HVAC inspection, filters and pest control is one job, not two.
+///
+/// Each inspection in it is still its own, with its own areas, report and
+/// review; the job only groups them. The day and the technician stay on the
+/// inspections, which all take the same ones when the job is made: one copy of
+/// each, so nothing has to be kept in step with it.
+model Job {
+  id                     String    @id @default(uuid()) @db.Uuid
+  organizationId         String    @db.Uuid
+  /// "J-00042", the console's own series, or what the office typed instead.
+  /// Never Jobber's number, which stays on the inspections beside it.
+  number                 String
+  title                  String
+  propertywareBuildingId String    @db.Uuid
+  propertywareUnitId     String?   @db.Uuid
+  source                 JobSource @default(CONSOLE)
+  /// One press of Save makes one job: a retry returns the one it made.
+  requestKey             String
+  createdById            String?   @db.Uuid
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  organization         Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  propertywareBuilding PropertywareBuilding @relation(fields: [propertywareBuildingId], references: [id], onDelete: Restrict)
+  propertywareUnit     PropertywareUnit?    @relation(fields: [propertywareUnitId], references: [id], onDelete: Restrict)
+  inspections          Inspection[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, id])
+  @@index([organizationId, createdAt])
+}
+
+/// Where a job came from. Work orders join in phase 4 of the jobs plan.
+enum JobSource {
+  CONSOLE
 }
 
 model PropertywarePortfolio {
@@ -1737,6 +1789,7 @@ model PropertywareBuilding {
   units               PropertywareUnit[]
   leases              PropertywareLease[]
   inspections         Inspection[]
+  jobs                Job[]
 
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, isActive, name])
@@ -1786,6 +1839,7 @@ model PropertywareUnit {
   portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
   leases              PropertywareLease[]
   inspections         Inspection[]
+  jobs                Job[]
   floorPlans          PropertyFloorPlan[]   @relation("UnitFloorPlans")
   floors              PropertyFloor[]       @relation("UnitFloors")
   areas               PropertyArea[]        @relation("UnitAreas")

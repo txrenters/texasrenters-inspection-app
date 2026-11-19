@@ -117,6 +117,12 @@ describe('finding an inspection by its job number', () => {
     expect(JSON.stringify(technicianJobSearchWhere('#20625'))).toContain('{"jobberJobNumber":"20625"}');
     expect(JSON.stringify(technicianJobSearchWhere('Example'))).not.toContain('jobberJobNumber');
   });
+
+  it("by the console's own job number too, whole, in either place (2026-11-20)", () => {
+    const byNumber = '{"job":{"number":{"equals":"j-00042","mode":"insensitive"}}}';
+    expect(JSON.stringify(inspectionSearchWhere('j-00042'))).toContain(byNumber);
+    expect(JSON.stringify(technicianJobSearchWhere('j-00042'))).toContain(byNumber);
+  });
 });
 
 describe('the backfill', () => {

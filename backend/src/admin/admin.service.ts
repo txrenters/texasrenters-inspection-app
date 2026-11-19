@@ -42,6 +42,17 @@ import {
   visitZone,
   zoneNumberOf,
   type AdminDashboardOutlook,
+  JOB_INSPECTION_TYPES,
+  formatJobNumber,
+  isJobInspectionType,
+  jobLeadType,
+  jobTitleFor,
+  jobWorkLines,
+  normalizeJobNumber,
+  withoutVisitServices,
+  type AdminJob,
+  type JobInspectionType,
+  type JobNextNumber,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -114,12 +125,14 @@ import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
 import { baselineWhere } from './comparison.service';
+import { nextDocumentNumber } from './purchasing.service';
 import type {
   AdminFindingsQueryDto,
   AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
   CreateAdminInspectionDto,
+  CreateAdminJobDto,
   CreateEvidenceRequestDto,
   CompleteInspectionDto,
   FinalizeInspectionDto,
@@ -149,6 +162,18 @@ function bookedServiceNames(services: VisitServicesBooking['services']): string[
   return Object.entries(services)
     .filter(([, booked]) => booked)
     .map(([service]) => service);
+}
+
+/** How many typed-over numbers the job series steps past before it asks for one to be typed. */
+const JOB_NUMBER_SKIP_LIMIT = 50;
+
+/** Whether a write failed on a unique index naming this column. */
+function uniqueViolationOn(error: unknown, column: string): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002' &&
+    JSON.stringify(error.meta?.target ?? '').includes(column)
+  );
 }
 
 /** The street address a booked visit's title starts with: the unit's, else the building's. */
@@ -1175,6 +1200,9 @@ export class AdminService {
 
         await tx.propertywareLease.deleteMany({ where: { buildingId: id } });
         await tx.jobberPropertyLink.deleteMany({ where: { propertywareBuildingId: id } });
+        // The demo's jobs, empty now that their inspections are erased: they
+        // name the building and its unit, and both restrict.
+        await tx.job.deleteMany({ where: { organizationId, propertywareBuildingId: id } });
         await tx.propertywareUnit.deleteMany({ where: { buildingId: id } });
         await tx.propertywareBuilding.delete({ where: { id } });
       });
@@ -2349,13 +2377,333 @@ export class AdminService {
   }
 
   /**
+   * Makes a job and every inspection ticked in it (2026-11-20, phase 1 of the
+   * jobs plan): the job, its number and all of its inspections commit
+   * together, or nothing does.
+   *
+   * Each inspection is made exactly as `createInspection` makes one -- the
+   * same plan, the same rules, the same area snapshot -- so nothing downstream
+   * can tell a job's inspection from any other. What the job adds: one number,
+   * one title, the services on its lead inspection only, one Jobber visit (the
+   * others follow the lead, as an HVAC visit's occupied companion does), and
+   * one alert to the technician for the whole job rather than one each.
+   *
+   * Billed calls: no Mapbox or Google call is made here, and one email is sent
+   * per job, never one per inspection.
+   */
+  async createJob(user: AuthenticatedUser, input: CreateAdminJobDto): Promise<AdminJob> {
+    const organizationId = user.organizationId;
+    const types = JOB_INSPECTION_TYPES.filter((type) => input.inspectionTypes.includes(type));
+    const leadType = jobLeadType(types);
+    if (!leadType)
+      throw new ApplicationError(
+        422,
+        'JOB_NEEDS_AN_INSPECTION',
+        'Tick at least one inspection. A job of services alone comes with the next phone update.',
+      );
+    const typedNumber = input.number?.trim() ? normalizeJobNumber(input.number) : null;
+    if (input.number?.trim() && !typedNumber)
+      throw new ApplicationError(
+        422,
+        'JOB_NUMBER_INVALID',
+        'A job number is letters and digits, with - / . or _ between them, and at most 40 long.',
+      );
+    const typedTitle = input.title?.trim().replace(/\s+/g, ' ') || null;
+
+    const replay = await this.jobReplay(organizationId, input);
+    if (replay) return this.job(user, replay);
+
+    // Refused before anything is written, as a single inspection's are.
+    const booking = input.jobberBooking
+      ? this.bookableVisit(leadType, input.jobberBooking as JobberBookingInput)
+      : null;
+    const requested = input.visitServices as VisitServicesBooking | undefined;
+    const unbooked = booking ? null : this.servicesDetails(leadType, requested);
+    const servicesBooked = booking?.services ?? (unbooked ? requested!.services : null);
+    // The lead first: the others need its id, and its Jobber text when booked.
+    const ordered: JobInspectionType[] = [leadType, ...types.filter((type) => type !== leadType)];
+    const scheduledAt = new Date(input.scheduledAt);
+
+    let created: { jobId: string; inspectionIds: string[] };
+    try {
+      created = await this.prisma.$transaction(async (tx) => {
+        // Every plan before the job: they only read, and they are what checks
+        // the property belongs to this office before the job names it.
+        const plans: InspectionPlan[] = [];
+        for (const inspectionType of ordered)
+          plans.push(
+            await resolveInspectionPlan(tx, {
+              organizationId,
+              buildingId: input.propertyId,
+              unitId: input.unitId,
+              leaseId: input.leaseId,
+              inspectionType,
+              scheduledAt,
+              allowTechnicianAreaCapture: input.allowTechnicianAreaCapture,
+            }),
+          );
+        if (typedNumber) {
+          const taken = await this.jobNumberTaken(tx, organizationId, typedNumber);
+          if (taken) throw taken;
+        }
+        const job = await tx.job.create({
+          data: {
+            organizationId,
+            number: typedNumber ?? (await this.takeJobNumber(tx, organizationId)),
+            title: typedTitle ?? jobTitleFor(types, servicesBooked),
+            propertywareBuildingId: plans[0]!.property.id,
+            propertywareUnitId: plans[0]!.unit?.id ?? null,
+            requestKey: input.requestKey,
+            createdById: user.id,
+          },
+          select: { id: true, number: true, title: true },
+        });
+
+        const inspectionIds: string[] = [];
+        let leadText: { title: string | null; details: string | null } | null = null;
+        for (const [index, plan] of plans.entries()) {
+          const isLead = index === 0;
+          const inspection = await insertInspection(tx, plan, {
+            priority: input.priority ?? 'STANDARD',
+            internalNotes: input.internalNotes,
+            createdById: user.id,
+            jobId: job.id,
+            ...(isLead && unbooked ? { jobberVisitDetails: unbooked.details } : {}),
+            // Booked in Jobber: the lead holds the visit and the rest follow
+            // it, with its title and its Details less the services -- what the
+            // sync writes on a companion.
+            ...(!isLead && leadText
+              ? {
+                  jobberCompanionOfId: inspectionIds[0],
+                  jobberVisitTitle: leadText.title,
+                  jobberVisitDetails: withoutVisitServices(leadText.details),
+                }
+              : {}),
+          });
+          inspectionIds.push(inspection.id);
+          await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
+            priority: input.priority ?? 'STANDARD',
+            inspectionType: plan.inspectionType,
+            baselineInspectionId: plan.baselineInspectionId,
+            allowTechnicianAreaCapture: plan.technicianWillCapture,
+            areasFromApprovedPlan: plan.approvedAreas.length,
+            areasInspected: plan.scopedAreas.length,
+            jobId: job.id,
+            jobNumber: job.number,
+            lead: isLead,
+            ...(isLead && unbooked ? { services: unbooked.services } : {}),
+          });
+          if (input.technicianId) {
+            await this.createAssignment(tx, user, inspection.id, input.technicianId);
+            await this.audit(tx, user, 'INSPECTION_ASSIGNED', inspection.id, {
+              technicianId: input.technicianId,
+              source: 'JOB_CREATION',
+              jobId: job.id,
+            });
+          }
+          if (isLead && booking) {
+            await this.queueJobberBooking(tx, user, inspection.id, plan, booking);
+            const written = await tx.inspection.findUniqueOrThrow({
+              where: { id: inspection.id },
+              select: { jobberVisitTitle: true, jobberVisitDetails: true },
+            });
+            leadText = { title: written.jobberVisitTitle, details: written.jobberVisitDetails };
+          }
+        }
+        await this.audit(
+          tx,
+          user,
+          'JOB_CREATED',
+          job.id,
+          {
+            number: job.number,
+            numberTyped: Boolean(typedNumber),
+            title: job.title,
+            inspectionTypes: ordered,
+            leadInspectionId: inspectionIds[0],
+            inspectionIds,
+            services: servicesBooked ? bookedServiceNames(servicesBooked) : [],
+            technicianId: input.technicianId ?? null,
+            bookedInJobber: Boolean(booking),
+          },
+          'Job',
+        );
+        return { jobId: job.id, inspectionIds };
+      }, ADMIN_TRANSACTION_OPTIONS);
+    } catch (error) {
+      // Two presses at once: the second meets the first's key and gets its job.
+      if (uniqueViolationOn(error, 'requestKey')) {
+        const again = await this.jobReplay(organizationId, input);
+        if (again) return this.job(user, again);
+      }
+      // A number typed at the same moment by somebody else.
+      if (typedNumber && uniqueViolationOn(error, 'number')) {
+        const taken = await this.jobNumberTaken(this.prisma, organizationId, typedNumber);
+        if (taken) throw taken;
+      }
+      throw error;
+    }
+
+    if (input.technicianId) {
+      // Every open app refreshes for each inspection; the phone is buzzed once.
+      for (const [index, inspectionId] of created.inspectionIds.entries())
+        this.technicianEvents?.publish(input.technicianId, inspectionId, 'ASSIGNED', undefined, {
+          push: index === 0,
+        });
+      this.notifyJobAssignmentByEmail(
+        organizationId,
+        created.jobId,
+        input.technicianId,
+        jobWorkLines(types, servicesBooked),
+      );
+    }
+    await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId });
+    return this.job(user, created.jobId);
+  }
+
+  /** A job as the console reads it: its number and title, and each inspection in it, the lead first. */
+  async job(user: AuthenticatedUser, jobId: string): Promise<AdminJob> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        source: true,
+        createdAt: true,
+        propertywareBuilding: { select: { id: true, name: true, addressLine1: true } },
+        propertywareUnit: { select: { id: true, name: true } },
+        inspections: {
+          select: {
+            id: true,
+            inspectionType: true,
+            status: true,
+            scheduledAt: true,
+            assignments: {
+              where: { isCurrent: true },
+              take: 1,
+              select: { technician: { select: { id: true, displayName: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!job) throw new ApplicationError(404, 'JOB_NOT_FOUND', 'Job not found.');
+    const kinds = job.inspections.map((inspection) => inspection.inspectionType).filter(isJobInspectionType);
+    const lead = job.inspections.find((inspection) => inspection.inspectionType === jobLeadType(kinds));
+    const order = (type: string) => {
+      const at = (JOB_INSPECTION_TYPES as readonly string[]).indexOf(type);
+      return at < 0 ? JOB_INSPECTION_TYPES.length : at;
+    };
+    const inspections = [...job.inspections].sort((a, b) =>
+      a === lead ? -1 : b === lead ? 1 : order(a.inspectionType) - order(b.inspectionType),
+    );
+    return {
+      id: job.id,
+      number: job.number,
+      title: job.title,
+      source: job.source,
+      scheduledAt: (lead ?? inspections[0])?.scheduledAt.toISOString().slice(0, 10) ?? null,
+      property: job.propertywareBuilding,
+      unit: job.propertywareUnit,
+      createdAt: job.createdAt.toISOString(),
+      inspections: inspections.map((inspection) => ({
+        id: inspection.id,
+        inspectionType: inspection.inspectionType,
+        status: inspection.status,
+        lead: inspection === lead,
+        technician: inspection.assignments[0]?.technician ?? null,
+      })),
+    };
+  }
+
+  /**
+   * What the series would give now, for the panel to show before saving. Not
+   * held: a job saved meanwhile takes it, and this one takes the next. Skips
+   * numbers the office typed by hand, as taking one does.
+   */
+  async nextJobNumber(user: AuthenticatedUser): Promise<JobNextNumber> {
+    const organizationId = user.organizationId;
+    const series = await this.prisma.documentSeries.findUnique({
+      where: { organizationId_kind: { organizationId, kind: 'JOB' } },
+      select: { next: true },
+    });
+    const candidates = Array.from({ length: JOB_NUMBER_SKIP_LIMIT }, (_, at) =>
+      formatJobNumber((series?.next ?? 1) + at),
+    );
+    const used = await this.prisma.job.findMany({
+      where: { organizationId, number: { in: candidates } },
+      select: { number: true },
+    });
+    const taken = new Set(used.map((job) => job.number));
+    return { number: candidates.find((number) => !taken.has(number)) ?? candidates[candidates.length - 1]! };
+  }
+
+  /** The job a request key already made, or null. A key reused for another property is refused. */
+  private async jobReplay(organizationId: string, input: CreateAdminJobDto): Promise<string | null> {
+    const existing = await this.prisma.job.findUnique({
+      where: { organizationId_requestKey: { organizationId, requestKey: input.requestKey } },
+      select: { id: true, propertywareBuildingId: true },
+    });
+    if (!existing) return null;
+    if (existing.propertywareBuildingId !== input.propertyId)
+      throw new ApplicationError(409, 'IDEMPOTENCY_KEY_REUSED', 'This request key has already made another job.');
+    return existing.id;
+  }
+
+  /**
+   * The series' next number nobody has typed by hand. Each one passed over is
+   * spent, as a requisition's are: numbers may have gaps, never repeats.
+   */
+  private async takeJobNumber(tx: Prisma.TransactionClient, organizationId: string): Promise<string> {
+    for (let attempt = 0; attempt < JOB_NUMBER_SKIP_LIMIT; attempt += 1) {
+      const number = formatJobNumber(await nextDocumentNumber(tx, organizationId, 'JOB'));
+      const used = await tx.job.findUnique({
+        where: { organizationId_number: { organizationId, number } },
+        select: { id: true },
+      });
+      if (!used) return number;
+    }
+    throw new ApplicationError(
+      409,
+      'JOB_NUMBER_SERIES_BLOCKED',
+      `The next ${JOB_NUMBER_SKIP_LIMIT} job numbers were all typed by hand. Type a number for this one.`,
+    );
+  }
+
+  /** The refusal for a typed number another job has, naming that job; null when it is free. */
+  private async jobNumberTaken(
+    db: Prisma.TransactionClient | PrismaService,
+    organizationId: string,
+    number: string,
+  ): Promise<ApplicationError | null> {
+    const existing = await db.job.findUnique({
+      where: { organizationId_number: { organizationId, number } },
+      select: { id: true, title: true },
+    });
+    return existing
+      ? new ApplicationError(
+          409,
+          'JOB_NUMBER_TAKEN',
+          `${number} is already the number of "${existing.title}". Type another, or leave it empty for the next one.`,
+          [{ jobId: existing.id }],
+        )
+      : null;
+  }
+
+  /**
    * Whether this request may book its visit in Jobber, asked before anything is written.
    */
   private bookableRequest(input: CreateAdminInspectionDto): JobberBookingInput {
+    return this.bookableVisit(input.inspectionType, input.jobberBooking as JobberBookingInput);
+  }
+
+  /** Whether a visit of this kind may be booked in Jobber with this booking: a single inspection's, or a job's lead. */
+  private bookableVisit(inspectionType: string, booking: JobberBookingInput): JobberBookingInput {
     // Occupied, move-in, move-out, back-to-market and HVAC: the visits the
     // office books in Jobber. A lockbox, a roof or a filter delivery has no
     // Details format here to write.
-    if (!isBookableInspectionType(input.inspectionType))
+    if (!isBookableInspectionType(inspectionType))
       throw new ApplicationError(
         422,
         'JOBBER_BOOKING_TYPE_UNSUPPORTED',
@@ -2367,7 +2715,6 @@ export class AdminService {
         'JOBBER_BOOKING_DISABLED',
         'Booking visits in Jobber is switched off on this server. Book the visit in Jobber instead.',
       );
-    const booking = input.jobberBooking as JobberBookingInput;
     const problems = jobberBookingProblems(booking);
     if (problems.length) throw new ApplicationError(422, 'JOBBER_BOOKING_INVALID', problems.join(' '));
     return booking;
@@ -2385,11 +2732,18 @@ export class AdminService {
   private unbookedServicesDetails(
     input: CreateAdminInspectionDto,
   ): { details: string; services: string[] } | null {
-    const requested = input.visitServices as VisitServicesBooking | undefined;
+    return this.servicesDetails(input.inspectionType, input.visitServices as VisitServicesBooking | undefined);
+  }
+
+  /** The services line for a visit of this kind -- a single inspection, or a job's lead -- or null when none is booked. */
+  private servicesDetails(
+    inspectionType: string,
+    requested: VisitServicesBooking | undefined,
+  ): { details: string; services: string[] } | null {
     if (!requested || !booksAnyService(requested.services)) return null;
     // The kinds whose Details this system writes: a lockbox, a roof or a filter
     // delivery has no services line to add them to.
-    if (!isBookableInspectionType(input.inspectionType))
+    if (!isBookableInspectionType(inspectionType))
       throw new ApplicationError(
         422,
         'VISIT_SERVICES_TYPE_UNSUPPORTED',
@@ -2398,7 +2752,7 @@ export class AdminService {
     const problems = visitServicesProblems(requested);
     if (problems.length) throw new ApplicationError(422, 'VISIT_SERVICES_INVALID', problems.join(' '));
     return {
-      details: visitServicesDetails(input.inspectionType, requested)!,
+      details: visitServicesDetails(inspectionType, requested)!,
       services: bookedServiceNames(requested.services),
     };
   }
@@ -4409,6 +4763,54 @@ export class AdminService {
         });
       } catch {
         // Best effort. The assignment stands; realtime and push already fired.
+      }
+    })();
+  }
+
+  /**
+   * One email for a whole job, whatever it holds: the job's number, its title
+   * and each piece of work. Best effort, after the commit, for the reasons
+   * `notifyAssignmentByEmail` gives.
+   */
+  private notifyJobAssignmentByEmail(
+    organizationId: string,
+    jobId: string,
+    technicianId: string,
+    work: string[],
+  ) {
+    if (!this.mailer) return;
+    void (async () => {
+      try {
+        const [technician, job] = await Promise.all([
+          this.prisma.userProfile.findUnique({
+            where: { id: technicianId },
+            select: { email: true, displayName: true, isActive: true },
+          }),
+          this.prisma.job.findFirst({
+            where: { id: jobId, organizationId },
+            select: {
+              number: true,
+              title: true,
+              propertywareBuilding: { select: { name: true, addressLine1: true } },
+              propertywareUnit: { select: { name: true } },
+              inspections: { take: 1, select: { scheduledAt: true } },
+            },
+          }),
+        ]);
+        if (!technician?.email || !technician.isActive || !job?.inspections[0]) return;
+        await this.mailer!.sendJobAssignment({
+          to: technician.email,
+          displayName: technician.displayName,
+          jobNumber: job.number,
+          jobTitle: job.title,
+          propertyLabel:
+            job.propertywareBuilding.name ?? job.propertywareBuilding.addressLine1 ?? 'an assigned property',
+          unitLabel: job.propertywareUnit?.name ?? null,
+          work,
+          scheduledAt: job.inspections[0].scheduledAt,
+        });
+      } catch {
+        // Best effort. The assignments stand; realtime and push already fired.
       }
     })();
   }
