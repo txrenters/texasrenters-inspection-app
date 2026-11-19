@@ -20,12 +20,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { businessToday } from '@/lib/clock';
 import { formatCount, formatDateTime, formatDay } from '@/lib/format';
 import { usePurchaseReceivingEdits, useRequisitionChoices } from '@/lib/purchasing-queries';
 
@@ -39,6 +40,16 @@ import { usePurchaseReceivingEdits, useRequisitionChoices } from '@/lib/purchasi
 
 const whole = (value: string) => (/^\d+$/.test(value.trim()) ? Number(value.trim()) : null);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
+
+/**
+ * Why a day cannot be used yet, or null (2026-11-19). The day is Texas's,
+ * where the stock and the vendors are: the office in Manila is a day ahead
+ * every evening, and was offered "tomorrow" by its own calendar.
+ */
+export function aheadOfTexas(day: string): string | null {
+  const today = businessToday();
+  return day && day > today ? `That day has not come yet in Texas. It is ${formatDay(today)} there.` : null;
+}
 
 function FormDialog({
   title,
@@ -231,7 +242,7 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
     const remaining = line.quantity - line.receivedQuantity;
     return { line, remaining, quantity, placeId: placeOf[line.id] ?? fallback, over: quantity !== null && quantity > remaining };
   });
-  const invalid = rows.some((row) => row.quantity === null || row.over) || !rows.some((row) => row.quantity) || !fallback;
+  const invalid = rows.some((row) => row.quantity === null || row.over) || !rows.some((row) => row.quantity) || !fallback || Boolean(aheadOfTexas(receivedOn));
   const units = rows.reduce((sum, row) => sum + (row.quantity ?? 0), 0);
 
   return (
@@ -260,8 +271,9 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field>
           <FieldLabel htmlFor="receive-day">Day it arrived</FieldLabel>
-          <Input id="receive-day" onChange={(event) => setReceivedOn(event.target.value)} type="date" value={receivedOn} />
-          <FieldDescription>Leave empty for today.</FieldDescription>
+          <Input id="receive-day" max={businessToday()} onChange={(event) => setReceivedOn(event.target.value)} type="date" value={receivedOn} />
+          <FieldDescription>Leave empty for today in Texas, {formatDay(businessToday())}.</FieldDescription>
+          <FieldError>{aheadOfTexas(receivedOn)}</FieldError>
         </Field>
         <Field>
           <FieldLabel htmlFor="receive-slip">Packing slip no.</FieldLabel>
@@ -456,7 +468,7 @@ function BillDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
     return { line, quantity, price };
   });
   const totalCents = total.trim() ? parseMoney(total) : null;
-  const invalid = !billNumber.trim() || !billDate || totalCents === null || totalCents < 0 || parsed.some((row) => row.quantity === null || (row.quantity > 0 && (row.price === null || row.price < 0)));
+  const invalid = !billNumber.trim() || !billDate || Boolean(aheadOfTexas(billDate)) || totalCents === null || totalCents < 0 || parsed.some((row) => row.quantity === null || (row.quantity > 0 && (row.price === null || row.price < 0)));
 
   return (
     <FormDialog
@@ -487,7 +499,8 @@ function BillDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
         </Field>
         <Field>
           <FieldLabel htmlFor="bill-date">Bill date</FieldLabel>
-          <Input id="bill-date" onChange={(event) => setBillDate(event.target.value)} required type="date" value={billDate} />
+          <Input id="bill-date" max={businessToday()} onChange={(event) => setBillDate(event.target.value)} required type="date" value={billDate} />
+          <FieldError>{aheadOfTexas(billDate)}</FieldError>
         </Field>
         <Field>
           <FieldLabel htmlFor="bill-total">Bill total</FieldLabel>
@@ -536,7 +549,7 @@ function PayDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () =
   return (
     <FormDialog
       description={`Writes down that ${data.bill?.billNumber} for ${formatMoney(data.bill?.totalCents ?? 0)} was paid. No money moves in the console.`}
-      disabled={!paidOn}
+      disabled={!paidOn || Boolean(aheadOfTexas(paidOn))}
       error={payBill.error}
       onClose={onClose}
       onSubmit={() => payBill.mutateAsync({ orderId: data.id, input: { paidOn, method, ...(reference.trim() ? { reference: reference.trim() } : {}) } })}
@@ -546,7 +559,8 @@ function PayDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () =
     >
       <Field>
         <FieldLabel htmlFor="pay-day">Day it was paid</FieldLabel>
-        <Input id="pay-day" onChange={(event) => setPaidOn(event.target.value)} required type="date" value={paidOn} />
+        <Input id="pay-day" max={businessToday()} onChange={(event) => setPaidOn(event.target.value)} required type="date" value={paidOn} />
+        <FieldError>{aheadOfTexas(paidOn)}</FieldError>
       </Field>
       <Field>
         <FieldLabel htmlFor="pay-method">How</FieldLabel>

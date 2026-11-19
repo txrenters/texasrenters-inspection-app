@@ -342,6 +342,30 @@ describe('one item', () => {
     });
   });
 
+  it('offers no day after today in Texas, and says so to somebody whose own calendar is a day ahead (2026-11-19)', () => {
+    // 00:55 on November 20 in Manila: 10:55 on November 19 in Texas.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-19T16:55:00.000Z'));
+    try {
+      mount(detail({ movements: [], movementsTotal: 0, levels: [] }));
+      fireEvent.click(screen.getByRole('button', { name: 'Enter opening balance' }));
+      const dialog = screen.getByRole('dialog', { name: 'Opening balance' });
+      const day = within(dialog).getByLabelText('As of') as HTMLInputElement;
+      expect(day.max).toBe('2026-11-19');
+      fireEvent.change(within(dialog).getByLabelText('Quantity, in each'), { target: { value: '25' } });
+      fireEvent.change(within(dialog).getByLabelText('Cost of one'), { target: { value: '50' } });
+      fireEvent.change(day, { target: { value: '2026-11-20' } });
+      expect(within(dialog).getByText(/That day has not come yet in Texas\. It is .*19.* there\./)).toBeTruthy();
+      expect((within(dialog).getByRole('button', { name: 'Enter opening balance' }) as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.change(day, { target: { value: '2026-11-19' } });
+      expect(within(dialog).queryByText(/has not come yet/)).toBeNull();
+      expect((within(dialog).getByRole('button', { name: 'Enter opening balance' }) as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows the ledger and nothing to press to somebody who may only look', () => {
     account.permissions = new Set(['inventory:read']);
     mount();

@@ -29,6 +29,11 @@ export function businessDate(now: Date = new Date()): string {
   }).format(now);
 }
 
+/** A `YYYY-MM-DD` day as people say it: "November 19". For a refusal that names today in Texas. */
+export function dayWords(day: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric' }).format(new Date(`${day}T12:00:00.000Z`));
+}
+
 /**
  * The instants a Texas calendar day starts and ends, for a `scheduledAt` range.
  *

@@ -13,7 +13,7 @@ import {
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
-import { businessDate } from '../common/business-day';
+import { businessDate, dayWords } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
@@ -143,7 +143,7 @@ export class PurchaseReceivingService {
     const organizationId = user.organizationId;
     const today = businessDate();
     const day = input.receivedOn ?? today;
-    if (day > today) throw new ApplicationError(400, 'RECEIPT_DAY_AHEAD', 'Goods cannot be received on a day after today.');
+    if (day > today) throw new ApplicationError(400, 'RECEIPT_DAY_AHEAD', `Goods cannot be received on a day after today. It is ${dayWords(today)} in Texas.`);
     if (!input.lines.length) throw new ApplicationError(400, 'RECEIPT_EMPTY', 'Say what arrived: at least one line.');
     const lineIds = input.lines.map((line) => line.orderLineId);
     if (new Set(lineIds).size !== lineIds.length) throw new ApplicationError(400, 'RECEIPT_LINE_TWICE', 'An order line is on the receipt twice. Put it on one line.');
@@ -291,7 +291,7 @@ export class PurchaseReceivingService {
     const organizationId = user.organizationId;
     const billNumber = text(input.billNumber);
     if (!billNumber) throw new ApplicationError(400, 'VENDOR_BILL_INCOMPLETE', "Enter the bill's number.");
-    if (input.billDate > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', 'A bill cannot be dated after today.');
+    if (input.billDate > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', `A bill cannot be dated after today. It is ${dayWords(businessDate())} in Texas.`);
     const lineIds = input.lines.map((line) => line.orderLineId);
     if (new Set(lineIds).size !== lineIds.length) throw new ApplicationError(400, 'VENDOR_BILL_LINE_TWICE', 'An order line is on the bill twice. Put it on one line.');
     try {
@@ -367,7 +367,7 @@ export class PurchaseReceivingService {
   /** Writes down that the office paid an approved bill: when, how, and its reference. No money moves here. */
   async payBill(user: AuthenticatedUser, orderId: string, input: PayVendorBillInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
-    if (input.paidOn > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', 'A payment cannot be dated after today.');
+    if (input.paidOn > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', `A payment cannot be dated after today. It is ${dayWords(businessDate())} in Texas.`);
     await this.prisma.$transaction(async (tx) => {
       const bill = await this.billOf(tx, organizationId, orderId);
       if (bill.status !== VendorBillStatus.APPROVED) throw new ApplicationError(409, 'VENDOR_BILL_NOT_APPROVED', bill.status === VendorBillStatus.PAID ? 'This bill is already paid.' : 'A bill is paid once it is approved.');

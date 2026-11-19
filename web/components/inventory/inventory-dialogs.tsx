@@ -29,6 +29,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { businessToday } from '@/lib/clock';
+import { formatDay } from '@/lib/format';
 
 /**
  * The Inventory page's forms (2026-11-19, phase 1). Each is mounted only while
@@ -378,7 +380,10 @@ export function OpeningBalanceDialog({
 
   const units = whole(quantity);
   const unitCostCents = cost.trim() ? parseMoney(cost) : null;
-  const invalid = placeId === NONE || !units || unitCostCents === null || unitCostCents < 0;
+  // Today in Texas, where the stock is: somebody on a clock ahead of it (Manila) is not offered tomorrow.
+  const today = businessToday();
+  const ahead = Boolean(day) && day > today;
+  const invalid = placeId === NONE || !units || unitCostCents === null || unitCostCents < 0 || ahead;
 
   return (
     <FormDialog
@@ -413,8 +418,9 @@ export function OpeningBalanceDialog({
       </div>
       <Field>
         <FieldLabel htmlFor="opening-day">As of</FieldLabel>
-        <Input id="opening-day" onChange={(event) => setDay(event.target.value)} type="date" value={day} />
-        <FieldDescription>Leave empty for today.</FieldDescription>
+        <Input id="opening-day" max={today} onChange={(event) => setDay(event.target.value)} type="date" value={day} />
+        <FieldDescription>Leave empty for today in Texas, {formatDay(today)}.</FieldDescription>
+        <FieldError>{ahead ? `That day has not come yet in Texas. It is ${formatDay(today)} there.` : null}</FieldError>
       </Field>
       <Field>
         <FieldLabel htmlFor="opening-note">Note</FieldLabel>
