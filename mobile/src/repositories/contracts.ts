@@ -1,4 +1,5 @@
 import type {
+  JobStock,
   NavigationLeg,
   ReportableVisitService,
   VisitServicesReport,
@@ -6,6 +7,7 @@ import type {
 
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type { ClosingComments } from '../utils/closing-comments';
+import type { PendingSlip, RefusedSlip } from '../utils/job-stock';
 import type {
   AreaEnvironment,
   ChecklistAssessment,
@@ -421,6 +423,20 @@ export interface HomeRepository {
   clear(): Promise<void>;
 }
 
+/**
+ * A job's materials (2026-11-19): what is in the truck, and what this
+ * technician took for the job or put back. `pending` and `refused` are this
+ * phone's own: slips it is still holding, and ones the server turned down
+ * after it had kept them.
+ */
+export interface StockRepository {
+  forJob(inspectionId: string): Promise<JobStock>;
+  record(slip: PendingSlip): Promise<JobStock>;
+  pending(inspectionId: string): Promise<PendingSlip[]>;
+  refused(inspectionId: string): Promise<RefusedSlip[]>;
+  dismissRefusal(clientRequestId: string): Promise<void>;
+}
+
 export interface Repositories {
   auth: AuthRepository;
   properties: PropertyRepository;
@@ -431,4 +447,5 @@ export interface Repositories {
   uploads: UploadRepository;
   findings: FindingRepository;
   home: HomeRepository;
+  stock: StockRepository;
 }

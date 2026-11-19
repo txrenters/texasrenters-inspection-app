@@ -22,6 +22,7 @@ import {
 import { EndJobSheet } from '@/src/components/EndJobSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { JobFileCard } from '@/src/components/JobFileCard';
+import { JobMaterialsCard } from '@/src/components/JobMaterialsCard';
 import { JobTasksCard } from '@/src/components/JobTasksCard';
 import { NoAccessSheet } from '@/src/components/NoAccessSheet';
 import { NotDoneSheet } from '@/src/components/NotDoneSheet';
@@ -392,6 +393,9 @@ export default function JobScreen() {
           onToggle={toggle}
           tasks={tasks}
         />
+
+        {/* What was taken from the truck for this job; nothing where the office keeps no truck for this technician. */}
+        <JobMaterialsCard className="mx-5 mt-5" inspectionId={id} onOpen={() => router.push(`/job-stock/${id}`)} />
 
         {/* The office's notes: the filters to bring and who to call, then its file on the property. */}
         <VisitDetailsCard className="mx-5 mt-5" details={item.visitDetails} title={item.visitTitle} />

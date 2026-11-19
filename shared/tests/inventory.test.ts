@@ -56,3 +56,14 @@ describe('an item code', () => {
     for (const prefix of ['F', 'flt', '9AB', 'F-1', 'ABCDEFG', '']) expect(STOCK_PREFIX.test(prefix)).toBe(false);
   });
 });
+
+// Item codes the stock keeper types (2026-11-19).
+describe('a typed item code', () => {
+  it('is capitals, digits and dashes, two to twenty-four of them', async () => {
+    const { STOCK_CODE, normalizeStockCode, MOST_ITEM_PRICE_CENTS } = await import('../src/index.js');
+    for (const code of ['FLT-16251', 'BAT-9V', 'A1', '9V', 'X'.repeat(24)]) expect(STOCK_CODE.test(code)).toBe(true);
+    for (const code of ['F', '-FLT', 'flt-16251', 'FLT 16251', 'FLT_1', 'FLT-16251!', 'X'.repeat(25), '']) expect(STOCK_CODE.test(code)).toBe(false);
+    expect(normalizeStockCode('  flt - 16251 ')).toBe('FLT-16251');
+    expect(MOST_ITEM_PRICE_CENTS).toBe(10_000_000);
+  });
+});

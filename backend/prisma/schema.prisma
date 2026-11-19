@@ -5677,7 +5677,8 @@ enum StockMovementKind {
 model StockItem {
   id              String   @id @default(uuid()) @db.Uuid
   organizationId  String   @db.Uuid
-  /// Given by the console from its category when it is added (2026-11-19): "FLT-0012". Never changed.
+  /// "FLT-0012" as the console numbers it from its category, or "FLT-16251" as the stock keeper typed it.
+  /// Changed only while nothing has asked for, ordered or moved the item.
   code            String
   /// lower(trim(code)), spaces collapsed: one item per code, whatever its case.
   codeKey         String
@@ -5693,6 +5694,8 @@ model StockItem {
   /// What the office usually orders at once.
   reorderQuantity Int      @default(0)
   usualVendorId   String?  @db.Uuid
+  /// What one usually costs, when the stock keeper says: what a purchase request line starts from.
+  priceCents      Int?
   active          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

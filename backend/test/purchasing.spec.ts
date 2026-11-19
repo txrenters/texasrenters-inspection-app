@@ -57,7 +57,7 @@ function matches(row: Row, where: Where): boolean {
 
 function database() {
   const items: Row[] = [
-    { id: FILTER, organizationId: ORG, code: 'FLT-20251', codeKey: 'flt-20251', name: 'Filter 20x25x1', unit: 'each', xeroTenantId: THMP, reorderLevel: 18, reorderQuantity: 36, active: true },
+    { id: FILTER, organizationId: ORG, code: 'FLT-20251', codeKey: 'flt-20251', name: 'Filter 20x25x1', unit: 'each', xeroTenantId: THMP, reorderLevel: 18, reorderQuantity: 36, priceCents: 425, active: true },
     { id: BATTERY, organizationId: ORG, code: 'BAT-9V', codeKey: 'bat-9v', name: 'Battery, 9 V', unit: 'each', xeroTenantId: THMP, reorderLevel: 12, reorderQuantity: 24, active: true },
     { id: GLUE, organizationId: ORG, code: 'PST-GLUE', codeKey: 'pst-glue', name: 'Glue boards', unit: 'pack', xeroTenantId: PEST, reorderLevel: 8, reorderQuantity: 12, active: true },
     { id: ALARM, organizationId: ORG, code: 'SMK-0001', codeKey: 'smk-0001', name: 'Smoke alarm, 10-year', unit: 'each', xeroTenantId: THMP, reorderLevel: 6, reorderQuantity: 12, active: true },
@@ -369,6 +369,8 @@ describe('the limits and the form\'s choices', () => {
     expect(choices.items.map((item) => item.code)).toEqual(['FLT-20251', 'BAT-9V', 'PST-GLUE', 'SMK-0001']);
     expect(choices.items[1]).toMatchObject({ onHand: 5, averageCostCents: 185, companyTenantId: THMP, reorderQuantity: 24 });
     expect(choices.items[0]).toMatchObject({ onHand: 0, averageCostCents: null });
+    // The usual price the stock keeper gave the filter comes with it, for the line's cost to start from.
+    expect(choices.items.find((item) => item.code === 'FLT-20251')).toMatchObject({ priceCents: 425 });
     expect(choices.vendors.map((vendor) => vendor.name)).toEqual(['Hill Country Supply', 'Alamo Trade Parts']);
   });
 });

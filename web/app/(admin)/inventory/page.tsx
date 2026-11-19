@@ -8,6 +8,7 @@ import { DataTable, DataTableSkeleton, type Column } from '@/components/data-tab
 import { CountsTab } from '@/components/inventory/counts-tab';
 import { ReorderTab } from '@/components/inventory/reorder-tab';
 import { CategoryDialog, ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
+import { ItemCodesTab } from '@/components/inventory/item-codes-tab';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
 import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
 import { PageHeader } from '@/components/page-header';
@@ -61,7 +62,7 @@ export default function InventoryPage() {
       <Button onClick={() => setPlace({})}>New place</Button>
     ) : state.tab === 'vendors' ? (
       <Button onClick={() => setVendor({})}>New vendor</Button>
-    ) : state.tab === 'withdrawals' || state.tab === 'counts' || state.tab === 'reorder' ? undefined : (
+    ) : state.tab === 'withdrawals' || state.tab === 'counts' || state.tab === 'reorder' || state.tab === 'codes' ? undefined : (
       <Button onClick={() => setItem(true)}>New item</Button>
     );
 
@@ -84,6 +85,7 @@ export default function InventoryPage() {
       <Tabs onValueChange={(tab) => setState({ tab, technician: '' })} value={state.tab}>
         <TabsList>
           <TabsTrigger value="stock">Stock</TabsTrigger>
+          <TabsTrigger value="codes">Item codes</TabsTrigger>
           <TabsTrigger value="withdrawals">Withdrawals</TabsTrigger>
           <TabsTrigger value="counts">Counts</TabsTrigger>
           <TabsTrigger value="reorder">Reorder and usage</TabsTrigger>
@@ -99,6 +101,15 @@ export default function InventoryPage() {
             <ErrorState error={stock.error} retry={() => void stock.refetch()} />
           ) : (
             <StockTab canManage={canManage} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
+          )}
+        </TabsContent>
+        <TabsContent value="codes">
+          {stock.isError ? (
+            <ErrorState error={stock.error} retry={() => void stock.refetch()} />
+          ) : !stock.data ? (
+            <DataTableSkeleton columns={STOCK_COLUMNS} label="Loading item codes" rows={6} />
+          ) : (
+            <ItemCodesTab canManage={canManage} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} />
           )}
         </TabsContent>
         <TabsContent value="withdrawals">

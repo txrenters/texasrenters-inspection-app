@@ -11,11 +11,13 @@ import {
   ApiPropertyRepository,
   ApiUploadRepository,
 } from './api/repositories';
+import { ApiStockRepository } from './api/job-stock';
 import {
   MockAuthRepository,
   MockFindingRepository,
   MockFloorPlanRepository,
   MockHomeRepository,
+  MockStockRepository,
   MockInspectionRepository,
   MockMediaRepository,
   MockPropertyRepository,
@@ -40,6 +42,7 @@ const mockRepositories: Repositories = {
   uploads: new MockUploadRepository(),
   findings: new MockFindingRepository(),
   home: new MockHomeRepository(),
+  stock: new MockStockRepository(),
 };
 
 const apiRepositories: Repositories = {
@@ -52,6 +55,7 @@ const apiRepositories: Repositories = {
   uploads: new ApiUploadRepository(),
   findings: new ApiFindingRepository(),
   home: new ApiHomeRepository(),
+  stock: new ApiStockRepository(),
 };
 
 export const repositories = environment.dataSource === 'api' ? apiRepositories : mockRepositories;

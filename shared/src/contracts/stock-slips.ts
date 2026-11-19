@@ -101,6 +101,90 @@ export interface StockSlipList {
   slips: StockSlipRow[];
 }
 
+// ── On the phone (2026-11-19, phase 7) ────────────────────────────────────
+
+/**
+ * What a technician records on the phone for one of their own jobs: what they
+ * took from a truck, or what they are putting back in it. Who it is and which
+ * job it is for come from the sign-in and the address, never from the body.
+ */
+export const PHONE_SLIP_KINDS = ['WITHDRAWAL', 'RETURN'] as const;
+export type PhoneSlipKind = (typeof PHONE_SLIP_KINDS)[number];
+
+export interface RecordJobStockInput {
+  kind: PhoneSlipKind;
+  /** The truck it leaves, or goes back into. */
+  placeId: string;
+  lines: { itemId: string; quantity: number }[];
+  /** Made once by the phone for this slip, and kept with it until the server answers: sent again it records nothing twice. */
+  clientRequestId: string;
+}
+
+export interface JobStockItem {
+  itemId: string;
+  code: string;
+  name: string;
+  unit: string;
+  quantity: number;
+}
+
+export interface JobStockSlip {
+  id: string;
+  number: string;
+  kind: PhoneSlipKind;
+  at: string;
+  place: string;
+  /** The office reversed it: it no longer counts. */
+  reversed: boolean;
+  lines: JobStockItem[];
+}
+
+/** A job's materials, as its technician sees them. */
+export interface JobStock {
+  /** The trucks this technician may take from: their own, and any shared one. */
+  places: { id: string; name: string }[];
+  /** What is in each of those trucks now. */
+  stock: (JobStockItem & { placeId: string })[];
+  /** What this technician has recorded for this job, newest first. */
+  slips: JobStockSlip[];
+  /** What they took for this job less what came back: what can still be brought back. */
+  taken: JobStockItem[];
+}
+
+/**
+ * Why the phone's slip cannot be recorded yet, in the technician's words; null
+ * when it can. `available` is what is in the truck (taking out) or what was
+ * taken for the job (bringing back), by item.
+ */
+export function jobStockProblem(kind: PhoneSlipKind, lines: readonly { itemId: string; quantity: number }[], available: ReadonlyMap<string, number>, name: (itemId: string) => string): string | null {
+  const asked = lines.filter((line) => line.quantity > 0);
+  if (!asked.length) return kind === 'RETURN' ? 'Choose what is going back.' : 'Choose what you took.';
+  for (const line of asked) {
+    const most = available.get(line.itemId) ?? 0;
+    if (line.quantity > most)
+      return kind === 'RETURN'
+        ? `You took ${most} of ${name(line.itemId)} for this job, so ${line.quantity} cannot go back.`
+        : most
+          ? `Only ${most} of ${name(line.itemId)} ${most === 1 ? 'is' : 'are'} in the truck.`
+          : `None of ${name(line.itemId)} is in the truck.`;
+  }
+  return null;
+}
+
+/** What a technician has taken for a job less what came back, by item, from the slips that still stand. */
+export function jobStockTaken(slips: readonly Pick<JobStockSlip, 'kind' | 'reversed' | 'lines'>[]): JobStockItem[] {
+  const net = new Map<string, JobStockItem>();
+  for (const slip of slips) {
+    if (slip.reversed) continue;
+    for (const line of slip.lines) {
+      const kept = net.get(line.itemId) ?? { ...line, quantity: 0 };
+      kept.quantity += slip.kind === 'RETURN' ? -line.quantity : line.quantity;
+      net.set(line.itemId, kept);
+    }
+  }
+  return [...net.values()].filter((item) => item.quantity > 0).sort((left, right) => left.code.localeCompare(right.code));
+}
+
 /** What the slip form chooses from, and what is where. Read when the tab opens and when the technician or the day changes. */
 export interface StockSlipChoices {
   technicians: { id: string; name: string }[];
