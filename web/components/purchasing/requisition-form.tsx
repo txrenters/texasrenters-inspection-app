@@ -14,6 +14,8 @@ import {
 } from '@texasrenters/shared';
 import { useState } from 'react';
 
+import { ScanField } from '@/components/inventory/scan-field';
+
 import { approverFor } from '@/components/purchasing/requisition-parts';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -120,6 +122,15 @@ export function RequisitionForm({
     const item = itemOf.get(itemId);
     return { key: key(), itemId, quantity: item?.reorderQuantity ? String(item.reorderQuantity) : '', cost: startingCost(item) };
   };
+  /** A scanned label: one more of an item already asked for, else a new line for it. */
+  const scan = (item: { id: string; code: string }): string | void => {
+    const on = lines.find((line) => line.itemId === item.id);
+    if (on) return setLine(on.key, { quantity: String((whole(on.quantity) ?? 0) + 1) });
+    const empty = lines.find((line) => line.itemId === NONE);
+    if (empty) return setLine(empty.key, { ...lineFor(item.id), key: empty.key });
+    if (lines.length >= MOST_REQUISITION_LINES) return `A request holds ${MOST_REQUISITION_LINES} items.`;
+    setLines((rows) => [...rows, lineFor(item.id)]);
+  };
   const low = offered.filter((item) => !used.has(item.id) && stockStatus(item.onHand, item.reorderLevel) !== 'ENOUGH');
 
   function changeCompany(next: string) {
@@ -206,6 +217,14 @@ export function RequisitionForm({
 
         <section className="grid gap-3">
           <h2 className="text-heading text-base font-bold">What you are asking for</h2>
+          <ScanField
+            className="max-w-md"
+            hint="Scan a label to add the item. Scan it again for one more."
+            id="requisition-scan"
+            items={offered}
+            missing={(code) => (choices.items.some((item) => item.code === code) ? `${code} is bought for another company.` : `No item has the code ${code}.`)}
+            onItem={scan}
+          />
           {lines.length ? (
             <div className="bg-card overflow-clip rounded-xl border">
               <Table aria-label="What is asked for">

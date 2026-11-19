@@ -16,6 +16,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
+import { ScanField } from '@/components/inventory/scan-field';
+
 import { StockCountStatusBadge } from '@/components/inventory/counts-tab';
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
@@ -153,6 +155,12 @@ function CountingForm({ count, everywhere }: { count: StockCountDetail; everywhe
   const open = count.rows.filter((row) => row.waiting);
   const second = open.filter((row) => row.recount);
   const openIds = new Set(open.map((row) => row.id));
+  /** The line the last scan found: marked, and its count field holds the cursor. */
+  const [found, setFound] = useState<string | null>(null);
+  // What a scan may land on: the open lines, one not yet counted before one that is, so an item kept in two places
+  // is counted place by place.
+  const scannable = [...open].sort((a, b) => Number((typed[a.id] ?? '').trim() !== '') - Number((typed[b.id] ?? '').trim() !== '')).map((row) => ({ id: row.id, code: row.itemCode }));
+  const lineField = (lineId: string) => `count-line-${lineId}`;
 
   const lines = open.map((row) => ({ lineId: row.id, text: typed[row.id] ?? '' })).map((line) => ({ lineId: line.lineId, counted: line.text.trim() === '' ? null : whole(line.text), bad: line.text.trim() !== '' && whole(line.text) === null }));
   const bad = lines.some((line) => line.bad);
@@ -182,6 +190,21 @@ function CountingForm({ count, everywhere }: { count: StockCountDetail; everywhe
       ) : (
         <p className="text-muted-foreground text-sm">Count what is on the shelf and type it in. The console&apos;s own number is not shown here, so the count is a real count.</p>
       )}
+      <ScanField
+        className="max-w-md"
+        hint="Scan a shelf label to jump to its line, type the count and press Enter. The cursor comes back here for the next label."
+        id="count-scan"
+        items={scannable}
+        missing={(code) => (count.rows.some((row) => row.itemCode === code) ? `${code} is already handed in.` : `${code} is not in this count.`)}
+        onItem={(line) => {
+          setFound(line.id);
+          const field = document.getElementById(lineField(line.id));
+          if (field instanceof HTMLInputElement) {
+            field.focus();
+            field.select();
+          }
+        }}
+      />
       <div className="overflow-clip rounded-xl border">
         <Table aria-label="What to count">
           <TableHeader>
@@ -192,7 +215,7 @@ function CountingForm({ count, everywhere }: { count: StockCountDetail; everywhe
           </TableHeader>
           <TableBody>
             {count.rows.map((row) => (
-              <TableRow key={row.id}>
+              <TableRow className={row.id === found ? 'bg-success/10' : undefined} data-scanned={row.id === found ? 'true' : undefined} key={row.id}>
                 <TableCell>
                   {itemCell(row, everywhere)}
                   {row.recount && row.waiting ? <span className="text-warning text-xs">Count this one again.</span> : null}
@@ -202,8 +225,15 @@ function CountingForm({ count, everywhere }: { count: StockCountDetail; everywhe
                     <Input
                       aria-label={`Counted ${row.itemName}${everywhere ? ` in ${row.place.name}` : ''}`}
                       className="ml-auto w-24 text-right"
+                      id={lineField(row.id)}
                       inputMode="numeric"
                       onChange={(event) => setTyped((all) => ({ ...all, [row.id]: event.target.value }))}
+                      onKeyDown={(event) => {
+                        // Enter is "next label", never "hand in": handing in is its own button.
+                        if (event.key !== 'Enter') return;
+                        event.preventDefault();
+                        document.getElementById('count-scan')?.focus();
+                      }}
                       placeholder="Count"
                       value={typed[row.id] ?? ''}
                     />

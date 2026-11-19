@@ -13,6 +13,8 @@ import {
 } from '@texasrenters/shared';
 import { useState, type FormEvent, type ReactNode } from 'react';
 
+import { ScanField } from '@/components/inventory/scan-field';
+
 import { AsideCard, FactTable } from '@/components/record/record-kit';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -266,6 +268,19 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
           <Input autoComplete="off" id="receive-slip" maxLength={80} onChange={(event) => setPackingSlip(event.target.value)} value={packingSlip} />
         </Field>
       </div>
+      <ScanField
+        hint="Scan a box's label to jump to its line."
+        id="receive-scan"
+        items={open.map((line) => ({ id: line.id, code: line.item.code }))}
+        missing={(code) => (data.lines.some((line) => line.item.code === code) ? `${code} has all arrived already.` : `${code} is not on this order.`)}
+        onItem={(line) => {
+          const field = document.getElementById(`receive-line-${line.id}`);
+          if (field instanceof HTMLInputElement) {
+            field.focus();
+            field.select();
+          }
+        }}
+      />
       <div className="overflow-clip rounded-xl border">
         <Table aria-label="What arrived now">
           <TableHeader>
@@ -293,6 +308,7 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
                   <Input
                     aria-label={`${row.line.item.name} arrived now`}
                     className="ml-auto w-20 text-right"
+                    id={`receive-line-${row.line.id}`}
                     inputMode="numeric"
                     onChange={(event) => setQuantities((all) => ({ ...all, [row.line.id]: event.target.value }))}
                     value={quantities[row.line.id] ?? ''}
