@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import {
   acceptedSummary,
   grounded,
+  printableObservation,
   readStoredSummary,
   summaryPrompt,
   type SummaryRecording,
@@ -220,6 +221,7 @@ describe('what the inspector said is in good order, on a move-in', () => {
       { start: 43, text: 'The carpet is not in good shape, there is a stain.' },
       { start: 61, text: 'Flooring is clean.' },
       { start: 70, text: 'All appear to be functioning and looking good as intended.' },
+      { start: 80, text: 'The lock is functional on the window, and the toilet is functioning as intended.' },
     ],
   };
   const ROOM_ITEMS = [
@@ -279,6 +281,37 @@ describe('what the inspector said is in good order, on a move-in', () => {
     ).toEqual([]);
   });
 
+  it('never prints a line cut from the middle of the inspector\u2019s sentence', () => {
+    // 2026-11-19, one move-in: "Is functional on the window" and "Functioning
+    // as intended" printed beside a window row and a toilet row.
+    expect(
+      observe([
+        // Says more than its quote, so it would print as the quote: the end of a sentence.
+        { text: 'Window lock works', item: 'c1', quote: 'is functional on the window' },
+        { text: 'Functioning as intended', item: 'c3', quote: 'functioning as intended' },
+        // The same words with their thing are kept.
+        { text: 'Toilet is functioning as intended', item: null, quote: 'the toilet is functioning as intended' },
+      ]),
+    ).toEqual([{ text: 'Toilet is functioning as intended', itemId: null, itemLabel: null }]);
+  });
+
+  it('prints a line that opens with its thing, and nothing that opens otherwise', () => {
+    for (const line of ['Walls look good', 'The carpet is in good shape', 'All looks good', 'Walls 1 and 2 look good'])
+      expect(printableObservation(line)).toBe(true);
+    for (const line of ['Is functional on the window', 'Functioning as intended', 'Looks good', 'And the door is good', 'Working as expected'])
+      expect(printableObservation(line)).toBe(false);
+  });
+
+  it('asks that a misheard thing be left out, and an action keep its conditions', () => {
+    const prompt = summaryPrompt('Living room', 'move-in inspection', [LIVING], ROOM_ITEMS, { observations: true });
+    expect(prompt).toContain('starts with the thing');
+    expect(prompt).toContain('can mishear a word');
+    // Outside, 2026-11-19: "Power wash the external wall at owner's discretion"
+    // came back from a second summary as "Power wash the external wall".
+    expect(prompt).toContain("at the owner's discretion");
+    expect(summaryPrompt('Living room', 'move-out inspection', [LIVING], ROOM_ITEMS)).toContain("at the owner's discretion");
+  });
+
   it('is an empty list on a move-in where nothing was said to be in good order', () => {
     expect(observe([])).toEqual([]);
   });
@@ -329,6 +362,17 @@ describe('reading a stored summary back', () => {
     const read = readStoredSummary(stored, ['media-1', 'media-2']);
     expect(read).toMatchObject({ current: true, staleReason: null });
     expect(read?.summary).not.toHaveProperty('observations');
+  });
+
+  it('reads back only the lines today\u2019s rule would print, so an older stored slip is not printed', () => {
+    const observations = [
+      { text: 'Is functional on the window', itemId: 'item-windows', itemLabel: 'Windows and locks' },
+      { text: 'Functioning as intended', itemId: 'item-toilet', itemLabel: 'Toilet and roll holder' },
+      { text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' },
+    ];
+    expect(readStoredSummary({ ...stored, version: 3, observations }, ['media-1', 'media-2'])?.summary.observations).toEqual([
+      { text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' },
+    ]);
   });
 
   it('reads what a move-in said is in good order back', () => {
