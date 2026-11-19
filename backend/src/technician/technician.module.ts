@@ -16,7 +16,10 @@ import { RecordingSummaryService } from './recording-summary.service';
 import { MediaProcessingService } from './media-processing.service';
 import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
+import { StockCountsService } from '../admin/stock-counts.service';
 import { StockSlipsService } from '../admin/stock-slips.service';
+import { TechnicianCountsController } from './technician-counts.controller';
+import { TechnicianCountsService } from './technician-counts.service';
 import { TechnicianStockController } from './technician-stock.controller';
 import { TechnicianStockService } from './technician-stock.service';
 import { TechnicianController } from './technician.controller';
@@ -31,7 +34,7 @@ import { TrackingStatusStore } from './tracking-status.store';
   // TimeTracking so a submitted job's hours are read from the trail without
   // anybody asking. It imports only the database, so there is no cycle.
   imports: [RealtimeModule, RoutingModule, TimeTrackingModule],
-  controllers: [TechnicianController, TechnicianStockController],
+  controllers: [TechnicianController, TechnicianStockController, TechnicianCountsController],
   providers: [
     TechnicianService,
     TechnicianLocationService,
@@ -67,6 +70,8 @@ import { TrackingStatusStore } from './tracking-status.store';
     // admin module imports this one.
     StockSlipsService,
     TechnicianStockService,
+    StockCountsService,
+    TechnicianCountsService,
     ApiAuthGuard,
     RolesGuard,
   ],

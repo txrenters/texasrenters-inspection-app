@@ -17,6 +17,7 @@ import { useCurrentUser, useDashboard, useDayRoute } from '@/src/features/querie
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { HomeEmptyState } from '@/src/components/HomeEmptyState';
 import { DayRouteSummary } from '@/src/components/DayRouteSummary';
+import { TruckCountCard } from '@/src/components/TruckCountCard';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
@@ -169,6 +170,9 @@ export default function HomeScreen() {
                 : 'No jobs pending right now'}
           </Text>
         </View>
+
+        {/* A truck count the office has opened for this technician: nothing at all when there is none. */}
+        <TruckCountCard className="mx-5 mt-4" onOpen={(countId) => router.push(`/truck-count/${countId}`)} />
 
         {dashboard.isError ? (
           <View className="mx-5 mt-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
