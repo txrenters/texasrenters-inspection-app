@@ -187,3 +187,22 @@ describe('the type tabs (console-development)', () => {
     expect(prisma.inspection.groupBy).not.toHaveBeenCalled();
   });
 });
+
+describe('the work orders handed over by the maintenance app', () => {
+  it('are the visits whose source is the work order, and each row carries its number', async () => {
+    const { list } = listing();
+
+    const { where, select } = await list({ source: 'WORK_ORDER' });
+
+    expect(where.source).toBe('WORK_ORDER');
+    expect(select.workOrderNumber).toBe(true);
+  });
+
+  it('are not singled out unless asked', async () => {
+    const { list } = listing();
+
+    const { where } = await list({});
+
+    expect(where.source).toBeUndefined();
+  });
+});
