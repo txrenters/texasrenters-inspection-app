@@ -1137,6 +1137,17 @@ export interface PublicInspectionReport {
       heading: string;
       items: Array<{ text: string; details: string[]; itemId?: string | null }>;
     }>;
+    /**
+     * What the inspector said is in good order -- clean, undamaged, working,
+     * installed -- from the same summary, each beside the checklist item it is
+     * about (the office, 2026-11-19: a move-in report must show the house's
+     * actual condition, not only what needs doing). One about no item goes on
+     * the "Other" row.
+     *
+     * A move-in only, and only from a current summary that has them. Absent
+     * otherwise, and the report prints as it did.
+     */
+    observations?: Array<{ text: string; itemId?: string | null }>;
   }>;
   findings: Array<{
     id: string;

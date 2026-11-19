@@ -514,11 +514,31 @@ export interface RecordingAction {
 }
 
 /**
+ * One thing the inspector said is in good order -- clean, undamaged, working
+ * or installed: "Walls are good", "Carpet is in good shape", "Window blinds are
+ * good and functional".
+ *
+ * A move-in report prints these beside the item they are about, so it says
+ * what is fine as well as what needs doing (the office, 2026-11-19: the
+ * report "is all damages" when the house is move-in ready). Each was checked
+ * against the inspector's exact words; one that said more than they did was
+ * replaced by those words.
+ */
+export interface RecordingObservation {
+  text: string;
+  /** The room checklist item it is about; null for none, printed on the "Other" row. */
+  itemId?: string | null;
+  /** That item's label when the summary was written, for the console. */
+  itemLabel?: string | null;
+}
+
+/**
  * A room's recordings, summarized for the report.
  *
  * Each recording is its points in order, each at the second it was said in
  * that recording -- the narration with the filler taken out, never anything it
- * did not say. Then what the room needs, grouped as the office groups it.
+ * did not say. Then what the room needs, grouped as the office groups it, and,
+ * on a move-in, what the inspector said is in good order.
  */
 export interface RecordingSummary {
   recordings: Array<{
@@ -528,6 +548,12 @@ export interface RecordingSummary {
     lines: Array<{ start: number; text: string }>;
   }>;
   actions: Array<{ group: RecordingActionGroup; items: RecordingAction[] }>;
+  /**
+   * What the inspector said is in good order. Written for a move-in only;
+   * absent from a summary of any other inspection, and from one written
+   * before 2026-11-19, which "Summarize every room" writes again with it.
+   */
+  observations?: RecordingObservation[];
 }
 
 /** The summary as the console shows it. */

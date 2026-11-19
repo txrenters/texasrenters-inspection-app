@@ -186,6 +186,16 @@ export interface ReportChecklistRowView {
   working: string;
   comment: string;
   /**
+   * What the inspector said is in good order about this item -- "Walls are
+   * good", "Carpet is in good shape" -- one line each, printed in the Comments
+   * cell before what it needs. A move-in's only (the office, 2026-11-19: the
+   * report must show the house's actual condition, not only its damage).
+   *
+   * Never beside a row scored N on any axis: a "good" note beside a failed
+   * verdict would read as taking it back. The row's Y cells say what passed.
+   */
+  observations: string[];
+  /**
    * What the room needs that is about this item, from the summary of its
    * recordings, one line each, printed in the Comments cell under the comment
    * (the maintenance team, 2026-10-08: the summary "fits on the last column").
@@ -468,13 +478,17 @@ export interface ReportView {
  * left unscored may have been read from that recording by the narration
  * pre-fill (2026-10-07).
  */
-const DISCLAIMER =
-  'The condition table is as the inspector scored it; rows left unscored on site are read ' +
-  "from the inspector's own words in the walkthrough recording. The comments beside the checklist are " +
-  "drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
-  "and cleaning listed under each area's photographs are drawn from a summary of that recording. " +
-  'This report is informational: it does ' +
-  'not by itself authorize charges or determine responsibility for any condition described.';
+function disclaimer(observed: boolean) {
+  return (
+    'The condition table is as the inspector scored it; rows left unscored on site are read ' +
+    "from the inspector's own words in the walkthrough recording. The comments beside the checklist" +
+    (observed ? ' -- what the inspector said is in good order, and what needs doing --' : '') +
+    " are drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
+    "and cleaning listed under each area's photographs are drawn from a summary of that recording. " +
+    'This report is informational: it does ' +
+    'not by itself authorize charges or determine responsibility for any condition described.'
+  );
+}
 
 /** A photograph as a report prints it; shared with the comparison report. */
 export function reportPhotoView(photo: PublicReportPhoto): ReportPhotoView {
@@ -575,6 +589,16 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         if (action.itemId) actionsByItem.set(action.itemId, [...(actionsByItem.get(action.itemId) ?? []), text]);
         else unassigned.push(text);
       }
+    /** What the inspector said is in good order, by the item it is about; a move-in's only. */
+    const observedByItem = new Map<string, string[]>();
+    const observedElsewhere: string[] = [];
+    for (const observation of room.observations ?? []) {
+      const text = observation.text.trim();
+      if (!text) continue;
+      if (observation.itemId)
+        observedByItem.set(observation.itemId, [...(observedByItem.get(observation.itemId) ?? []), text]);
+      else observedElsewhere.push(text);
+    }
     const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
       /**
        * A failed axis is explained by what the walkthrough found about it.
@@ -628,17 +652,19 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         comment: [written, borrowed.filter((text) => text !== written).join('; ')]
           .filter(Boolean)
           .join(' '),
+        observations: failed ? [] : (observedByItem.get(item.id) ?? []),
         actions: actionsByItem.get(item.id) ?? [],
       };
     });
-    // What the room needs that is about none of its items -- or about one no
-    // longer on its checklist -- on a row of its own, after the rest.
+    // What the room needs, and what is in good order, that is about none of
+    // its items -- or about one no longer on its checklist -- on a row of its
+    // own, after the rest.
     const rowIds = new Set(checklist.map((row) => row.id));
-    const other = [
-      ...unassigned,
-      ...[...actionsByItem.entries()].filter(([id]) => !rowIds.has(id)).flatMap(([, texts]) => texts),
-    ];
-    if (other.length)
+    const elsewhere = <T,>(byItem: Map<string, T[]>) =>
+      [...byItem.entries()].filter(([id]) => !rowIds.has(id)).flatMap(([, texts]) => texts);
+    const other = [...unassigned, ...elsewhere(actionsByItem)];
+    const otherObserved = [...observedElsewhere, ...elsewhere(observedByItem)];
+    if (other.length || otherObserved.length)
       checklist.push({
         id: `${room.id}-other`,
         label: OTHER_ROW_LABEL,
@@ -648,6 +674,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         undamaged: '',
         working: '',
         comment: '',
+        observations: otherObserved,
         actions: other,
       });
     return {
@@ -719,6 +746,6 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     otherFindings: orphaned.sort(bySeverity),
     allFindings: [...findings].sort(bySeverity),
     generatedLabel: formatDay(report.generatedAt, true) ?? '',
-    disclaimer: DISCLAIMER,
+    disclaimer: disclaimer(rooms.some((room) => room.checklist.some((row) => row.observations.length > 0))),
   };
 }

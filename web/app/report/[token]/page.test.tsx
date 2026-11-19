@@ -119,3 +119,47 @@ describe("an occupied room on the shared report", () => {
     expect(within(table).getByRole('cell', { name: 'Clean' })).toBeTruthy();
   });
 });
+
+/**
+ * A move-in report says what the inspector found in good order beside each
+ * item, as well as what needs doing (the office, 2026-11-19: the report was
+ * "all damages" for a house that is move-in ready).
+ */
+describe('a move-in room on the shared report', () => {
+  it('prints what is in good order beside its item, before what the item needs, never beside an N', async () => {
+    const moveIn = reportWith([
+      { id: 'floor', label: 'Floor and coverings', isClean: true, isUndamaged: true, isWorking: true, comment: null },
+      { id: 'walls', label: 'Walls and ceilings', isClean: true, isUndamaged: false, isWorking: true, comment: null },
+    ]);
+    report = {
+      ...moveIn,
+      inspection: { ...moveIn.inspection, type: 'MOVE_IN' },
+      rooms: [
+        {
+          ...moveIn.rooms[0]!,
+          observations: [
+            { text: 'Carpet is in good shape', itemId: 'floor' },
+            { text: 'Walls are good', itemId: 'walls' },
+            { text: 'Fireplace is good', itemId: null },
+          ],
+          actions: [
+            { heading: 'Cleaning', items: [{ text: 'Vacuum the landing', details: [], itemId: 'floor' }] },
+            { heading: 'Painting', items: [{ text: 'Touch up the ceiling stain', details: [], itemId: 'walls' }] },
+          ],
+        },
+      ],
+    };
+    render(<ReportPage />);
+
+    const table = (await screen.findAllByRole('table'))[0]!;
+    const rows = within(table).getAllByRole('row');
+    const floor = rows.find((row) => row.textContent?.includes('Floor and coverings'))!;
+    expect(floor.textContent).toMatch(/Carpet is in good shape.*Vacuum the landing/);
+    // An N stands alone: what it needs, not "good".
+    const walls = rows.find((row) => row.textContent?.includes('Walls and ceilings'))!;
+    expect(walls.textContent).toContain('Touch up the ceiling stain');
+    expect(walls.textContent).not.toContain('Walls are good');
+    const other = rows.find((row) => row.textContent?.includes('Other'))!;
+    expect(other.textContent).toContain('Fireplace is good');
+  });
+});

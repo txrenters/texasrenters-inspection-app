@@ -6,6 +6,7 @@ import {
   FindingReviewStatus,
   FindingType,
   InspectionAreaCompletionStatus,
+  InspectionType,
   ReportShareKind,
   TranscriptionStatus,
   VideoRecordingType,
@@ -139,6 +140,7 @@ function filtersRoom(
       })),
       // Filters are scored on a form, not narrated on a walkthrough.
       actions: undefined as PublicInspectionReport['rooms'][number]['actions'],
+      observations: undefined as PublicInspectionReport['rooms'][number]['observations'],
     },
     photos: (photoArea?.photos ?? []).filter((photo) => photoIds.has(photo.id)) as never[],
   };
@@ -170,14 +172,9 @@ function roomActions(
   }>,
   stored: unknown,
 ): PublicInspectionReport['rooms'][number]['actions'] {
-  const spoken = recordings
-    .filter((recording) =>
-      (recording.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
-    )
-    .map((recording) => recording.id);
-  const read = readStoredSummary(stored, spoken);
-  if (!read?.current) return undefined;
-  return read.summary.actions.map((group) => ({
+  const summary = currentSummary(recordings, stored);
+  if (!summary) return undefined;
+  return summary.actions.map((group) => ({
     heading: RECORDING_ACTION_HEADING[group.group],
     items: group.items.map((item) => ({
       text: item.text,
@@ -185,6 +182,38 @@ function roomActions(
       itemId: item.itemId ?? null,
     })),
   }));
+}
+
+/**
+ * What a move-in room prints as in good order, beside the items it is about
+ * (the office, 2026-11-19: the move-in report was "all damages" for a house
+ * that is move-in ready). From the same current summary as the actions, and
+ * checked against the inspector's own words when it was written
+ * (`acceptedObservationText`).
+ *
+ * A move-in only: the office reads a move-out as what needs doing. Undefined
+ * for any other inspection, for a room with no current summary, and for one
+ * summarized before these were written -- which then prints as it did.
+ */
+function roomObservations(
+  inspectionType: string,
+  recordings: Parameters<typeof roomActions>[0],
+  stored: unknown,
+): PublicInspectionReport['rooms'][number]['observations'] {
+  if (inspectionType !== InspectionType.MOVE_IN) return undefined;
+  const observations = currentSummary(recordings, stored)?.observations;
+  return observations?.map((observation) => ({ text: observation.text, itemId: observation.itemId ?? null }));
+}
+
+/** A room's summary while it is still about the room's recordings; null otherwise. */
+function currentSummary(recordings: Parameters<typeof roomActions>[0], stored: unknown) {
+  const spoken = recordings
+    .filter((recording) =>
+      (recording.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
+    )
+    .map((recording) => recording.id);
+  const read = readStoredSummary(stored, spoken);
+  return read?.current ? read.summary : null;
 }
 
 type ChecklistItemRow = {
@@ -849,6 +878,7 @@ export class ReportShareService {
               : {}),
         })),
         actions: roomActions(area.media ?? [], area.recordingSummary),
+        observations: roomObservations(inspection.inspectionType, area.media ?? [], area.recordingSummary),
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,

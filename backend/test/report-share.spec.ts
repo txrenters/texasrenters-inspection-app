@@ -373,6 +373,79 @@ describe('inspection report shares', () => {
     expect(stale.rooms[0].actions).toBeUndefined();
   });
 
+  it('prints what a move-in room has in good order beside its item, and a move-out never', async () => {
+    const recording = {
+      id: 'media-1',
+      recordingType: 'PRIMARY_AREA',
+      label: null,
+      transcriptionJob: { segments: [{ startSeconds: 0, endSeconds: 4, text: 'Walls look good.' }] },
+    };
+    const summary = (version: number, observations?: unknown[]) => ({
+      version,
+      mediaIds: ['media-1'],
+      recordings: [{ mediaId: 'media-1', label: null, lines: [{ start: 0, text: 'Walls look good.' }] }],
+      actions: [],
+      ...(observations ? { observations } : {}),
+    });
+    const reportFor = async (inspectionType: string, recordingSummary: unknown) => {
+      const prisma = {
+        inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+        inspectionReportShare: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionId: 'inspection-1',
+            expiresAt: new Date(Date.now() + 86_400_000),
+            revokedAt: null,
+            createdBy: { displayName: 'Operations Team' },
+          }),
+        },
+        inspection: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionType,
+            assignments: [],
+            status: 'COMPLETED',
+            scheduledAt: new Date(),
+            completedAt: new Date(),
+            propertywareBuilding: null,
+            propertywareUnit: null,
+            areas: [
+              {
+                id: 'area-1',
+                propertyAreaId: 'property-area-1',
+                completionStatus: 'COMPLETED',
+                skipReason: null,
+                completedAt: new Date(),
+                recordingSummary,
+                propertyArea: { name: 'Living room', source: 'FLOOR_PLAN', floor: null, checklistItems: [] },
+                checklistResponses: [],
+                photos: [],
+                media: [recording],
+              },
+            ],
+            findings: [],
+          }),
+        },
+        inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      return new ReportShareService(prisma as never).publicReport('valid-token');
+    };
+    const observed = summary(3, [
+      { text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' },
+      { text: 'Fireplace is good', itemId: null, itemLabel: null },
+    ]);
+
+    // The office, 2026-11-19: a move-in report must show what is fine too.
+    expect((await reportFor('MOVE_IN', observed)).rooms[0].observations).toEqual([
+      { text: 'Walls look good', itemId: 'item-walls' },
+      { text: 'Fireplace is good', itemId: null },
+    ]);
+    // A move-out is read as what needs doing.
+    expect((await reportFor('MOVE_OUT', observed)).rooms[0].observations).toBeUndefined();
+    // Summarized before these were written: the report prints as it did.
+    const older = await reportFor('MOVE_IN', summary(2));
+    expect(older.rooms[0].observations).toBeUndefined();
+    expect(older.rooms[0].actions).toEqual([]);
+  });
+
   it('withholds only the photos of a finding nobody approved', async () => {
     const prisma = {
       // Each room's own video, for where one still arriving is (2026-11-14).

@@ -65,6 +65,33 @@ describe('the summary for the report', () => {
     expect(onSeek).toHaveBeenCalledWith(58);
   });
 
+  it('shows what a move-in summary says is in good order, with the item it prints beside', () => {
+    render(
+      <RecordingSummaryCard
+        areaId="a"
+        canManage
+        inspectionId="i"
+        summary={{
+          ...SUMMARY,
+          observations: [
+            { text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' },
+            { text: 'Fireplace is good', itemId: null, itemLabel: null },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('In good order')).toBeInTheDocument();
+    expect(screen.getByText('Walls look good')).toBeInTheDocument();
+    expect(screen.getByText(/Walls and ceilings/)).toBeInTheDocument();
+    expect(screen.getByText('Fireplace is good')).toBeInTheDocument();
+  });
+
+  it('shows no such heading for a summary without it', () => {
+    render(<RecordingSummaryCard areaId="a" canManage inspectionId="i" summary={SUMMARY} />);
+    expect(screen.queryByText('In good order')).toBeNull();
+  });
+
   it('says when the report lists nothing for the room: no summary yet, or a stale one', () => {
     const { unmount } = render(
       <RecordingSummaryCard areaId="a" canManage inspectionId="i" summary={null} />,
