@@ -73,7 +73,8 @@ const mount = () =>
   );
 
 beforeEach(() => {
-  url.state = { date: '2026-10-07', view: 'day' };
+  // The comparison, chosen in the address: the calendar opens first otherwise.
+  url.state = { date: '2026-10-07', view: 'day', mode: 'compare' };
   url.set.mockReset();
   held.comparison = comparison();
 });
@@ -131,7 +132,7 @@ describe('the Schedule', () => {
   });
 
   it('keeps the technicians’ names in view while the week scrolls sideways', async () => {
-    url.state = { date: '2026-10-07', view: 'week' };
+    url.state = { date: '2026-10-07', view: 'week', mode: 'compare' };
     mount();
 
     const name = await screen.findByText('Amy Wilson');
@@ -141,6 +142,10 @@ describe('the Schedule', () => {
 });
 
 describe('the two ways of reading it', () => {
+  // Nothing chosen in the address: what opens is the default.
+  beforeEach(() => {
+    url.state = { date: '2026-10-07', view: 'day' };
+  });
   const mountIn = (shell: 'classic' | 'jobber') =>
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -152,10 +157,14 @@ describe('the two ways of reading it', () => {
   const pressed = (name: string) =>
     within(screen.getByRole('group', { name: 'Schedule' })).getByRole('button', { name }).getAttribute('aria-pressed');
 
-  it('opens on the comparison with Jobber in the classic console', async () => {
+  /** The office, 2026-11-19: the calendar first in the classic console too; the comparison is a click away. */
+  it('opens on the calendar in the classic console, with the comparison one click away', async () => {
     mountIn('classic');
-    expect(await screen.findByRole('link', { name: /1 difference/ })).toBeTruthy();
-    expect(pressed('Against Jobber')).toBe('true');
+    expect(await screen.findByRole('button', { name: 'October 2026, choose a day' })).toBeTruthy();
+    expect(pressed('Calendar')).toBe('true');
+
+    fireEvent.click(within(screen.getByRole('group', { name: 'Schedule' })).getByRole('button', { name: 'Against Jobber' }));
+    expect(url.set).toHaveBeenCalledWith({ mode: 'compare' });
   });
 
   /** The office, 2026-11-04: the Jobber-style shell is for people who live in Jobber. */

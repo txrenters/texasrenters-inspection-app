@@ -6,7 +6,6 @@ import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState, type ReactNode } from 'react';
 
-import { useConsoleShell } from '@/components/console-shell-context';
 import { DayFilter } from '@/components/day-filter';
 import { JobberDayActions } from '@/components/jobber-day-actions';
 import { PageHeader } from '@/components/page-header';
@@ -29,10 +28,10 @@ import { cn } from '@/lib/utils';
  *
  * - **Calendar** (2026-11-04): laid out as Jobber's, for an office that lives
  *   in Jobber -- Month, Week, and a Day with a column per technician
- *   (components/schedule). The default in the Jobber-style shell.
+ *   (components/schedule). The default, in both shells since 2026-11-19.
  * - **Against Jobber** (console-development, 2026-10-09): the week by
  *   technician, every visit marked against Jobber, with the differences and
- *   their actions. The default in the classic console.
+ *   their actions. One click away, and kept in the address once chosen.
  *
  * Both read the same day comparison, built from what the Jobber sync last
  * stored. The only things here that change Jobber are the actions beside a
@@ -50,9 +49,10 @@ const isDay = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
 export default function SchedulePage() {
   const today = businessToday();
-  const shell = useConsoleShell();
   const [state, setState] = useUrlState({ date: '', view: 'week', mode: '', map: '' });
-  const preferred: Mode = shell === 'jobber' ? 'calendar' : 'compare';
+  // Calendar first in both shells (the office, 2026-11-19); it was the
+  // comparison in the classic console before that.
+  const preferred: Mode = 'calendar';
   const mode: Mode = state.mode === 'calendar' || state.mode === 'compare' ? state.mode : preferred;
 
   const modeSwitch = (
