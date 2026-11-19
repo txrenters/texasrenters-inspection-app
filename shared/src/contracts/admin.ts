@@ -557,6 +557,8 @@ export interface AdminInspection {
   inspectionType: InspectionType;
   /** The maintenance app's work order number, on a visit it handed over (source WORK_ORDER). */
   workOrderNumber?: number | null;
+  /** The job it was booked in (2026-11-20): its number links to the job page. Null before jobs. */
+  job?: { id: string; number: string; title: string } | null;
   baselineInspectionId?: string | null;
   baselineInspection?: {
     id: string;

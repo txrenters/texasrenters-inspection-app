@@ -317,6 +317,16 @@ export class CreateAdminJobDto {
   @IsString() @MinLength(8) @MaxLength(120) requestKey!: string;
 }
 
+/** More inspections on a job: `AddJobWorkInput` in shared. */
+export class AddJobWorkDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Tick at least one inspection to add.' })
+  @ArrayMaxSize(JOB_INSPECTION_TYPES.length)
+  @ArrayUnique()
+  @IsIn(JOB_INSPECTION_TYPES, { each: true })
+  inspectionTypes!: JobInspectionType[];
+}
+
 /** The visit's title and Details, as edited in the console. */
 export class UpdateJobberVisitDto {
   @IsOptional() @IsString() @MaxLength(300) title?: string;

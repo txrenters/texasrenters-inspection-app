@@ -81,4 +81,11 @@ describe("a job's headline", () => {
       gone();
     }
   });
+
+  it("leads with the job it was booked in, as a link to the job page, and calls Jobber's number Jobber's (2026-11-20)", () => {
+    render(<JobHeadline item={job({ job: { id: 'job-1', number: 'J-00042', title: 'Occupied + HVAC' } })} />);
+
+    expect(screen.getByRole('link', { name: 'Job J-00042' })).toHaveAttribute('href', '/jobs/job-1');
+    expect(screen.getByTestId('job-facts').textContent).toBe('Job J-00042·TBP·Occupied·Q4 2026·Zone 1·Jobber #20636');
+  });
 });

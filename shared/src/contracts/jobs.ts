@@ -18,7 +18,8 @@
  */
 import type { JobberBookingInput, VisitServicesBooking } from './visit-details-writer.js';
 import { isBookableInspectionType } from './visit-details-writer.js';
-import { REPORTABLE_VISIT_SERVICES, VISIT_SERVICE_LABEL } from './visit-services.js';
+import { REPORTABLE_VISIT_SERVICES, VISIT_SERVICE_LABEL, type ReportableVisitService } from './visit-services.js';
+import type { VisitState } from './visit-state.js';
 
 /** The inspections a job can hold, in the order the office lists them. */
 export const JOB_INSPECTION_TYPES = [
@@ -181,9 +182,25 @@ export interface AdminJobInspection {
   id: string;
   inspectionType: string;
   status: string;
+  /** Where it stands, as the lists say it: Scheduled, Complete, Partially complete... */
+  state: VisitState;
   /** Holds the job's services and, when booked, its Jobber visit. */
   lead: boolean;
   technician: { id: string; displayName: string } | null;
+  /**
+   * Whether it can come off the job: nobody has started it, and it is neither
+   * the job's last piece of work nor its lead while others remain.
+   */
+  canTakeOff: boolean;
+}
+
+/** A service on the job's lead, and what the technician answered for it. */
+export interface AdminJobService {
+  key: ReportableVisitService;
+  label: string;
+  outcome: 'TODO' | 'DONE' | 'NOT_DONE';
+  /** Why it was not done, as the technician said. */
+  reason: string | null;
 }
 
 /** A job as the console reads it. */
@@ -197,7 +214,38 @@ export interface AdminJob {
   property: { id: string; name: string | null; addressLine1: string | null };
   unit: { id: string; name: string | null } | null;
   createdAt: string;
+  /** The whole job, from its inspections: Partially complete while any is still owed (`jobStateOf`). */
+  state: VisitState;
+  /** Who the job is with: its lead's technician. */
+  technician: { id: string; displayName: string } | null;
+  /** The services on its lead, each with its answer. */
+  services: AdminJobService[];
+  /** Whether work can still be added: its lead is still to be done. */
+  canAddWork: boolean;
+  /** The lead first, then the office order; taken-off (cancelled) ones last. */
   inspections: AdminJobInspection[];
+}
+
+/** POST /admin/jobs/:jobId/work: more inspections on the job's day, for its technician. */
+export interface AddJobWorkInput {
+  inspectionTypes: JobInspectionType[];
+}
+
+/**
+ * A job's state from its inspections' (2026-11-20): taken-off ones do not
+ * count. Complete when every one is; Partially complete when some are done
+ * and something is still owed; otherwise the furthest along of the rest.
+ */
+export function jobStateOf(states: readonly VisitState[]): VisitState {
+  const live = states.filter((state) => state !== 'CANCELLED');
+  if (!live.length) return states.length ? 'CANCELLED' : 'SCHEDULED';
+  if (live.every((state) => state === 'DONE')) return 'DONE';
+  if (live.every((state) => state === 'COULD_NOT_GET_IN')) return 'COULD_NOT_GET_IN';
+  if (live.some((state) => state === 'IN_PROGRESS')) return 'IN_PROGRESS';
+  if (live.some((state) => state === 'FOLLOW_UP')) return 'FOLLOW_UP';
+  if (live.some((state) => state === 'DONE' || state === 'PARTIALLY_COMPLETE' || state === 'COULD_NOT_GET_IN'))
+    return 'PARTIALLY_COMPLETE';
+  return 'SCHEDULED';
 }
 
 /** GET /admin/jobs/next-number: what the series would give now. Not held. */

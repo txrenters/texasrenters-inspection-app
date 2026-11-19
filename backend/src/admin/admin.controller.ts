@@ -60,6 +60,7 @@ import {
   ChargeRuleDto,
   CommitInspectionImportDto,
   CreateAdminInspectionDto,
+  AddJobWorkDto,
   CreateAdminJobDto,
   JobberBookingContextQueryDto,
   UpdateJobberVisitDto,
@@ -644,6 +645,26 @@ export class AdminController {
   @RequirePermissions('inspections:read')
   job(@Req() request: AuthenticatedRequest, @Param('jobId', ParseUUIDPipe) id: string) {
     return this.service.job(request.user, id);
+  }
+  /** More inspections on a job's day, for its technician (the job page's Add work). */
+  @Post('jobs/:jobId/work')
+  @RequirePermissions('inspections:manage')
+  addJobWork(
+    @Req() request: AuthenticatedRequest,
+    @Param('jobId', ParseUUIDPipe) id: string,
+    @Body() body: AddJobWorkDto,
+  ) {
+    return this.service.addJobWork(request.user, id, body);
+  }
+  /** An inspection nobody has started, taken off its job: cancelled, with the job as the reason. */
+  @Post('jobs/:jobId/work/:inspectionId/take-off')
+  @RequirePermissions('inspections:manage')
+  takeOffJobWork(
+    @Req() request: AuthenticatedRequest,
+    @Param('jobId', ParseUUIDPipe) id: string,
+    @Param('inspectionId', ParseUUIDPipe) inspectionId: string,
+  ) {
+    return this.service.takeOffJobWork(request.user, id, inspectionId);
   }
   /** What a Jobber booking can start from. Declared before `:inspectionId`, which would swallow it. */
   @Get('inspections/jobber-booking-context')

@@ -264,8 +264,8 @@ export function NewJobSheet({ prefill, onClose }: { prefill: NewJobPrefill; onCl
       const job = await create.mutateAsync(input);
       toast.success(`Job ${job.number} saved`, { description: job.title });
       onClose();
-      const leadInspection = job.inspections.find((inspection) => inspection.lead) ?? job.inspections[0];
-      if (openAfter && leadInspection) router.push(`/inspections/${leadInspection.id}`);
+      // The job's own page: every inspection in it, and the way to each (2026-11-20).
+      if (openAfter) router.push(`/jobs/${job.id}`);
     } catch {
       // Shown in the panel; nothing is lost.
     }
