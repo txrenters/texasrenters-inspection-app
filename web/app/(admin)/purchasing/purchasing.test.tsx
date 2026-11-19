@@ -44,7 +44,7 @@ const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
   id: 'req-12',
   number: 'PR-0012',
   status: 'SUBMITTED',
-  requestedBy: { id: 'user-vance', name: 'Sample Requester' },
+  requestedBy: { id: 'user-vance', name: 'Sample Requester', code: 'SREQUESTER' },
   submittedAt: '2026-11-17T15:12:00.000Z',
   createdAt: '2026-11-17T14:58:00.000Z',
   company: { tenantId: 'tenant-thmp', name: 'THMP' },
@@ -56,14 +56,19 @@ const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
   decisionNote: null,
   ...over,
 });
+const NO_LINE_CODES = { lineType: null, place: null, expectedOn: null, vendor: null, department: null, notes: null };
 const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   ...row(),
   reason: 'Filters are out and next week has 14 inspections booked.',
   deliverTo: { id: 'place-stockroom', name: 'Stockroom' },
   lines: [
-    { id: 'line-1', item: { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each' }, description: null, quantity: 36, estimatedUnitCostCents: 390, onHand: 0, reorderLevel: 18 },
-    { id: 'line-2', item: { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each' }, description: null, quantity: 24, estimatedUnitCostCents: 185, onHand: 5, reorderLevel: 12 },
+    { id: 'line-1', item: { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each' }, description: 'Filter 20x25x1', quantity: 36, estimatedUnitCostCents: 390, onHand: 0, reorderLevel: 18, ...NO_LINE_CODES },
+    { id: 'line-2', item: { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each' }, description: 'Battery, 9 V', quantity: 24, estimatedUnitCostCents: 185, onHand: 5, reorderLevel: 12, ...NO_LINE_CODES },
   ],
+  requestCode: null,
+  costCenter: null,
+  requisitionDate: '2026-11-17',
+  documentDate: '2026-11-17',
   quotes: [],
   decidedBy: null,
   decidedAt: null,
@@ -76,17 +81,25 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   settings: SETTINGS,
   ...over,
 });
+const ITEM_EXTRAS = { lineTypeId: 'type-item', categoryId: 'cat-filters', usualVendorId: null, held: [], onOrder: 0, lastOrdered: null };
 const CHOICES: RequisitionChoices = {
   items: [
-    { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 0, reorderLevel: 18, reorderQuantity: 36, averageCostCents: 390, priceCents: null },
-    { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 5, reorderLevel: 12, reorderQuantity: 24, averageCostCents: 185, priceCents: null },
-    { id: 'item-alarm', code: 'SMK-10', name: 'Smoke alarm', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 40, reorderLevel: 6, reorderQuantity: 12, averageCostCents: 1530, priceCents: null },
-    { id: 'item-glue', code: 'PST-GLUE', name: 'Glue boards', unit: 'pack', companyTenantId: 'tenant-pest', onHand: 0, reorderLevel: 8, reorderQuantity: 12, averageCostCents: 910, priceCents: null },
+    { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 0, reorderLevel: 18, reorderQuantity: 36, averageCostCents: 390, priceCents: null, ...ITEM_EXTRAS, usualVendorId: 'vendor-hill', onOrder: 24, lastOrdered: 'PO-0007' },
+    { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 5, reorderLevel: 12, reorderQuantity: 24, averageCostCents: 185, priceCents: null, ...ITEM_EXTRAS, held: [{ placeId: 'place-stockroom', quantity: 5 }] },
+    { id: 'item-alarm', code: 'SMK-10', name: 'Smoke alarm', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 40, reorderLevel: 6, reorderQuantity: 12, averageCostCents: 1530, priceCents: null, ...ITEM_EXTRAS, categoryId: 'cat-parts' },
+    { id: 'item-glue', code: 'PST-GLUE', name: 'Glue boards', unit: 'pack', companyTenantId: 'tenant-pest', onHand: 0, reorderLevel: 8, reorderQuantity: 12, averageCostCents: 910, priceCents: null, ...ITEM_EXTRAS },
   ],
-  places: [{ id: 'place-stockroom', name: 'Stockroom' }],
-  companies: [{ tenantId: 'tenant-thmp', name: 'THMP' }, { tenantId: 'tenant-pest', name: 'Crystal Creek Pest' }],
-  vendors: [{ id: 'vendor-hill', name: 'Hill Country Supply' }],
+  places: [{ id: 'place-stockroom', name: 'Stockroom', code: 'STORE' }],
+  companies: [{ tenantId: 'tenant-thmp', name: 'THMP', purchaserCode: 'THMP' }, { tenantId: 'tenant-pest', name: 'Crystal Creek Pest', purchaserCode: 'CCP' }],
+  vendors: [{ id: 'vendor-hill', name: 'Hill Country Supply', number: 'V-00003' }],
   settings: SETTINGS,
+  lineTypes: [{ id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true }],
+  requestCodes: [{ id: 'code-restock', code: 'RESTOCK', name: 'Restock the storeroom' }],
+  costCenters: [{ id: 'code-maint', code: 'MAINT', name: 'Maintenance' }],
+  departments: [{ id: 'code-hvac', code: 'HVAC', name: 'HVAC' }],
+  categories: [{ id: 'cat-filters', name: 'Filters' }, { id: 'cat-parts', name: 'Parts' }],
+  me: { id: 'user-vance', name: 'Sample Requester', code: 'SREQUESTER' },
+  canMakeItemCodes: false,
 };
 
 let edits: Record<string, ReturnType<typeof mutation>>;
@@ -165,11 +178,11 @@ describe('a requisition begun from the Reorder list', () => {
     render(<NewRequisitionPage />);
 
     // The first item on it is the pest company's, so the request is that company's: the filter is another's and is left off.
-    const table = screen.getByRole('table', { name: 'What is asked for' });
+    const table = screen.getByRole('table', { name: 'Lines' });
     expect((within(table).getByLabelText('Quantity of Glue boards') as HTMLInputElement).value).toBe('12');
-    expect((within(table).getByLabelText('Estimated cost of one Glue boards') as HTMLInputElement).value).toBe('9.10');
+    expect((within(table).getByLabelText('Direct unit cost of Glue boards') as HTMLInputElement).value).toBe('9.10');
     expect(within(table).queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
-    expect(screen.getByLabelText('Company it is for').textContent).toContain('Crystal Creek Pest');
+    expect(screen.getByLabelText('Purchaser Code').textContent).toContain('Crystal Creek Pest');
     // Nothing is saved by opening it.
     expect(edits.create!.mutateAsync).not.toHaveBeenCalled();
   });
@@ -177,7 +190,7 @@ describe('a requisition begun from the Reorder list', () => {
   it('is an empty requisition when nothing was ticked', () => {
     render(<NewRequisitionPage />);
     expect(screen.queryByLabelText(/^Quantity of/)).toBeNull();
-    expect(screen.getByLabelText('Company it is for').textContent).toContain('THMP');
+    expect(screen.getByLabelText('Purchaser Code').textContent).toContain('THMP');
   });
 });
 
@@ -185,12 +198,12 @@ describe("a line's cost", () => {
   it('starts from the usual price the stock keeper gave the item, and from the average cost when it has none', () => {
     const priced: RequisitionChoices = { ...CHOICES, items: CHOICES.items.map((item) => (item.id === 'item-filter' ? { ...item, priceCents: 425 } : item)) };
     render(<RequisitionForm choices={priced} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Add everything that is low' }));
-    const table = screen.getByRole('table', { name: 'What is asked for' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
+    const table = screen.getByRole('table', { name: 'Lines' });
     // The filter has a price of $4.25 and cost $3.90 on average: the price is what the line starts from.
-    expect((within(table).getByLabelText('Estimated cost of one Filter 20x25x1') as HTMLInputElement).value).toBe('4.25');
+    expect((within(table).getByLabelText('Direct unit cost of Filter 20x25x1') as HTMLInputElement).value).toBe('4.25');
     // The battery has no price: what one cost on average.
-    expect((within(table).getByLabelText('Estimated cost of one Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
+    expect((within(table).getByLabelText('Direct unit cost of Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
   });
 });
 
@@ -200,50 +213,52 @@ describe('filling a requisition in', () => {
     render(<RequisitionForm choices={CHOICES} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={onSave} pending={false} requisition={requisition} />);
     return onSave;
   };
-  const submit = () => screen.getByRole('button', { name: 'Submit for approval' }) as HTMLButtonElement;
+  const submit = () => screen.getByRole('button', { name: 'Send Approval Request' }) as HTMLButtonElement;
 
   it('adds everything of the company that is low, at what the office usually orders and what one cost', async () => {
     const onSave = mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Add everything that is low' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
 
-    const table = screen.getByRole('table', { name: 'What is asked for' });
+    const table = screen.getByRole('table', { name: 'Lines' });
     expect((within(table).getByLabelText('Quantity of Filter 20x25x1') as HTMLInputElement).value).toBe('36');
-    expect((within(table).getByLabelText('Estimated cost of one Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
+    expect((within(table).getByLabelText('Direct unit cost of Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
     expect(within(table).queryByLabelText('Quantity of Smoke alarm')).toBeNull();
     expect(within(table).queryByLabelText('Quantity of Glue boards')).toBeNull();
-    expect(within(table).getByRole('row', { name: /Estimated total/ }).textContent).toContain('$184.80');
+    expect(screen.getByText('Estimated Total (USD):').parentElement!.textContent).toContain('$184.80');
 
-    expect(submit().disabled).toBe(true);
-    expect(screen.getByRole('status').textContent).toBe('Say why it is needed.');
-    fireEvent.change(screen.getByLabelText('Why it is needed'), { target: { value: ' Filters are out. ' } });
+    // Why it is needed is a note now, not a requirement (2026-11-20).
+    expect(screen.queryByRole('status')).toBeNull();
     fireEvent.click(submit());
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         xeroTenantId: 'tenant-thmp',
         neededBy: null,
         deliverToPlaceId: 'place-stockroom',
-        reason: 'Filters are out.',
+        requestCodeId: null,
+        costCenterId: null,
+        reason: '',
         lines: [
-          { itemId: 'item-filter', quantity: 36, estimatedUnitCostCents: 390 },
-          { itemId: 'item-battery', quantity: 24, estimatedUnitCostCents: 185 },
+          // Each line goes to the requisition's location, and the filter to its usual vendor.
+          { itemId: 'item-filter', quantity: 36, estimatedUnitCostCents: 390, description: null, placeId: 'place-stockroom', expectedOn: null, vendorId: 'vendor-hill', departmentId: null, notes: null },
+          { itemId: 'item-battery', quantity: 24, estimatedUnitCostCents: 185, description: null, placeId: 'place-stockroom', expectedOn: null, vendorId: null, departmentId: null, notes: null },
         ],
         quotes: [],
-      },
+      }),
       true,
     );
   });
 
   it('says who approves, and asks for quotes once it is above the limit', () => {
     mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
     fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
+    // Only the requisition's company's item codes are offered.
     expect(screen.queryByRole('option', { name: /Glue boards/ })).toBeNull();
-    fireEvent.click(screen.getByRole('option', { name: 'SMK-10 · Smoke alarm' }));
-    expect((screen.getByLabelText('Estimated cost of one Smoke alarm') as HTMLInputElement).value).toBe('15.30');
+    fireEvent.click(screen.getByRole('option', { name: /SMK-10/ }));
+    expect((screen.getByLabelText('Direct unit cost of Smoke alarm') as HTMLInputElement).value).toBe('15.30');
     fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '40' } });
-    fireEvent.change(screen.getByLabelText('Why it is needed'), { target: { value: 'Replacing expired alarms.' } });
 
     expect(screen.getByText('Somebody who may approve any amount')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toBe('Above the approval limit, 2 quotes are needed.');
@@ -253,17 +268,88 @@ describe('filling a requisition in', () => {
   it('asks for every line by an item code: nothing is written in words', async () => {
     const onSave = mount();
     expect(screen.queryByRole('button', { name: /not in the list/i })).toBeNull();
-    expect(screen.getByText(/Every line uses an item code/)).toBeTruthy();
+    expect(screen.getByText(/something with no code yet is added on Inventory first/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
-    const draft = screen.getByRole('button', { name: 'Save as a draft' }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    const draft = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
     expect(draft.disabled).toBe(true);
-    expect(screen.getByRole('status').textContent).toBe('Finish or remove the rows that are not filled in.');
+    expect(screen.getByRole('status').textContent).toBe('Finish or delete the lines that are not filled in.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove line 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete line 1' }));
     expect(draft.disabled).toBe(false);
     fireEvent.click(draft);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ lines: [], reason: '' }), false));
+  });
+
+  it('takes an item typed by part of its description, and fills the line from it in yellow (2026-11-20)', async () => {
+    const onSave = mount();
+    fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-11-26' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    const picker = screen.getByLabelText('Item on line 1');
+    fireEvent.change(picker, { target: { value: 'filt' } });
+    // The dropdown shows what matches by code or description, with what is on hand.
+    expect(screen.getByRole('option', { name: /FLT-20251/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /BAT-9V/ })).toBeNull();
+    fireEvent.keyDown(picker, { key: 'Enter' });
+
+    expect((picker as HTMLInputElement).value).toBe('FLT-20251');
+    const description = screen.getByLabelText('Description of Filter 20x25x1') as HTMLInputElement;
+    expect(description.value).toBe('Filter 20x25x1');
+    expect(description.closest('td')!.className).toContain('bg-warning');
+    expect(screen.getByLabelText('Vendor of Filter 20x25x1').textContent).toContain('V-00003');
+    expect((screen.getByLabelText('Expected receipt date of Filter 20x25x1') as HTMLInputElement).value).toBe('2026-11-26');
+    // Changed by hand, a field is no longer marked.
+    fireEvent.change(description, { target: { value: 'Filter 20x25x1, MERV 8' } });
+    expect(description.closest('td')!.className).not.toContain('bg-warning');
+    // The FactBoxes follow the line: what is on order, and the order that last asked.
+    expect(screen.getByRole('region', { name: 'Item Availability' }).textContent).toContain('24');
+    expect(screen.getByRole('region', { name: 'Line Details' }).textContent).toContain('PO-0007');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ lines: [expect.objectContaining({ itemId: 'item-filter', description: 'Filter 20x25x1, MERV 8', expectedOn: '2026-11-26', vendorId: 'vendor-hill', placeId: 'place-stockroom' })] }),
+        false,
+      ),
+    );
+  });
+
+  it('takes a code typed whole, or scanned, with Enter', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    const picker = screen.getByLabelText('Item on line 1');
+    fireEvent.change(picker, { target: { value: 'bat-9v' } });
+    fireEvent.keyDown(picker, { key: 'Enter' });
+    expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('24');
+  });
+
+  it('opens the whole list from Advanced, to filter and choose', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Select – Item Codes' });
+    expect(within(dialog).getAllByRole('row')).toHaveLength(4);
+    fireEvent.change(within(dialog).getByPlaceholderText('*filter*'), { target: { value: '*alarm*' } });
+    expect(within(dialog).getAllByRole('row')).toHaveLength(2);
+    expect((within(dialog).getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('row', { name: /SMK-10/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }));
+    expect(screen.queryByRole('dialog', { name: 'Select – Item Codes' })).toBeNull();
+    expect((screen.getByLabelText('Item on line 1') as HTMLInputElement).value).toBe('SMK-10');
+  });
+
+  it('sends the General codes and the document date', async () => {
+    const onSave = mount();
+    expect(screen.getByText('SREQUESTER')).toBeTruthy();
+    expect(screen.getByText('Given when it is saved')).toBeTruthy();
+    fireEvent.keyDown(screen.getByLabelText('Request Code'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: 'RESTOCK · Restock the storeroom' }));
+    fireEvent.keyDown(screen.getByLabelText('Cost Center Code'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: 'MAINT · Maintenance' }));
+    fireEvent.change(screen.getByLabelText('Document Date:'), { target: { value: '2026-11-18' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ requestCodeId: 'code-restock', costCenterId: 'code-maint', documentDate: '2026-11-18' }), false));
   });
 
   it('opens a sent-back requisition with what it asked for', () => {
@@ -285,7 +371,10 @@ describe('one requisition', () => {
     mount(detail());
 
     expect(screen.getByRole('heading', { name: 'Purchase requisition PR-0012' })).toBeTruthy();
-    expect(within(screen.getByRole('table', { name: 'What is asked for' })).getByRole('row', { name: /Filter 20x25x1/ }).textContent).toContain('$140.40');
+    expect(within(screen.getByRole('table', { name: 'Lines' })).getByRole('row', { name: /Filter 20x25x1/ }).textContent).toContain('$140.40');
+    // The General FastTab, read as it stands (2026-11-20).
+    expect(screen.getByText('SREQUESTER')).toBeTruthy();
+    expect(screen.getByText('Requisitioner Name:')).toBeTruthy();
     const sendBack = screen.getByRole('button', { name: 'Send back with the note' }) as HTMLButtonElement;
     expect(sendBack.disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);

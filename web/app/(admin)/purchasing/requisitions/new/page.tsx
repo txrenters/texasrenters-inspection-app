@@ -33,7 +33,7 @@ export default function NewRequisitionPage() {
       <PageHeader
         badges={<Badge variant="secondary">Draft</Badge>}
         className="mb-3"
-        description="It gets its number when you submit it."
+        description="It gets its number when it is first saved."
         prominent
         title="New purchase requisition"
       />

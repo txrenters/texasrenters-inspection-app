@@ -392,7 +392,7 @@ export class PurchaseOrdersService {
             status: true,
             xeroTenantId: true,
             deliverToPlaceId: true,
-            lines: { orderBy: { position: 'asc' }, select: { itemId: true, quantity: true, estimatedUnitCostCents: true } },
+            lines: { orderBy: { position: 'asc' }, select: { itemId: true, quantity: true, estimatedUnitCostCents: true, vendor: { select: { id: true, terms: true, active: true } } } },
             quotes: { where: { chosen: true }, select: { vendorId: true, vendor: { select: { terms: true, active: true } } } },
           },
         });
@@ -403,12 +403,15 @@ export class PurchaseOrdersService {
         const claimed = await tx.purchaseRequisition.updateMany({ where: { id: requisitionId, organizationId, status: PurchaseRequisitionStatus.APPROVED }, data: { status: PurchaseRequisitionStatus.ORDERED } });
         if (claimed.count !== 1) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Somebody has just made the order for this requisition.');
         const quote = requisition.quotes[0];
+        // The chosen quote's vendor; with none, the one vendor every line names (2026-11-20). Lines naming several wait for one order a vendor.
+        const named = [...new Map(requisition.lines.flatMap((line) => (line.vendor ? [[line.vendor.id, line.vendor] as const] : []))).values()];
+        const vendor = quote?.vendor.active ? { id: quote.vendorId, terms: quote.vendor.terms } : named.length === 1 && named[0]!.active && requisition.lines.every((line) => line.vendor) ? { id: named[0]!.id, terms: named[0]!.terms } : null;
         const order = await tx.purchaseOrder.create({
           data: {
             organizationId,
             requisitionId,
-            vendorId: quote?.vendor.active ? quote.vendorId : null,
-            terms: quote?.vendor.active ? quote.vendor.terms : null,
+            vendorId: vendor?.id ?? null,
+            terms: vendor?.terms ?? null,
             xeroTenantId: requisition.xeroTenantId,
             deliverToPlaceId: requisition.deliverToPlaceId,
             createdById: user.id,

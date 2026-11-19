@@ -1,6 +1,6 @@
 'use client';
 
-import { formatMoney, type RequisitionDetail, type RequisitionLine, type RequisitionQuote } from '@texasrenters/shared';
+import { REQUISITION_STATUS_LABEL, formatMoney, type RequisitionDetail, type RequisitionLine, type RequisitionQuote } from '@texasrenters/shared';
 import { ClipboardListIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -8,6 +8,7 @@ import { useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { FastTab, FieldRow, FieldValue } from '@/components/purchasing/nav-kit';
 import { RequisitionForm, StockFigure } from '@/components/purchasing/requisition-form';
 import { RequisitionStatusBadge, RequisitionSteps, approverFor } from '@/components/purchasing/requisition-parts';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
@@ -28,22 +29,28 @@ import { usePurchaseOrderEdits, usePurchasingEdits, useRequisition, useRequisiti
  */
 
 const LINE_COLUMNS: Array<Column<RequisitionLine>> = [
+  { key: 'type', header: 'Type', hideBelow: 'md', cell: (line) => line.lineType?.name ?? EMPTY },
+  { key: 'code', header: 'Item Code', className: 'whitespace-nowrap', cell: (line) => <span className="font-mono font-semibold">{line.item?.code ?? EMPTY}</span> },
   {
     key: 'item',
-    header: 'Item',
+    header: 'Description',
     primary: true,
     cell: (line) => (
       <span className="grid gap-0.5">
-        <span className="font-medium">{line.item?.name ?? line.description}</span>
-        <span className="text-muted-foreground text-xs">{line.item ? `${line.item.code} · ${line.item.unit}` : 'Not in the inventory yet'}</span>
+        <span className="font-medium">{line.description ?? line.item?.name}</span>
+        {line.notes ? <span className="text-muted-foreground text-xs">{line.notes}</span> : null}
       </span>
     ),
   },
-  { key: 'onHand', header: 'On hand now', numeric: true, cell: (line) => (line.onHand === null ? EMPTY : <StockFigure onHand={line.onHand} reorderLevel={line.reorderLevel ?? 0} />) },
-  { key: 'reorder', header: 'Reorder at', numeric: true, hideBelow: 'md', cell: (line) => (line.reorderLevel ? formatCount(line.reorderLevel) : EMPTY) },
-  { key: 'quantity', header: 'Asking for', numeric: true, cell: (line) => formatCount(line.quantity) },
-  { key: 'each', header: 'Est. each', numeric: true, hideBelow: 'sm', cell: (line) => formatMoney(line.estimatedUnitCostCents) },
-  { key: 'total', header: 'Est. total', numeric: true, cell: (line) => formatMoney(line.quantity * line.estimatedUnitCostCents) },
+  { key: 'place', header: 'Location Code', hideBelow: 'md', cell: (line) => line.place?.code ?? EMPTY },
+  { key: 'quantity', header: 'Quantity', numeric: true, cell: (line) => formatCount(line.quantity) },
+  { key: 'unit', header: 'UoM', hideBelow: 'sm', cell: (line) => line.item?.unit ?? EMPTY },
+  { key: 'each', header: 'Direct Unit Cost', numeric: true, hideBelow: 'sm', cell: (line) => formatMoney(line.estimatedUnitCostCents) },
+  { key: 'total', header: 'Line Amount', numeric: true, cell: (line) => formatMoney(line.quantity * line.estimatedUnitCostCents) },
+  { key: 'expected', header: 'Expected Receipt Date', hideBelow: 'lg', cell: (line) => (line.expectedOn ? formatDay(line.expectedOn) : EMPTY) },
+  { key: 'vendor', header: 'Vendor No.', hideBelow: 'lg', cell: (line) => line.vendor?.number ?? line.vendor?.name ?? EMPTY },
+  { key: 'department', header: 'Department Code', hideBelow: 'lg', cell: (line) => line.department?.code ?? EMPTY },
+  { key: 'onHand', header: 'On Hand', numeric: true, hideBelow: 'md', cell: (line) => (line.onHand === null ? EMPTY : <StockFigure onHand={line.onHand} reorderLevel={line.reorderLevel ?? 0} />) },
 ];
 
 const QUOTE_COLUMNS: Array<Column<RequisitionQuote>> = [
@@ -143,18 +150,68 @@ function RequisitionView({
   return (
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="grid min-w-0 gap-6">
-        <AsideCard title="Why it is needed">
-          <p className="whitespace-pre-wrap">{data.reason || 'No reason given yet.'}</p>
-          {data.deliverTo ? <p className="text-muted-foreground mt-2 text-xs">Deliver to {data.deliverTo.name}.</p> : null}
-        </AsideCard>
-
-        <section className="grid gap-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-heading text-base font-bold">What is asked for</h2>
-            <p className="text-sm font-semibold">Estimated total {formatMoney(data.estimatedTotalCents)}</p>
+        <FastTab title="General">
+          <div className="grid gap-x-6 @2xl:grid-cols-2">
+            <div>
+              <FieldRow label="No.">
+                <FieldValue>{data.number ?? EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Requisitioner ID">
+                <FieldValue>{data.requestedBy.code ?? EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Requisitioner Name">
+                <FieldValue>{data.requestedBy.name}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Purchaser Code">
+                <FieldValue>{data.company ? (data.company.purchaserCode ? `${data.company.purchaserCode} · ${data.company.name}` : data.company.name) : 'No company'}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Request Code">
+                <FieldValue>{data.requestCode ? `${data.requestCode.code} · ${data.requestCode.name}` : EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Location Code">
+                <FieldValue>{data.deliverTo ? (data.deliverTo.code ? `${data.deliverTo.code} · ${data.deliverTo.name}` : data.deliverTo.name) : EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Cost Center Code">
+                <FieldValue>{data.costCenter ? `${data.costCenter.code} · ${data.costCenter.name}` : EMPTY}</FieldValue>
+              </FieldRow>
+            </div>
+            <div>
+              <FieldRow label="Requisition Date">
+                <FieldValue>{data.requisitionDate ? formatDay(data.requisitionDate) : formatDay(data.createdAt)}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Document Date">
+                <FieldValue>{data.documentDate ? formatDay(data.documentDate) : EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Expected Receipt Date">
+                <FieldValue>{data.neededBy ? formatDay(data.neededBy) : EMPTY}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Status">
+                <FieldValue>{REQUISITION_STATUS_LABEL[data.status]}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Approval Limit">
+                <FieldValue>{formatMoney(data.settings.approvalLimitCents)}</FieldValue>
+              </FieldRow>
+              <FieldRow label="Approved By">
+                <FieldValue>{data.status !== 'SUBMITTED' && data.status !== 'DRAFT' && data.decidedBy ? data.decidedBy : EMPTY}</FieldValue>
+              </FieldRow>
+            </div>
           </div>
-          <DataTable columns={LINE_COLUMNS} label="What is asked for" rowKey={(line) => line.id} rows={data.lines} />
-        </section>
+          {data.reason ? (
+            <FieldRow label="Why it is needed">
+              <FieldValue>
+                <span className="whitespace-pre-wrap">{data.reason}</span>
+              </FieldValue>
+            </FieldRow>
+          ) : null}
+        </FastTab>
+
+        <FastTab action={<span className="text-sm font-semibold tabular-nums">Estimated total {formatMoney(data.estimatedTotalCents)}</span>} title="Lines">
+          {/* Every NAV column is wider than this card at any laptop width, so the box scrolls sideways; and a sticky
+              header inside a scroll box is shoved down over the first line (components/ui/table.tsx), hence static. */}
+          <div className="overflow-x-auto [&_thead]:static">
+            <DataTable className="min-w-[78rem]" columns={LINE_COLUMNS} label="Lines" rowKey={(line) => line.id} rows={data.lines} />
+          </div>
+        </FastTab>
 
         <section className="grid gap-3">
           <h2 className="text-heading text-base font-bold">Quotes</h2>

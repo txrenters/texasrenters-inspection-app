@@ -5814,6 +5814,7 @@ model StockPlace {
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
   @@unique([organizationId, code])
+  requisitionLines PurchaseRequisitionLine[] @relation("RequisitionLinePlace")
 }
 
 /// Who the office buys from. Purchase orders name one from phase 3.
@@ -5842,6 +5843,7 @@ model Vendor {
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
   @@unique([organizationId, number])
+  requisitionLines PurchaseRequisitionLine[] @relation("RequisitionLineVendor")
 }
 
 /// The stock ledger: one row per movement, written once. The database refuses
@@ -5955,6 +5957,12 @@ model PurchaseRequisition {
   xeroTenantId     String?
   neededBy         DateTime?                 @db.Date
   deliverToPlaceId String?                   @db.Uuid
+  /// The kind of request (2026-11-20): one of the office's request codes.
+  requestCodeId    String?                   @db.Uuid
+  /// The cost center it is for: one of the office's cost center codes.
+  costCenterId     String?                   @db.Uuid
+  /// The day on the paper; the requisition date is `createdAt`.
+  documentDate     DateTime?                 @db.Date
   reason           String
   requestedById    String                    @db.Uuid
   submittedAt      DateTime?
@@ -5968,6 +5976,8 @@ model PurchaseRequisition {
   organization     Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   xeroOrganisation XeroOrganisation?          @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
   deliverTo        StockPlace?                @relation(fields: [organizationId, deliverToPlaceId], references: [organizationId, id], onDelete: NoAction)
+  requestCode      PurchasingCode?           @relation("RequisitionRequestCode", fields: [organizationId, requestCodeId], references: [organizationId, id], onDelete: Restrict)
+  costCenter       PurchasingCode?           @relation("RequisitionCostCenter", fields: [organizationId, costCenterId], references: [organizationId, id], onDelete: Restrict)
   requestedBy      UserProfile                @relation("RequisitionRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   decidedBy        UserProfile?               @relation("RequisitionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
   lines            PurchaseRequisitionLine[]
@@ -5990,11 +6000,24 @@ model PurchaseRequisitionLine {
   description            String?
   quantity               Int
   estimatedUnitCostCents Int
+  /// Where this line goes (2026-11-20); starts as the requisition's location.
+  placeId                String? @db.Uuid
+  /// The Texas day it is expected; starts as the requisition's expected receipt date.
+  expectedOn             DateTime? @db.Date
+  /// Who it is bought from; starts as the item's usual vendor.
+  vendorId               String? @db.Uuid
+  /// One of the office's department codes.
+  departmentId           String? @db.Uuid
+  notes                  String?
 
   requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
   item        StockItem?          @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place       StockPlace?         @relation("RequisitionLinePlace", fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  vendor      Vendor?             @relation("RequisitionLineVendor", fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
+  department  PurchasingCode?     @relation("RequisitionLineDepartment", fields: [organizationId, departmentId], references: [organizationId, id], onDelete: Restrict)
 
   @@index([organizationId, requisitionId, position])
+  @@index([vendorId])
 }
 
 /// A vendor's quote for a requisition. At most one is the chosen one (a partial unique index).
@@ -6514,6 +6537,9 @@ model PurchasingCode {
   organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   xeroOptions    PurchasingCodeXeroOption[]
   items          StockItem[]        @relation("StockItemLineType")
+  requisitionsOfKind  PurchaseRequisition[]     @relation("RequisitionRequestCode")
+  requisitionsOfCostCenter PurchaseRequisition[] @relation("RequisitionCostCenter")
+  requisitionLines    PurchaseRequisitionLine[] @relation("RequisitionLineDepartment")
 
   @@unique([organizationId, kind, code])
   @@unique([organizationId, id])

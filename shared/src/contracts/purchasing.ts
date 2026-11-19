@@ -5,7 +5,8 @@
  * requisition becomes a purchase order in phase 3.
  *
  * A requisition moves no stock and spends no money. It gets its number
- * (PR-0001) when it is first submitted, and its lines are fixed from then
+ * (PR-00001) when it is first saved (2026-11-20; before, when it was first
+ * submitted), and its lines are fixed once it is submitted
  * unless the approver sends it back. Whoever asked can never approve their
  * own. Money is cents; quantities are whole units. Nothing here calls
  * anything billed.
@@ -37,9 +38,32 @@ export const MOST_REQUISITION_QUOTES = 10;
 export const DEFAULT_APPROVAL_LIMIT_CENTS = 50_000;
 export const DEFAULT_QUOTES_ABOVE_LIMIT = 2;
 
-/** "PR-0012": at least four digits, more when the office gets there. */
+/** "PR-00042": five digits from 2026-11-20. A requisition numbered before keeps its four (PR-0012). */
 export function requisitionNumber(sequence: number): string {
-  return `PR-${String(sequence).padStart(4, '0')}`;
+  return `PR-${String(sequence).padStart(5, '0')}`;
+}
+
+/**
+ * The requisitioner ID a person goes by, from their name as the console has
+ * it: the first initial and the last name, in capitals. "Ernie Saavedra" ->
+ * ESAAVEDRA. One word is the word. At most 20 characters.
+ */
+export function requisitionerCode(name: string): string {
+  const words = name
+    .normalize('NFKD')
+    .replace(/[^A-Za-z\s'-]/g, ' ')
+    .split(/[\s'-]+/)
+    .filter(Boolean);
+  if (!words.length) return 'UNKNOWN';
+  const code = words.length === 1 ? words[0]! : `${words[0]![0]}${words.at(-1)}`;
+  return code.toUpperCase().slice(0, 20);
+}
+
+/** A code the requisition names, as it shows: "RESTOCK", "Restock the storeroom". */
+export interface PurchasingCodeRef {
+  id: string;
+  code: string;
+  name: string;
 }
 
 export function requisitionTotalCents(lines: readonly { quantity: number; estimatedUnitCostCents: number }[]): number {
@@ -64,7 +88,7 @@ export function requisitionSubmitProblem(
   requisition: { reason: string; lines: readonly { quantity: number; estimatedUnitCostCents: number }[]; quotes: readonly { chosen: boolean }[] },
   settings: PurchasingSettings,
 ): string | null {
-  if (!requisition.reason.trim()) return 'Say why it is needed.';
+  // Why it is needed is a note now (2026-11-20), not a requirement: the request code says what kind of request it is.
   if (!requisition.lines.length) return 'Add at least one item.';
   const chosen = requisition.quotes.filter((quote) => quote.chosen).length;
   if (requisition.quotes.length && chosen !== 1) return 'Mark one quote as the chosen one.';
@@ -82,6 +106,15 @@ export interface RequisitionLineInput {
   itemId: string;
   quantity: number;
   estimatedUnitCostCents: number;
+  /** The line's description; null or left out for the item's own. (2026-11-20, as are the rest.) */
+  description?: string | null;
+  /** Where it goes: one of the office's places. */
+  placeId?: string | null;
+  /** The Texas day it is expected, YYYY-MM-DD. */
+  expectedOn?: string | null;
+  vendorId?: string | null;
+  departmentId?: string | null;
+  notes?: string | null;
 }
 
 export interface RequisitionQuoteInput {
@@ -95,9 +128,16 @@ export interface RequisitionQuoteInput {
 /** The whole requisition as the form holds it: a save replaces its lines and quotes. */
 export interface SaveRequisitionInput {
   xeroTenantId: string | null;
-  /** The Texas day it is needed by, YYYY-MM-DD. */
+  /** The Texas day it is needed by, YYYY-MM-DD: the expected receipt date each line starts from. */
   neededBy: string | null;
+  /** The location code: where it is delivered, and where each line starts. */
   deliverToPlaceId: string | null;
+  /** The kind of request: one of the office's request codes. (2026-11-20, as are the next two.) */
+  requestCodeId?: string | null;
+  costCenterId?: string | null;
+  /** The day on the paper, YYYY-MM-DD; null or left out for today. */
+  documentDate?: string | null;
+  /** A note on why it is needed; may be empty. */
   reason: string;
   lines: RequisitionLineInput[];
   quotes: RequisitionQuoteInput[];
@@ -113,11 +153,12 @@ export interface RequisitionRow {
   /** Null until it is first submitted. */
   number: string | null;
   status: RequisitionStatus;
-  requestedBy: { id: string; name: string };
+  /** `code` is the requisitioner ID: "ESAAVEDRA". */
+  requestedBy: { id: string; name: string; code: string };
   /** When it was first submitted; a draft has only when it was started. */
   submittedAt: string | null;
   createdAt: string;
-  company: { tenantId: string; name: string } | null;
+  company: { tenantId: string; name: string; purchaserCode?: string | null } | null;
   neededBy: string | null;
   /** "Filter 20x25x1 × 36, Battery, 9 V × 24". */
   summary: string;
@@ -139,9 +180,17 @@ export interface RequisitionLine {
   id: string;
   /** Null only on a line written in words before every line needed a code; `description` then says what. */
   item: { id: string; code: string; name: string; unit: string } | null;
+  /** What the line says it is: the item's name unless it was given another. */
   description: string | null;
   quantity: number;
   estimatedUnitCostCents: number;
+  /** The item's line type: an Item keeps stock, a Service does not. */
+  lineType: { code: string; name: string; keepsStock: boolean } | null;
+  place: { id: string; code: string; name: string } | null;
+  expectedOn: string | null;
+  vendor: { id: string; number: string; name: string } | null;
+  department: PurchasingCodeRef | null;
+  notes: string | null;
   /** On hand of the item now, and its reorder level; null for something not on the list. */
   onHand: number | null;
   reorderLevel: number | null;
@@ -178,7 +227,13 @@ export interface RequisitionActions {
 
 export interface RequisitionDetail extends RequisitionRow {
   reason: string;
-  deliverTo: { id: string; name: string } | null;
+  deliverTo: { id: string; name: string; code?: string } | null;
+  requestCode: PurchasingCodeRef | null;
+  costCenter: PurchasingCodeRef | null;
+  /** The Texas day it was made. */
+  requisitionDate: string;
+  /** The day on the paper. */
+  documentDate: string | null;
   lines: RequisitionLine[];
   quotes: RequisitionQuote[];
   decidedBy: string | null;
@@ -205,9 +260,29 @@ export interface RequisitionChoices {
     averageCostCents: number | null;
     /** The usual price the stock keeper gave the item: what a line's cost starts from, before the average. */
     priceCents: number | null;
+    /** What it is on a line (2026-11-20). */
+    lineTypeId: string | null;
+    categoryId: string | null;
+    usualVendorId: string | null;
+    /** On hand in each place that holds any. */
+    held: { placeId: string; quantity: number }[];
+    /** Still to come on purchase orders not yet received in full. */
+    onOrder: number;
+    /** The latest purchase order that asked for it, by number. */
+    lastOrdered: string | null;
   }[];
-  places: { id: string; name: string }[];
-  companies: { tenantId: string; name: string }[];
-  vendors: { id: string; name: string }[];
+  places: { id: string; name: string; code?: string }[];
+  companies: { tenantId: string; name: string; purchaserCode?: string | null }[];
+  vendors: { id: string; name: string; number?: string }[];
   settings: PurchasingSettings;
+  /** The codes a requisition picks from (2026-11-20): those in use. */
+  lineTypes?: (PurchasingCodeRef & { keepsStock: boolean })[];
+  requestCodes?: PurchasingCodeRef[];
+  departments?: PurchasingCodeRef[];
+  costCenters?: PurchasingCodeRef[];
+  categories?: { id: string; name: string }[];
+  /** Who is asking: a new requisition's requisitioner. */
+  me?: { id: string; name: string; code: string };
+  /** May add an item code from the dropdown: the stock keeper. */
+  canMakeItemCodes?: boolean;
 }
