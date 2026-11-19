@@ -419,6 +419,8 @@ export class MediaProcessingService implements OnModuleInit {
           checked: result.checked,
           suggested: result.suggested,
           spotted: result.spotted,
+          // A move-in's wide frames of the room and its items, filed as its photographs.
+          roomPhotos: result.roomPhotos,
           tokens: result.usage.totalTokens,
         });
     } catch (error) {

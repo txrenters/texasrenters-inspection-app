@@ -446,6 +446,88 @@ describe('inspection report shares', () => {
     expect(older.rooms[0].actions).toEqual([]);
   });
 
+  it('prints a move-in room as the tenant receives it: no still of a problem nobody confirmed', async () => {
+    const photo = (id: string, captureType: string, finding: string | null, extra: Record<string, unknown> = {}) => ({
+      id,
+      label: null,
+      notes: null,
+      capturedAt: new Date('2026-11-18T23:30:00Z'),
+      captureTimeSource: 'VIDEO_OFFSET',
+      width: 1080,
+      height: 1920,
+      checklistItem: null,
+      captureType,
+      findingId: finding ? `finding-${id}` : null,
+      finding: finding ? { reviewStatus: finding } : null,
+      ...extra,
+    });
+    const photos = [
+      // The technician's own: printed whatever it shows.
+      photo('technician-overview', 'AREA_OVERVIEW', null),
+      photo('technician-close-up', 'FINDING_CONTEXT', 'PENDING_REVIEW'),
+      // The AI's wide frame of the walls, captioned with their item.
+      photo('ai-walls', 'AREA_OVERVIEW', null, { checklistItem: { label: 'Walls and ceilings' } }),
+      // The AI's still of a problem it spotted, nobody having looked yet.
+      photo('ai-still', 'VIDEO_FRAME_SNAPSHOT', 'PENDING_REVIEW'),
+      // The office confirmed this one: it prints.
+      photo('confirmed-still', 'VIDEO_FRAME_SNAPSHOT', 'APPROVED'),
+    ];
+    const reportFor = async (inspectionType: string) => {
+      const prisma = {
+        inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+        inspectionReportShare: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionId: 'inspection-1',
+            expiresAt: new Date(Date.now() + 86_400_000),
+            revokedAt: null,
+            createdBy: { displayName: 'Operations Team' },
+          }),
+        },
+        inspection: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionType,
+            assignments: [],
+            status: 'COMPLETED',
+            scheduledAt: new Date(),
+            completedAt: new Date(),
+            propertywareBuilding: null,
+            propertywareUnit: null,
+            areas: [
+              {
+                id: 'area-1',
+                propertyAreaId: 'property-area-1',
+                completionStatus: 'COMPLETED',
+                skipReason: null,
+                completedAt: new Date(),
+                recordingSummary: null,
+                propertyArea: { name: 'Living room', source: 'FLOOR_PLAN', floor: null, checklistItems: [] },
+                checklistResponses: [],
+                photos,
+                media: [],
+              },
+            ],
+            findings: [],
+          }),
+        },
+        inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      return new ReportShareService(prisma as never).publicReport('valid-token');
+    };
+
+    const moveIn = await reportFor('MOVE_IN');
+    expect(moveIn.photos.map((printed) => printed.id)).toEqual([
+      'technician-overview',
+      'technician-close-up',
+      'ai-walls',
+      'confirmed-still',
+    ]);
+    expect(moveIn.photos.find((printed) => printed.id === 'ai-walls')?.label).toBe('Walls and ceilings');
+    // Never sent: how a photograph was filed, or under which finding.
+    expect(JSON.stringify(moveIn.photos)).not.toMatch(/captureType|findingId|reviewStatus/);
+    // A move-out prints them all, as before.
+    expect((await reportFor('MOVE_OUT')).photos).toHaveLength(5);
+  });
+
   it('withholds only the photos of a finding nobody approved', async () => {
     const prisma = {
       // Each room's own video, for where one still arriving is (2026-11-14).
