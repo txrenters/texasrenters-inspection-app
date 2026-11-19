@@ -14,6 +14,7 @@ const hooks = vi.hoisted(() => ({
   usePlanRotation: vi.fn(),
   usePlanLateMoveOuts: vi.fn(),
   usePlanPackageChanges: vi.fn(),
+  usePlanCoverage: vi.fn(),
   usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
@@ -207,6 +208,7 @@ function mount({
   templates = [] as unknown[],
   lateMoveOuts = { conflicts: [], jobberEditsPushed: true } as unknown,
   packageChanges = null as unknown,
+  coverage = null as unknown,
   moveToMonday = idle as unknown,
   optimizeDay = idle as unknown,
   optimizeDays = idle as unknown,
@@ -217,6 +219,7 @@ function mount({
   hooks.usePlanUnschedulePreview.mockReturnValue(unschedulePreview);
   hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
   hooks.usePlanPackageChanges.mockReturnValue({ isLoading: false, isError: false, data: packageChanges });
+  hooks.usePlanCoverage.mockReturnValue({ isLoading: false, isError: false, data: coverage });
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile, isSuccess: true, isFetching: false, isError: false });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
@@ -1591,5 +1594,71 @@ describe('the benefit package’s changes since last quarter', () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText('No history yet')).toBeTruthy();
+  });
+});
+
+describe('where every property in the package stands this quarter', () => {
+  const COVERAGE = {
+    planId: 'plan-1',
+    quarterYear: 2026,
+    quarterNumber: 4,
+    today: '2026-11-20',
+    properties: [
+      {
+        buildingId: 'building-j',
+        address: '14 Joiner Way',
+        city: 'Katy',
+        zone: '2',
+        leases: 1,
+        firstOnReport: '2026-10-20T13:00:00.000Z',
+        group: 'NONE',
+        detail: 'NOT_PLANNED',
+        visit: null,
+        previousLeaseOpen: 0,
+      },
+      {
+        buildingId: 'building-u',
+        address: '3 Unscheduled Rd',
+        city: 'Conroe',
+        zone: '1',
+        leases: 1,
+        firstOnReport: '2026-09-04T13:00:00.000Z',
+        group: 'NOT_SCHEDULED',
+        detail: 'NO_DAY',
+        visit: {
+          stopId: 's1',
+          inspectionId: null,
+          inspectionType: 'OCCUPIED',
+          scheduledOn: null,
+          technician: null,
+          inspectionStatus: null,
+          stopStatus: 'UNSCHEDULED',
+          bookedInJobber: true,
+          fromJobber: false,
+          previousLease: false,
+          note: null,
+        },
+        previousLeaseOpen: 0,
+      },
+    ],
+    leftWithOpenVisit: [],
+  };
+
+  it('is read only once its tab is open', () => {
+    mount();
+
+    expect(hooks.usePlanCoverage).toHaveBeenLastCalledWith('plan-1', false);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Coverage' }));
+    expect(url.set).toHaveBeenCalledWith({ tab: 'coverage', show: 'all' });
+  });
+
+  it('lists the properties with no visit, and opens a visit with no day in its window', () => {
+    url.state = { quarter: '2026-4', tab: 'coverage', day: '', view: 'month', show: 'all' };
+    mount({ coverage: COVERAGE });
+
+    expect(hooks.usePlanCoverage).toHaveBeenLastCalledWith('plan-1', true);
+    expect(screen.getByRole('link', { name: '14 Joiner Way' }).getAttribute('href')).toBe('/properties/building-j');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in the plan' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });
