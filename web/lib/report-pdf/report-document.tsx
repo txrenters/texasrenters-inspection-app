@@ -446,10 +446,16 @@ function ChecklistTable({ room, last }: { room: ReportRoomView; last: boolean })
               </View>
             ))
           )}
-          {/* The reviewer's comment, then what the room needs that is about
-              this item, from the summary of its recordings, one line each. */}
+          {/* The reviewer's comment, then -- on a move-in -- what the
+              inspector said is in good order, then what the room needs that is
+              about this item, from the summary of its recordings, one line each. */}
           <View style={[styles.checklistCell, styles.checklistComment]}>
             {row.comment ? <Text style={styles.commentNote}>{row.comment}</Text> : null}
+            {row.observations.map((observation) => (
+              <Text key={`observed-${observation}`} style={styles.commentAction}>
+                {observation}
+              </Text>
+            ))}
             {row.actions.map((action) => (
               <Text key={action} style={styles.commentAction}>
                 {action}
@@ -494,7 +500,7 @@ function roomStartHeight(room: ReportRoomView, photos: ReportRoomView['photos'])
     const lines = Math.max(
       1,
       linesOf(first.label, LABEL_CHARS_PER_LINE),
-      [first.comment, ...first.actions].reduce(
+      [first.comment, ...first.observations, ...first.actions].reduce(
         (sum, text) => sum + linesOf(text, COMMENT_CHARS_PER_LINE),
         0,
       ),

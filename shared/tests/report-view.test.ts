@@ -231,6 +231,93 @@ describe('what a room needs, in the Comments column', () => {
   });
 });
 
+/**
+ * A move-in report says what the inspector found in good order as well as
+ * what needs doing (the office, 2026-11-19: the report was "all damages" for a
+ * house that is move-in ready).
+ */
+describe('what is in good order, on a move-in', () => {
+  const FLOOR = { id: 'item-floor', label: 'Floor and coverings', isClean: true, isUndamaged: true, isWorking: true, comment: null };
+  const WALLS = { id: 'item-walls', label: 'Walls and ceilings', isClean: true, isUndamaged: false, isWorking: true, comment: null };
+  const LIGHTS = { id: 'item-lights', label: 'Lights and power points', isClean: null, isUndamaged: null, isWorking: null, comment: null };
+  const observed = (
+    observations: NonNullable<PublicInspectionReport['rooms'][number]['observations']>,
+    actions: NonNullable<PublicInspectionReport['rooms'][number]['actions']> = [],
+  ) =>
+    buildReportView(report({ rooms: [{ ...ROOM, checklist: [FLOOR, WALLS, LIGHTS], actions, observations }] }));
+
+  it('prints it beside the item it is about, before what the item needs', () => {
+    const view = observed(
+      [
+        { text: 'Carpet is in good shape', itemId: 'item-floor' },
+        { text: 'Fan looks good', itemId: 'item-lights' },
+      ],
+      [{ heading: 'Cleaning', items: [{ text: 'Vacuum the stairs landing', details: [], itemId: 'item-floor' }] }],
+    );
+
+    expect(view.rooms[0].checklist.map((row) => [row.label, row.observations, row.actions])).toEqual([
+      ['Floor and coverings', ['Carpet is in good shape'], ['Vacuum the stairs landing']],
+      ['Walls and ceilings', [], []],
+      // Unscored, and the cells stay blank: the words are the inspector's, not a verdict.
+      ['Lights and power points', ['Fan looks good'], []],
+    ]);
+    expect(view.rooms[0].checklist[2]).toMatchObject({ clean: '', undamaged: '', working: '' });
+    expect(view.disclaimer).toContain('what the inspector said is in good order, and what needs doing');
+  });
+
+  it('never prints it beside a row scored N, where it would read as taking the N back', () => {
+    const view = observed(
+      [{ text: 'Walls are good', itemId: 'item-walls' }],
+      [{ heading: 'Painting', items: [{ text: 'Apply touch-up paint to the ceiling stain', details: [], itemId: 'item-walls' }] }],
+    );
+
+    // The defect is printed as before; the N and what it needs are untouched.
+    expect(view.rooms[0].checklist[1]).toMatchObject({
+      undamaged: 'N',
+      observations: [],
+      actions: ['Apply touch-up paint to the ceiling stain'],
+    });
+  });
+
+  it('puts what is about none of the items on the Other row, with what that row needs', () => {
+    const view = observed(
+      [
+        { text: 'Fireplace is good', itemId: null },
+        { text: 'Closet looks good', itemId: 'item-archived' },
+      ],
+      [{ heading: 'Repairs / Maintenance', items: [{ text: 'Repaint the desk fully', details: [], itemId: null }] }],
+    );
+
+    expect(view.rooms[0].checklist.at(-1)).toMatchObject({
+      label: 'Other',
+      clean: '',
+      undamaged: '',
+      working: '',
+      observations: ['Fireplace is good', 'Closet looks good'],
+      actions: ['Repaint the desk fully'],
+    });
+    expect(view.rooms[0].checklist).toHaveLength(4);
+  });
+
+  it('adds an Other row for what is in good order alone', () => {
+    const view = observed([{ text: 'Everything appears in good condition', itemId: null }]);
+
+    expect(view.rooms[0].checklist.at(-1)).toMatchObject({
+      label: 'Other',
+      observations: ['Everything appears in good condition'],
+      actions: [],
+    });
+  });
+
+  it('prints as before for a report that has none: every other inspection, or an older summary', () => {
+    const view = buildReportView(report({ rooms: [{ ...ROOM, checklist: [FLOOR, WALLS], actions: [] }] }));
+
+    expect(view.rooms[0].checklist.map((row) => row.observations)).toEqual([[], []]);
+    expect(view.rooms[0].checklist).toHaveLength(2);
+    expect(view.disclaimer).not.toContain('in good order');
+  });
+});
+
 describe('explaining a failed checklist row', () => {
   type Note = { category: string; title: string };
 

@@ -751,6 +751,40 @@ describe('what each room needs, in the Comments column', () => {
   }, 60_000);
 });
 
+describe('what a move-in room has in good order, in the Comments column', () => {
+  it('prints it beside its item, before what the item needs, the rest on the Other row', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        inspection: { ...REPORT.inspection, type: 'MOVE_IN' },
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            observations: [
+              { text: 'Smoke detector is installed', itemId: 'item-2' },
+              // Doors and locks is scored N: never "good" beside it.
+              { text: 'Door looks good', itemId: 'item-1' },
+              { text: 'Pantry shelves look good', itemId: null },
+            ],
+            actions: [{ heading: 'Cleaning', items: [{ text: 'Dust the smoke alarm cover', details: [], itemId: 'item-2' }] }],
+          },
+        ],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat().join(' ');
+    const at = (needle: string) => text.indexOf(needle);
+    expect(at('Smoke detector is installed')).toBeGreaterThan(at('SMOKE ALARMS'));
+    expect(at('Dust the smoke alarm cover')).toBeGreaterThan(at('Smoke detector is installed'));
+    expect(text).not.toContain('Door looks good');
+    expect(at('Pantry shelves look good')).toBeGreaterThan(at('OTHER'));
+    expect(text).toContain('what the inspector said is in good order');
+  }, 60_000);
+});
+
 describe("an occupied room's answers", () => {
   it('prints them under a Condition heading instead of three empty verdict columns', async () => {
     mockPhotoFetch();

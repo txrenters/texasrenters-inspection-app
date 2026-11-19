@@ -223,11 +223,16 @@ function Room({ room }: { room: ReportRoomView }) {
                       <AxisCell value={row.working} />
                     </>
                   )}
-                  {/* The reviewer's comment, then what the room needs that is
-                      about this item, from the summary of its recordings, one
-                      line each -- in the sentence case it was written in. */}
+                  {/* The reviewer's comment, then -- on a move-in -- what the
+                      inspector said is in good order, then what the room needs
+                      that is about this item, from the summary of its
+                      recordings, one line each -- in the sentence case it was
+                      written in. */}
                   <TableCell className="py-2 align-middle leading-snug whitespace-normal normal-case">
                     {row.comment ? <p className="text-muted-foreground">{row.comment}</p> : null}
+                    {row.observations.map((observation) => (
+                      <p key={`observed-${observation}`}>{observation}</p>
+                    ))}
                     {row.actions.map((action) => (
                       <p key={action}>{action}</p>
                     ))}

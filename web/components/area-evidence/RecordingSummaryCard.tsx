@@ -17,10 +17,14 @@ import {
 } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
+/** What a move-in summary says is in good order: the report prints it beside each item. */
+export const OBSERVATIONS_HEADING = 'In good order';
+
 /**
- * A summary's points at their moments, then what the room needs under the
- * office's headings. Shared by the Recording tab's card and the "Summaries of
- * all areas" page, so the two cannot show a summary differently.
+ * A summary's points at their moments, then -- on a move-in -- what is in good
+ * order, then what the room needs under the office's headings. Shared by the
+ * Recording tab's card and the "Summaries of all areas" page, so the two cannot
+ * show a summary differently.
  */
 export function RecordingSummaryBody({
   onSeek,
@@ -56,6 +60,22 @@ export function RecordingSummaryBody({
           ))}
         </p>
       ))}
+      {/* A move-in's: what the report prints as in good order, beside its item. */}
+      {summary.observations?.length ? (
+        <div className="space-y-1">
+          <p className="font-semibold">{OBSERVATIONS_HEADING}</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {summary.observations.map((observation, index) => (
+              <li key={index}>
+                {observation.text}
+                {observation.itemLabel ? (
+                  <span className="text-muted-foreground"> · {observation.itemLabel}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {summary.actions.map((group) => (
         <div className="space-y-1" key={group.group}>
           <p className="font-semibold">{RECORDING_ACTION_HEADING[group.group]}</p>

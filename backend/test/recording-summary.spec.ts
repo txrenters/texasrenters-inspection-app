@@ -204,6 +204,101 @@ describe('checking the model’s summary against what was said', () => {
   });
 });
 
+/**
+ * A move-in report says what is in good order as well as what needs doing
+ * (the office, 2026-11-19: the report was "all damages" for a move-in-ready
+ * house). Nothing may be called good that the inspector did not say was.
+ */
+describe('what the inspector said is in good order, on a move-in', () => {
+  const LIVING: SummaryRecording = {
+    mediaId: 'media-3',
+    primary: true,
+    label: null,
+    lines: [
+      { start: 0, text: 'Walls look good.' },
+      { start: 23, text: 'Ceiling looks good, fan looks good.' },
+      { start: 43, text: 'The carpet is not in good shape, there is a stain.' },
+      { start: 61, text: 'Flooring is clean.' },
+      { start: 70, text: 'All appear to be functioning and looking good as intended.' },
+    ],
+  };
+  const ROOM_ITEMS = [
+    { id: 'item-walls', label: 'Walls and ceilings' },
+    { id: 'item-floor', label: 'Floor and coverings' },
+    { id: 'item-lights', label: 'Lights and power points' },
+  ];
+  const observe = (observations: unknown[]) =>
+    acceptedSummary(JSON.stringify({ recordings: [], actions: {}, observations }), [LIVING], ROOM_ITEMS, {
+      observations: true,
+    }).observations;
+
+  it('keeps each in the inspector’s words, beside the item it is about', () => {
+    expect(
+      observe([
+        { text: 'Walls look good.', item: 'c1', quote: 'Walls look good' },
+        { text: 'Flooring is clean', item: 'c2', quote: 'flooring is clean' },
+        // About the room as a whole: on no item.
+        { text: 'All appear to be functioning and looking good', item: null, quote: 'all appear to be functioning and looking good as intended' },
+        // An item the room does not have: kept, on no item.
+        { text: 'Fan looks good', item: 'c9', quote: 'fan looks good' },
+        // Said twice: printed once.
+        { text: 'Walls look good', item: 'c1', quote: 'walls look good' },
+      ]),
+    ).toEqual([
+      { text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' },
+      { text: 'Flooring is clean', itemId: 'item-floor', itemLabel: 'Floor and coverings' },
+      { text: 'All appear to be functioning and looking good', itemId: null, itemLabel: null },
+      { text: 'Fan looks good', itemId: null, itemLabel: null },
+    ]);
+  });
+
+  it('prints the inspector’s own words where a line says more than they did', () => {
+    // "Ceiling" and "AC" were never said of the fan.
+    expect(observe([{ text: 'Ceiling fan and AC work well', item: 'c3', quote: 'fan looks good' }])).toEqual([
+      { text: 'Fan looks good', itemId: 'item-lights', itemLabel: 'Lights and power points' },
+    ]);
+  });
+
+  it('never calls good what the inspector did not say was, or said was not', () => {
+    expect(
+      observe([
+        // Never said.
+        { text: 'Windows are good', item: 'c1', quote: 'windows are good' },
+        // Cut from behind a "not": "the carpet is not | in good shape".
+        { text: 'Carpet in good shape', item: 'c2', quote: 'in good shape' },
+        // The quote's "not" left out of the line.
+        { text: 'The carpet is in good shape', item: 'c2', quote: 'the carpet is not in good shape' },
+        // One word is in every room's narration.
+        { text: 'Good', item: 'c1', quote: 'good' },
+        // Names nothing, so beside a row it would claim the row.
+        { text: 'Looks good', item: 'c2', quote: 'looks good' },
+        // Not what was asked for.
+        { text: 'Walls look good', item: 'c1' },
+        'Walls look good',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('is an empty list on a move-in where nothing was said to be in good order', () => {
+    expect(observe([])).toEqual([]);
+  });
+
+  it('is asked of a move-in only, and a move-out’s summary has none', () => {
+    const moveOut = acceptedSummary(
+      JSON.stringify({ recordings: [], actions: {}, observations: [{ text: 'Walls look good', item: 'c1', quote: 'walls look good' }] }),
+      [LIVING],
+      ROOM_ITEMS,
+    );
+    expect(moveOut).not.toHaveProperty('observations');
+
+    const moveIn = summaryPrompt('Living room', 'move-in inspection', [LIVING], ROOM_ITEMS, { observations: true });
+    expect(moveIn).toContain('Write three things.');
+    expect(moveIn).toContain('"quote"');
+    expect(moveIn).toContain('never a "not" left out');
+    expect(summaryPrompt('Living room', 'move-out inspection', [LIVING], ROOM_ITEMS)).not.toContain('"observations"');
+  });
+});
+
 describe('reading a stored summary back', () => {
   const stored = {
     version: 2,
@@ -230,16 +325,29 @@ describe('reading a stored summary back', () => {
     });
   });
 
+  it('stays current when written before a move-in said what is in good order, with none of it', () => {
+    const read = readStoredSummary(stored, ['media-1', 'media-2']);
+    expect(read).toMatchObject({ current: true, staleReason: null });
+    expect(read?.summary).not.toHaveProperty('observations');
+  });
+
+  it('reads what a move-in said is in good order back', () => {
+    const observations = [{ text: 'Walls look good', itemId: 'item-walls', itemLabel: 'Walls and ceilings' }];
+    expect(readStoredSummary({ ...stored, version: 3, observations }, ['media-1', 'media-2'])?.summary.observations).toEqual(
+      observations,
+    );
+  });
+
   it('is nothing at all when the column is empty or not understood', () => {
     expect(readStoredSummary(null, [])).toBeNull();
     expect(readStoredSummary({ version: 2 }, [])).toBeNull();
   });
 });
 
-function harness({ media = [BEDROOM] as SummaryRecording[] } = {}) {
+function harness({ media = [BEDROOM] as SummaryRecording[], inspectionType = 'MOVE_OUT' } = {}) {
   const prisma = {
     inspection: {
-      findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', inspectionType: 'MOVE_OUT', finalizedAt: null }),
+      findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', inspectionType, finalizedAt: null }),
     },
     inspectionArea: {
       findFirst: jest.fn().mockResolvedValue({ id: 'area-1' }),
@@ -275,6 +383,7 @@ function harness({ media = [BEDROOM] as SummaryRecording[] } = {}) {
               text: JSON.stringify({
                 recordings: [{ recording: 1, lines: [point(0, 'Entering main bedroom; the door is functional but keyed.')] }],
                 actions: { cleaning: [{ text: 'Clean windows inside and out.', item: 'c1', from: [123] }] },
+                observations: [{ text: 'Ceiling looks good', item: null, quote: 'ceiling looks good' }],
               }),
             },
           ],
@@ -300,8 +409,10 @@ describe('summarizing one room', () => {
     const view = await service.summarizeArea('org-1', 'inspection-1', 'area-1', 'user-1');
 
     const stored = prisma.inspectionArea.update.mock.calls[0][0].data.recordingSummary;
-    expect(stored.version).toBe(2);
+    expect(stored.version).toBe(3);
     expect(stored.mediaIds).toEqual(['media-1']);
+    // A move-out is not asked what is in good order, and stores none of it.
+    expect(stored).not.toHaveProperty('observations');
     expect(view?.current).toBe(true);
     expect(view?.actions).toEqual([
       {
@@ -316,6 +427,23 @@ describe('summarizing one room', () => {
         actorUserId: 'user-1',
         entityId: 'inspection-1',
         metadata: expect.objectContaining({ trigger: 'REVIEWER', afterFinalization: false }),
+      }),
+    });
+  });
+
+  it('on a move-in, stores what the inspector said is in good order, in the same one call', async () => {
+    const { service, prisma, fetchMock } = harness({ inspectionType: 'MOVE_IN' });
+
+    const view = await service.summarizeArea('org-1', 'inspection-1', 'area-1', 'user-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][1].body)).toContain('Write three things.');
+    const stored = prisma.inspectionArea.update.mock.calls[0][0].data.recordingSummary;
+    expect(stored.observations).toEqual([{ text: 'Ceiling looks good', itemId: null, itemLabel: null }]);
+    expect(view?.observations).toEqual(stored.observations);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({ areas: [expect.objectContaining({ observations: 1 })] }),
       }),
     });
   });

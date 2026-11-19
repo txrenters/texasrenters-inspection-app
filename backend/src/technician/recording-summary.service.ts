@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   AreaChecklistItemKind,
   ChecklistResponseType,
+  InspectionType,
   Prisma,
   TranscriptionStatus,
   VideoRecordingType,
@@ -54,6 +55,8 @@ interface AreaSummaryOutcome {
   areaName: string;
   points: number;
   actions: number;
+  /** What it says is in good order: a move-in's only. */
+  observations: number;
 }
 
 @Injectable()
@@ -369,8 +372,11 @@ export class RecordingSummaryService {
       }))
       .filter((recording) => recording.lines.length > 0);
     if (!recordings.length)
-      return { outcome: { inspectionAreaId, areaName, points: 0, actions: 0 }, view: null };
+      return { outcome: { inspectionAreaId, areaName, points: 0, actions: 0, observations: 0 }, view: null };
 
+    // A move-in's report says what is in good order too (2026-11-19). The
+    // same call: no other inspection is asked, or charged, for it.
+    const options = { observations: inspection.inspectionType === InspectionType.MOVE_IN };
     const { text, usage } = await askAi(
       configuration,
       summaryPrompt(
@@ -378,6 +384,7 @@ export class RecordingSummaryService {
         `${inspection.inspectionType.toLowerCase().replace(/_/g, '-')} inspection`,
         recordings,
         area.propertyArea.checklistItems,
+        options,
       ),
       {
         maxTokens: 6_000,
@@ -390,7 +397,7 @@ export class RecordingSummaryService {
     await this.aiSettings
       .recordUsage(organizationId, configuration, USAGE_OPERATION, usage, inspectionAreaId)
       .catch(() => undefined);
-    const summary = acceptedSummary(text, recordings, area.propertyArea.checklistItems);
+    const summary = acceptedSummary(text, recordings, area.propertyArea.checklistItems, options);
     const stored: StoredRecordingSummary = {
       version: STORED_SUMMARY_VERSION,
       mediaIds: recordings.map((recording) => recording.mediaId),
@@ -407,6 +414,7 @@ export class RecordingSummaryService {
         areaName,
         points: summary.recordings.reduce((total, recording) => total + recording.lines.length, 0),
         actions: summary.actions.reduce((total, group) => total + group.items.length, 0),
+        observations: summary.observations?.length ?? 0,
       },
       view: {
         ...(readStoredSummary(stored, stored.mediaIds)?.summary ?? summary),
