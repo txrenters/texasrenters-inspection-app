@@ -190,6 +190,9 @@ vi.mock('@/lib/reschedule-queries', () => ({
   },
 }));
 // The comparison panel has its own tests; here it only has to be present.
+// The New job panel is the shell's; here only whether it is asked to open, and with what.
+const openNewJob = vi.hoisted(() => vi.fn());
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => openNewJob }));
 vi.mock('@/components/jobber-day-panel', () => ({ JobberDayPanel: () => <section>Today against Jobber</section> }));
 
 const mount = (shell: 'classic' | 'jobber') =>
@@ -227,9 +230,11 @@ describe('the classic dashboard', () => {
     expect(calls.reschedules).toHaveLength(0);
   });
 
-  it('has one filled button, to create an inspection', () => {
+  it('has one filled button, which opens the New job panel', () => {
     mount('classic');
-    expect(screen.getByRole('link', { name: 'Create inspection' }).getAttribute('href')).toBe('/inspections/new');
+    openNewJob.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'New job' }));
+    expect(openNewJob).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('link', { name: "Today's inspections" }).getAttribute('href')).toBe('/inspections');
   });
 

@@ -2,7 +2,6 @@
 
 import { isDemoProperty, leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
 import { Building2Icon, Trash2Icon } from 'lucide-react';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 
@@ -20,6 +19,7 @@ import { PropertyGeofenceCard } from '@/components/property-geofence-card';
 import { BillingCard } from '@/components/invoices/billing-card';
 import { InvoicesCard } from '@/components/invoices/invoice-parts';
 import { PropertyServiceCard } from '@/components/property-service-card';
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { PropertyCreateMenu, PropertyRecordAside, PropertyWork } from '@/components/record/property-record';
 import { FactTable, RecordLayout } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -156,6 +156,7 @@ const LEASE_COLUMNS: Array<Column<LeaseRow>> = [
 
 export default function PropertyDetailPage() {
   const permissions = usePermissions();
+  const openNewJob = useNewJob();
   const id = useParams<{ propertyId: string }>().propertyId;
   const property = useProperty(id);
   const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
@@ -233,8 +234,8 @@ export default function PropertyDetailPage() {
               jobber ? (
                 <PropertyCreateMenu propertyId={item.id} />
               ) : (
-                <Button asChild>
-                  <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
+                <Button onClick={() => openNewJob({ propertyId: item.id, from: 'from the property' })} type="button">
+                  New job
                 </Button>
               )
             ) : null}

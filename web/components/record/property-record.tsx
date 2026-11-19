@@ -1,9 +1,10 @@
 'use client';
 
-import type { AdminInspection } from '@texasrenters/shared';
+import { isJobInspectionType, type AdminInspection } from '@texasrenters/shared';
 import { ChevronDownIcon, PlusIcon } from 'lucide-react';
 import Link from 'next/link';
 
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -31,9 +32,15 @@ import { AsideCard } from './record-kit';
  * this place, the work it has had, and an overview at the side.
  */
 
-/** Jobber's "+ Create" on a client, for this property: one item per inspection type. */
+/**
+ * Jobber's "+ Create" on a client, for this property: a job here, blank or with
+ * one inspection ticked, in the New job panel (2026-11-20). The kinds a job
+ * cannot hold yet keep the create form, under "Another type".
+ */
 export function PropertyCreateMenu({ propertyId }: { propertyId: string }) {
   const base = `/inspections/new?propertyId=${encodeURIComponent(propertyId)}`;
+  const openNewJob = useNewJob();
+  const from = 'from the property';
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -44,13 +51,24 @@ export function PropertyCreateMenu({ propertyId }: { propertyId: string }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="text-muted-foreground text-xs font-medium">Inspection here</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-muted-foreground text-xs font-medium">Job here</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => openNewJob({ propertyId, from })}>
+          <span aria-hidden className="bg-primary size-2 rounded-full" />
+          New job
+        </DropdownMenuItem>
         {JOBBER_CREATE_TYPES.map((entry) => (
-          <DropdownMenuItem asChild key={entry.type}>
-            <Link href={`${base}&type=${encodeURIComponent(entry.type)}`}>
-              <span aria-hidden className={cn('size-2 rounded-full', typeTone(entry.type).fill)} />
-              {entry.title}
-            </Link>
+          <DropdownMenuItem
+            key={entry.type}
+            onSelect={() =>
+              openNewJob({
+                propertyId,
+                from,
+                inspectionTypes: isJobInspectionType(entry.type) ? [entry.type] : [],
+              })
+            }
+          >
+            <span aria-hidden className={cn('size-2 rounded-full', typeTone(entry.type).fill)} />
+            {entry.title}
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />

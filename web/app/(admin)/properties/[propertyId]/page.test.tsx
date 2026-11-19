@@ -17,6 +17,9 @@ vi.mock('@/lib/auth', () => ({
   usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }),
 }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ propertyId: 'building-1' }) }));
+// The New job panel is the shell's; here only whether it is asked to open, and with what.
+const openNewJob = vi.hoisted(() => vi.fn());
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => openNewJob }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [{ tab: 'details' }, vi.fn()] }));
 // The tabs' contents have their own tests; here they only have to be there.
 vi.mock('@/components/floor-plan-manager', () => ({ FloorPlanManager: () => null }));
@@ -72,16 +75,16 @@ describe('active or not', () => {
     mount();
 
     expect(screen.queryByText('Inactive')).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Create inspection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New job' })).toBeNull();
   });
 
-  it('offers Create inspection on an active property to somebody who can book', () => {
+  it('offers a new job here on an active property to somebody who can book', () => {
     permissions.granted = new Set(['inspections:manage']);
     mount();
 
-    expect(screen.getByRole('link', { name: 'Create inspection' }).getAttribute('href')).toBe(
-      '/inspections/new?propertyId=building-1',
-    );
+    openNewJob.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'New job' }));
+    expect(openNewJob).toHaveBeenCalledWith({ propertyId: 'building-1', from: 'from the property' });
     expect(screen.queryByText('Inactive')).toBeNull();
   });
 
@@ -90,7 +93,7 @@ describe('active or not', () => {
     mount(property({ isActive: false }));
 
     expect(screen.getByText('Inactive')).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Create inspection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New job' })).toBeNull();
   });
 });
 
@@ -146,14 +149,19 @@ describe('in the Jobber-style shell', () => {
     expect(screen.getByRole('heading', { level: 1, name: '100 Example Way' })).toBeTruthy();
   });
 
-  it('offers "+ Create" by inspection type, each opening the form for this property', () => {
+  it('offers "+ Create" by inspection type, each opening the New job panel for this property', () => {
     permissions.granted = new Set(['inspections:manage']);
     mount(property(), 'jobber');
     fireEvent.pointerDown(screen.getByRole('button', { name: /Create/ }), { button: 0, pointerId: 1, pointerType: 'mouse' });
 
-    expect(screen.getByRole('menuitem', { name: /Move-out/ }).getAttribute('href')).toBe(
-      '/inspections/new?propertyId=building-1&type=MOVE_OUT',
-    );
+    openNewJob.mockClear();
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move-out/ }));
+    expect(openNewJob).toHaveBeenCalledWith({
+      propertyId: 'building-1',
+      from: 'from the property',
+      inspectionTypes: ['MOVE_OUT'],
+    });
+    fireEvent.pointerDown(screen.getByRole('button', { name: /Create/ }), { button: 0, pointerId: 1, pointerType: 'mouse' });
     expect(screen.getByRole('menuitem', { name: 'Another type…' }).getAttribute('href')).toBe(
       '/inspections/new?propertyId=building-1',
     );

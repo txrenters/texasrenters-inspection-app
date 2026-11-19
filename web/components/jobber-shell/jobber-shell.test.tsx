@@ -30,6 +30,9 @@ vi.mock('next/navigation', () => ({
   usePathname: () => location.pathname,
   useSearchParams: () => new URLSearchParams(),
 }));
+// The New job panel is the shell's; here only whether it is asked to open, and with what.
+const openNewJob = vi.hoisted(() => vi.fn());
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => openNewJob }));
 vi.mock('@/lib/queries', () => ({ useUnassignedCount: () => ({ data: 4 }) }));
 // The top bar's search, bell and clocks need the whole app around them; the
 // frame test is about the frame.
@@ -61,7 +64,8 @@ beforeEach(() => {
 });
 
 describe('the Create menu', () => {
-  it('offers each inspection type, opening the ordinary create form', () => {
+  it('offers a job, blank or with one inspection ticked, opening the New job panel (2026-11-20)', () => {
+    openNewJob.mockClear();
     render(
       <SidebarProvider>
         <CreateMenu />
@@ -69,15 +73,31 @@ describe('the Create menu', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
-    const menu = screen.getByRole('dialog', { name: 'Create an inspection' });
-    const links = within(menu).getAllByRole('link');
-    expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['Move-in', '/inspections/new?type=MOVE_IN'],
-      ['Occupied', '/inspections/new?type=OCCUPIED'],
-      ['Back-to-market', '/inspections/new?type=BACK_TO_MARKET'],
-      ['Move-out', '/inspections/new?type=MOVE_OUT'],
-      ['HVAC', '/inspections/new?type=HVAC'],
+    const menu = screen.getByRole('dialog', { name: 'Create a job' });
+    expect(within(menu).getAllByRole('button').map((tile) => tile.textContent)).toEqual([
+      'Job',
+      'Move-in',
+      'Occupied',
+      'Back-to-market',
+      'Move-out',
+      'HVAC',
     ]);
+    fireEvent.click(within(menu).getByRole('button', { name: 'Occupied' }));
+    expect(openNewJob).toHaveBeenCalledWith({ inspectionTypes: ['OCCUPIED'] });
+    // The menu closes behind it.
+    expect(screen.queryByRole('dialog', { name: 'Create a job' })).toBeNull();
+  });
+
+  it('opens a blank job from its first tile', () => {
+    openNewJob.mockClear();
+    render(
+      <SidebarProvider>
+        <CreateMenu />
+      </SidebarProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Job' }));
+    expect(openNewJob).toHaveBeenCalledWith({ inspectionTypes: [] });
   });
 
   it('is not offered to an account that may not create inspections', () => {
