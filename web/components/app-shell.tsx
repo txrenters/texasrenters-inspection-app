@@ -7,6 +7,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { ConsoleShellProvider } from '@/components/console-shell-context';
 import { ImportDockProvider } from '@/components/import-dock';
 import { JobberShell } from '@/components/jobber-shell/jobber-shell';
+import { NewJobProvider } from '@/components/jobs/new-job-context';
 import { PageSearchProvider } from '@/components/page-search';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { AdminGuard } from '@/lib/auth';
@@ -62,11 +63,15 @@ export function AppShell({
         <ImportDockProvider>
           {/* A list page lends the header its search; see `page-search`. */}
           <PageSearchProvider>
-            {shell === 'jobber' ? (
-              <JobberShell defaultSidebarOpen={defaultSidebarOpen}>{children}</JobberShell>
-            ) : (
-              <ClassicShell defaultSidebarOpen={defaultSidebarOpen}>{children}</ClassicShell>
-            )}
+            {/* The New job panel, opened from any page: the Create menu, the
+                lists, a property, the Schedule (2026-11-20). */}
+            <NewJobProvider>
+              {shell === 'jobber' ? (
+                <JobberShell defaultSidebarOpen={defaultSidebarOpen}>{children}</JobberShell>
+              ) : (
+                <ClassicShell defaultSidebarOpen={defaultSidebarOpen}>{children}</ClassicShell>
+              )}
+            </NewJobProvider>
           </PageSearchProvider>
         </ImportDockProvider>
       </ConsoleShellProvider>

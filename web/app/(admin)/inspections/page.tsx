@@ -1,6 +1,6 @@
 'use client';
 
-import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
+import { isJobInspectionType, isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
 import type { JobberDayRow, JobberDayState } from '@texasrenters/shared';
 import { ClipboardCheckIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -31,6 +31,7 @@ import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format'
 import { openWorkWords } from '@/lib/job-page';
 import { quarterOf, recentQuarters } from '@/lib/planning';
 import { useInspections, useJobberDay, useTechnicians } from '@/lib/queries';
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
@@ -317,6 +318,26 @@ function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Col
   return columns.filter((column): column is Column<InspectionRow> => column !== null);
 }
 
+/**
+ * The list's Create: the New job panel with this section's inspection ticked
+ * (2026-11-20), or a blank job on the whole list. The kinds a job cannot hold
+ * yet -- a filter delivery, a work order -- keep the create form.
+ */
+function CreateButton({ href, label, type }: { href: string; label: string; type: string }) {
+  const openNewJob = useNewJob();
+  if (type && !isJobInspectionType(type))
+    return (
+      <Button asChild>
+        <Link href={href}>{label}</Link>
+      </Button>
+    );
+  return (
+    <Button onClick={() => openNewJob({ inspectionTypes: isJobInspectionType(type) ? [type] : [] })} type="button">
+      {type ? label : 'New job'}
+    </Button>
+  );
+}
+
 export default function InspectionsPage() {
   const permissions = usePermissions();
   const canManage = permissions.has('inspections:manage');
@@ -514,9 +535,7 @@ export default function InspectionsPage() {
       <PageHeader
         actions={
           canManage ? (
-            <Button asChild>
-              <Link href={createHref}>{createLabel}</Link>
-            </Button>
+            <CreateButton href={createHref} label={createLabel} type={state.type} />
           ) : undefined
         }
         description={section?.description ?? 'Schedule, assign, and monitor the complete property inspection lifecycle.'}
@@ -641,9 +660,7 @@ export default function InspectionsPage() {
               Show every date
             </Button>
           ) : canManage ? (
-            <Button asChild>
-              <Link href={createHref}>{createLabel}</Link>
-            </Button>
+            <CreateButton href={createHref} label={createLabel} type={state.type} />
           ) : null}
         </EmptyState>
       ) : (

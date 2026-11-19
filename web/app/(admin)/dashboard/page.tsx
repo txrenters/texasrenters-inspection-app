@@ -13,6 +13,7 @@ import { TechnicianLoad } from '@/components/dashboard/technician-load';
 import { useConsoleShell } from '@/components/console-shell-context';
 import { JobberHome } from '@/components/home/jobber-home';
 import { JobberDayPanel } from '@/components/jobber-day-panel';
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { Panel, PanelRow } from '@/components/panel';
 import { StatStrip, StatStripItem } from '@/components/stat-card';
 import { ErrorState } from '@/components/states';
@@ -35,6 +36,7 @@ const PROVIDER_NEEDS_A_PERSON = new Set(['NOT_CONFIGURED', 'DEGRADED', 'UNAVAILA
  * One filled button, the thing most often started from here.
  */
 function Header() {
+  const openNewJob = useNewJob();
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
@@ -45,11 +47,9 @@ function Header() {
         <Button asChild variant="outline">
           <Link href="/inspections">Today&apos;s inspections</Link>
         </Button>
-        <Button asChild>
-          <Link href="/inspections/new">
-            <PlusIcon aria-hidden />
-            Create inspection
-          </Link>
+        <Button onClick={() => openNewJob()} type="button">
+          <PlusIcon aria-hidden />
+          New job
         </Button>
       </div>
     </div>

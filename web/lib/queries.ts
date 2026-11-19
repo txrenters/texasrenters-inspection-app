@@ -84,6 +84,9 @@ import type {
   PropertywareSyncRun,
   ProviderReadiness,
   JobberBookingContext,
+  AdminJob,
+  CreateJobInput,
+  JobNextNumber,
   JobberConnection,
   JobberDayComparison,
   JobberAssignee,
@@ -148,6 +151,8 @@ export const keys = {
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
   jobberBookingContext: (query: object) => ['admin', 'jobber-booking-context', query] as const,
+  jobNextNumber: ['admin', 'jobs', 'next-number'] as const,
+  job: (id: string) => ['admin', 'jobs', id] as const,
   inspectionsRoot: ['admin', 'inspections'] as const,
   inspections: (query: object) => ['admin', 'inspections', query] as const,
   inspection: (id: string) => ['admin', 'inspection', id] as const,
@@ -363,6 +368,40 @@ export const useJobberBookingContext = (
     enabled: enabled && Boolean(query.propertyId),
     placeholderData: keepPreviousData,
   });
+/**
+ * The number a new job would be given, shown in the New job panel as it opens.
+ * Not held: a job saved meanwhile takes it, and the server gives the next one.
+ * Asked again each time the panel opens, never polled.
+ */
+export const useNextJobNumber = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.jobNextNumber,
+    queryFn: ({ signal }) => api<JobNextNumber>('/api/v1/admin/jobs/next-number', { signal }),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+  });
+/**
+ * Makes a job and every inspection ticked in it (POST /admin/jobs). Every list
+ * a new inspection can appear in is read again: the inspections, the
+ * assignments, the dashboard and the Schedule's days.
+ */
+export function useCreateJob() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateJobInput) =>
+      api<AdminJob>('/api/v1/admin/jobs', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: (job) => {
+      client.setQueryData(keys.job(job.id), job);
+      void verifyAffectedQueries(client, [
+        keys.inspectionsRoot,
+        keys.assignmentsRoot,
+        keys.dashboard,
+        ['admin', 'jobber', 'day'],
+      ]);
+    },
+  });
+}
 export const useInspections = (
   query: Record<string, string | number | boolean | undefined>,
   /** Off for an account that may not read inspections, so nothing is asked that will be refused. */
