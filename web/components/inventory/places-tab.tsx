@@ -1,6 +1,6 @@
 'use client';
 
-import { STOCK_PLACE_KIND_LABEL, type SaveStockPlaceInput, type StockPlaceKind, type StockPlaceRow } from '@texasrenters/shared';
+import { normalizePurchasingCode, purchasingCodeProblem, suggestedPlaceCode, STOCK_PLACE_KIND_LABEL, type SaveStockPlaceInput, type StockPlaceKind, type StockPlaceRow } from '@texasrenters/shared';
 import { WarehouseIcon } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
@@ -34,6 +34,7 @@ const NONE = 'none';
 
 const COLUMNS: Array<Column<StockPlaceRow>> = [
   { key: 'name', header: 'Place', primary: true, cell: (row) => <span className="font-medium">{row.name}</span> },
+  { key: 'code', header: 'Location code', className: 'whitespace-nowrap', cell: (row) => <span className="font-mono font-semibold">{row.code}</span> },
   { key: 'kind', header: 'Kind', cell: (row) => STOCK_PLACE_KIND_LABEL[row.kind] },
   {
     key: 'technician',
@@ -115,20 +116,26 @@ export function PlacesTab({ enabled, canManage }: { enabled: boolean; canManage:
 function NewPlace({ technicians }: { technicians: readonly { id: string; name: string }[] }) {
   const { createPlace } = useInventoryEdits();
   const [name, setName] = useState('');
+  /** Typed over the suggestion; empty, the console makes one from the name. */
+  const [code, setCode] = useState('');
   const [kind, setKind] = useState<StockPlaceKind>('VAN');
   const [technician, setTechnician] = useState(NONE);
   const [added, setAdded] = useState<string | null>(null);
 
   const clear = () => {
     setName('');
+    setCode('');
     setTechnician(NONE);
   };
+
+  const suggestion = name.trim() ? suggestedPlaceCode(name) : '';
+  const codeProblem = code.trim() ? purchasingCodeProblem(code) : null;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || createPlace.isPending) return;
-    const input: SaveStockPlaceInput = { name: trimmed, kind, ...(kind === 'VAN' && technician !== NONE ? { technicianId: technician } : {}) };
+    if (!trimmed || codeProblem || createPlace.isPending) return;
+    const input: SaveStockPlaceInput = { name: trimmed, kind, ...(code.trim() ? { code: normalizePurchasingCode(code) } : {}), ...(kind === 'VAN' && technician !== NONE ? { technicianId: technician } : {}) };
     try {
       await createPlace.mutateAsync(input);
       setAdded(trimmed);
@@ -155,6 +162,23 @@ function NewPlace({ technicians }: { technicians: readonly { id: string; name: s
           value={name}
         />
         <FieldDescription>What people call it: Storeroom, Truck 1.</FieldDescription>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="new-place-code">Location code</FieldLabel>
+        <Input
+          autoCapitalize="characters"
+          autoComplete="off"
+          className="font-mono"
+          id="new-place-code"
+          maxLength={20}
+          onChange={(event) => {
+            setCode(event.target.value.toUpperCase());
+            setAdded(null);
+          }}
+          placeholder={suggestion || 'STORE'}
+          value={code}
+        />
+        <FieldDescription>{codeProblem ?? (suggestion ? `Left empty, it is ${suggestion}. A requisition and an order name the place by it.` : 'A requisition and an order name the place by it: STORE, TRK-01.')}</FieldDescription>
       </Field>
       <Field>
         <FieldLabel htmlFor="new-place-kind">Kind</FieldLabel>
@@ -196,7 +220,7 @@ function NewPlace({ technicians }: { technicians: readonly { id: string; name: s
         </Alert>
       ) : null}
       <div className="flex flex-wrap items-center gap-3">
-        <Button disabled={!name.trim() || createPlace.isPending} type="submit">
+        <Button disabled={!name.trim() || Boolean(codeProblem) || createPlace.isPending} type="submit">
           {createPlace.isPending ? <Spinner /> : null}
           Add place
         </Button>

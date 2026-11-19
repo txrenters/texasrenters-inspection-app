@@ -418,6 +418,8 @@ model Organization {
   stockCategories StockCategory[]
   documentSeries DocumentSeries[]
   purchasingSettings PurchasingSettings?
+  purchasingCodes      PurchasingCode[]
+  purchasingCodeXeroOptions PurchasingCodeXeroOption[]
   purchaseRequisitions PurchaseRequisition[]
   purchaseOrders PurchaseOrder[]
   goodsReceipts GoodsReceipt[]
@@ -5020,6 +5022,8 @@ model XeroOrganisation {
   /// Xero's id for this app's link to the organisation, which a disconnect removes.
   xeroConnectionId String?
   name             String
+  /// The company's purchaser code on a requisition ("THMP"); optional, unique in the office.
+  purchaserCode    String?
   /// CONNECTED or REMOVED (checked).
   status           String    @default("CONNECTED")
   organisation     Json?
@@ -5067,8 +5071,10 @@ model XeroOrganisation {
   projects      XeroProject[]
   /// Its choices for vendor bills (2026-11-19).
   billSettings  XeroBillSettings?
+  purchasingCodeOptions PurchasingCodeXeroOption[]
 
   @@unique([organizationId, xeroTenantId])
+  @@unique([organizationId, purchaserCode])
 }
 
 /// The office's sign-in to Xero (2026-11-10): one per office, whichever
@@ -5690,6 +5696,8 @@ model StockItem {
   unit            String   @default("each")
   /// Its category, whose prefix starts its code. Null only for an item added before categories gave the codes.
   categoryId      String?  @db.Uuid
+  /// What it is on a line: an Item that keeps stock, a Service that does not. Null only before 2026-11-20 rows were typed.
+  lineTypeId     String?   @db.Uuid
   /// The company's books it belongs to, as an invoice product has one. Null until the office chooses.
   xeroTenantId    String?
   /// At or below this it shows as Low. 0: never low, only out.
@@ -5707,6 +5715,7 @@ model StockItem {
   xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
   usualVendor      Vendor?           @relation(fields: [organizationId, usualVendorId], references: [organizationId, id], onDelete: NoAction)
   category         StockCategory?    @relation(fields: [organizationId, categoryId], references: [organizationId, id], onDelete: Restrict)
+  lineType       PurchasingCode? @relation("StockItemLineType", fields: [organizationId, lineTypeId], references: [organizationId, id], onDelete: Restrict)
   movements        StockMovement[]
   levels           StockLevel[]
   requisitionLines PurchaseRequisitionLine[]
@@ -5727,6 +5736,8 @@ model StockPlace {
   organizationId String         @db.Uuid
   name           String
   nameKey        String
+  /// The location code a requisition and an order name it by ("STORE", "TRK-01"). Capitals, unique in the office.
+  code           String
   kind           StockPlaceKind @default(STOCKROOM)
   /// A van's technician; null for a stockroom.
   technicianId   String?        @db.Uuid
@@ -5748,6 +5759,7 @@ model StockPlace {
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
+  @@unique([organizationId, code])
 }
 
 /// Who the office buys from. Purchase orders name one from phase 3.
@@ -5756,6 +5768,8 @@ model Vendor {
   organizationId String   @db.Uuid
   name           String
   nameKey        String
+  /// The vendor number the console gives ("V-00003"), in the order vendors were added. Never typed.
+  number         String
   contactName    String?
   email          String?
   phone          String?
@@ -5773,6 +5787,7 @@ model Vendor {
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
+  @@unique([organizationId, number])
 }
 
 /// The stock ledger: one row per movement, written once. The database refuses
@@ -6415,4 +6430,53 @@ model VendorBillXero {
   @@unique([organizationId, billId])
   @@unique([organizationId, xeroTenantId, xeroInvoiceId], map: "VendorBillXero_xeroInvoiceId_key")
   @@index([organizationId])
+}
+
+/// What a purchasing code list holds (2026-11-20).
+enum PurchasingCodeKind {
+  /// What a line is: an Item that keeps stock, a Service that does not.
+  LINE_TYPE
+  /// The kind of request: RESTOCK, JOB, URGENT.
+  REQUEST
+  /// A requisition line's department.
+  DEPARTMENT
+  /// A requisition's cost center.
+  COST_CENTER
+}
+
+/// A short code the office makes, for a NAV-style requisition to pick from (2026-11-20).
+/// Kept in capitals; unique within its list. Switched off rather than removed.
+model PurchasingCode {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  kind           PurchasingCodeKind
+  code           String
+  name           String
+  /// Line types only: an item of this type is received into a place, counted and withdrawn.
+  keepsStock     Boolean            @default(true)
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now()) @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOptions    PurchasingCodeXeroOption[]
+  items          StockItem[]        @relation("StockItemLineType")
+
+  @@unique([organizationId, kind, code])
+  @@unique([organizationId, id])
+}
+
+/// A department or cost center code as the tracking option it is in one company's Xero (2026-11-20).
+model PurchasingCodeXeroOption {
+  organizationId     String           @db.Uuid
+  codeId             String           @db.Uuid
+  xeroTenantId       String
+  trackingCategoryId String
+  trackingOptionId   String
+  updatedAt          DateTime         @default(now()) @updatedAt
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code               PurchasingCode   @relation(fields: [organizationId, codeId], references: [organizationId, id], onDelete: Cascade)
+  company            XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: Cascade)
+
+  @@id([codeId, xeroTenantId])
+  @@index([organizationId, xeroTenantId])
 }

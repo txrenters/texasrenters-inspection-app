@@ -17,6 +17,9 @@ import {
   type StockPlaceKind,
   type StockPlaceRow,
   type VendorRow,
+  normalizePurchasingCode,
+  purchasingCodeProblem,
+  suggestedPlaceCode,
 } from '@texasrenters/shared';
 import { useState, type FormEvent, type ReactNode } from 'react';
 
@@ -491,6 +494,7 @@ export function PlaceDialog({
   error: Error | null;
 }) {
   const [name, setName] = useState(place?.name ?? '');
+  const [code, setCode] = useState(place?.code ?? '');
   const [kind, setKind] = useState<StockPlaceKind>(place?.kind ?? 'STOCKROOM');
   const [technician, setTechnician] = useState(place?.technicianId ?? NONE);
   const [active, setActive] = useState(place?.active ?? true);
@@ -498,6 +502,8 @@ export function PlaceDialog({
   const technicianId = kind === 'VAN' ? chosen(technician) : null;
   const input: SaveStockPlaceInput = {};
   if (name.trim() !== (place?.name ?? '')) input.name = name.trim();
+  const codeProblem = code.trim() ? purchasingCodeProblem(code) : place ? 'Give it a location code.' : null;
+  if (code.trim() && normalizePurchasingCode(code) !== (place?.code ?? '')) input.code = normalizePurchasingCode(code);
   // A place keeps its kind: it is chosen when the place is made, and only then.
   if (!place) input.kind = kind;
   if (technicianId !== (place?.technicianId ?? null)) input.technicianId = technicianId;
@@ -510,7 +516,7 @@ export function PlaceDialog({
   return (
     <FormDialog
       description="Where stock is kept. A truck is its own place, so what is in it can be counted. A place keeps its kind."
-      disabled={!name.trim() || !Object.keys(input).length}
+      disabled={!name.trim() || Boolean(codeProblem) || !Object.keys(input).length}
       error={error}
       onClose={onClose}
       onSubmit={() => onSave(input)}
@@ -521,6 +527,11 @@ export function PlaceDialog({
       <Field>
         <FieldLabel htmlFor="place-name">Name</FieldLabel>
         <Input autoComplete="off" id="place-name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="place-code">Location code</FieldLabel>
+        <Input autoCapitalize="characters" autoComplete="off" className="font-mono" id="place-code" maxLength={20} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder={name.trim() ? suggestedPlaceCode(name) : 'STORE'} value={code} />
+        <FieldDescription>{codeProblem ?? 'A requisition and an order name the place by it.'}</FieldDescription>
       </Field>
       {place ? null : <Choice id="place-kind" label="Kind" onChange={(value) => setKind(value as StockPlaceKind)} options={PLACE_KINDS} value={kind} />}
       {kind === 'VAN' ? <Choice id="place-technician" label="Technician" none="Nobody: any technician may use it" onChange={setTechnician} options={options} value={technician} /> : null}
@@ -570,6 +581,11 @@ export function VendorDialog({
       submitLabel={vendor ? 'Save vendor' : 'Add vendor'}
       title={vendor ? 'Edit vendor' : 'New vendor'}
     >
+      {vendor ? (
+        <p className="text-muted-foreground text-sm">
+          Vendor no. <span className="text-foreground font-mono font-semibold">{vendor.number}</span>, given by the console.
+        </p>
+      ) : null}
       <Field>
         <FieldLabel htmlFor="vendor-name">Name</FieldLabel>
         <Input autoComplete="off" id="vendor-name" maxLength={160} onChange={(event) => setName(event.target.value)} required value={name} />
