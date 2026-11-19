@@ -314,6 +314,7 @@ describe('deleting a demo property', () => {
       property: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
       propertywareLease: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       jobberPropertyLink: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      job: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       propertywareUnit: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       propertywareBuilding: { delete: jest.fn().mockResolvedValue({}) },
     };
@@ -475,6 +476,9 @@ describe('deleting a demo property', () => {
     expect(at('propertyArea.deleteMany')).toBeLessThan(at('propertyFloor.deleteMany'));
     expect(at('propertyFloor.deleteMany')).toBeLessThan(at('propertywareUnit.deleteMany'));
     expect(at('propertyArea.deleteMany')).toBeLessThan(at('property.deleteMany'));
+    // A job names the building and its unit, and both restrict (2026-11-20).
+    expect(at('job.deleteMany')).toBeGreaterThanOrEqual(0);
+    expect(at('job.deleteMany')).toBeLessThan(at('propertywareUnit.deleteMany'));
     // The building last of all.
     expect(at('propertywareBuilding.delete')).toBe(order.length - 1);
   });

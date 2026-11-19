@@ -122,6 +122,8 @@ export interface InspectionRecordDetails {
   jobberVisitDetails?: string | null;
   /** The inspection whose Jobber visit also booked this one; see `Inspection.jobberCompanionOfId`. */
   jobberCompanionOfId?: string | null;
+  /** The job it was booked in; see `Inspection.jobId`. */
+  jobId?: string | null;
 
   /**
    * For work that was already finished before this record existed.
@@ -1187,6 +1189,7 @@ export async function insertInspection(
         jobberVisitTitle: details.jobberVisitTitle,
         jobberVisitDetails: details.jobberVisitDetails,
         jobberCompanionOfId: details.jobberCompanionOfId,
+        jobId: details.jobId,
         workOrderKey: details.workOrderKey,
         workOrderNumber: details.workOrderNumber,
         // Spread rather than assigned, so omitting them leaves the column

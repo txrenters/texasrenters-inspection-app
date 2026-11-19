@@ -169,6 +169,51 @@ export class MailService {
   }
 
   /**
+   * A job assigned: one email for the whole job, however many inspections it
+   * holds (2026-11-20). The same facts as an inspection's, with the job's
+   * number and every piece of work in it, so nobody receives four emails for
+   * one visit.
+   */
+  sendJobAssignment(input: {
+    to: string;
+    displayName: string;
+    jobNumber: string;
+    jobTitle: string;
+    propertyLabel: string;
+    unitLabel: string | null;
+    work: string[];
+    scheduledAt: Date;
+  }) {
+    // Date only, for the reason given in sendInspectionAssignment.
+    const scheduled = input.scheduledAt.toLocaleDateString('en-US', {
+      timeZone: 'UTC',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    const where = input.unitLabel
+      ? `${escapeHtml(input.propertyLabel)} — ${escapeHtml(input.unitLabel)}`
+      : escapeHtml(input.propertyLabel);
+    const work = input.work.map((line) => `<li>${escapeHtml(line)}</li>`).join('');
+    return this.deliver({
+      to: input.to,
+      subject: `New job ${input.jobNumber} — ${input.propertyLabel}`,
+      html: this.layout(
+        'You have a new job',
+        `<p>Hello ${escapeHtml(input.displayName)},</p>
+         <p>Job ${escapeHtml(input.jobNumber)}, ${escapeHtml(input.jobTitle)}, has been assigned to you.</p>
+         <p><strong>Property:</strong> ${where}<br>
+         <strong>Scheduled:</strong> ${escapeHtml(scheduled)}</p>
+         <p><strong>The work:</strong></p>
+         <ul>${work}</ul>
+         <p>Open the TexasRenters mobile application to begin.</p>`,
+      ),
+      template: 'job-assignment',
+    });
+  }
+
+  /**
    * A report link, worded for the document it opens: an inspection report, or
    * the move-in / move-out comparison an owner or tenant is sent to review.
    */
