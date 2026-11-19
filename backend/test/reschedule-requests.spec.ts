@@ -3,6 +3,9 @@ import { JobberOutboundKind, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../src/common/auth';
 import {
   answerByMove,
+  MISSED_REQUEST_WINDOW_DAYS,
+  missedRequestFor,
+  openMissedRescheduleRequests,
   openRescheduleRequest,
   queueRescheduleNote,
   REBOOKED_IN_JOBBER_WINDOW_DAYS,
@@ -302,7 +305,7 @@ function queue(row = request()) {
       ...rescheduleRequestDelegate(),
       findFirst: jest.fn().mockResolvedValue(row),
       findMany: jest.fn().mockResolvedValue([row]),
-      groupBy: jest.fn().mockResolvedValue([{ status: 'OPEN', _count: { _all: 1 } }]),
+      groupBy: jest.fn().mockResolvedValue([{ status: 'OPEN', _count: { _all: 1 } }] as unknown[]),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     inspection: {
@@ -447,6 +450,199 @@ describe("the office's queue", () => {
       code: 'RESCHEDULE_ALREADY_ANSWERED',
     });
     expect(prisma.jobberOutboundTask.upsert).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-19: "if the reschedule is only for the pest control or just the
+  // filter change it should show the job type".
+  it('names the job: only the service left, or the whole visit when the whole visit goes again', async () => {
+    const visit = {
+      ...request().inspection,
+      jobberVisitDetails: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+      jobberCompanionOf: null,
+      jobberCompanions: [],
+    };
+
+    const left = await queue(request({ inspection: visit })).service.list(manager);
+    expect(left.items[0]).toMatchObject({ jobType: 'Pest control' });
+
+    const whole = await queue(request({ kind: 'NO_ACCESS', services: ['filterChange', 'pestControl'], inspection: visit })).service.list(
+      manager,
+    );
+    expect(whole.items[0]).toMatchObject({ jobType: 'AC filter change + Pest control + Occupied inspection' });
+  });
+
+  // 2026-11-19: "there's no search for the reschedule".
+  it('searches address, people, reason and job, in the list and in every count', async () => {
+    const { service, prisma } = queue();
+    prisma.rescheduleRequest.groupBy.mockResolvedValue([
+      { status: 'OPEN', _count: { _all: 1 } },
+      { status: 'DONE', _count: { _all: 2 } },
+      { status: 'DISMISSED', _count: { _all: 1 } },
+    ]);
+
+    const list = await service.list(manager, 'closed', '  pest ');
+
+    expect(list.counts).toEqual({ open: 1, sending: 0, closed: 3 });
+    const listed = prisma.rescheduleRequest.findMany.mock.calls[0][0].where;
+    expect(listed.status).toEqual({ in: ['DONE', 'DISMISSED'] });
+    expect(listed.OR).toEqual(
+      expect.arrayContaining([
+        { reason: { contains: 'pest', mode: 'insensitive' } },
+        { services: { hasSome: ['pestControl'] } },
+        { requestedBy: { is: { displayName: { contains: 'pest', mode: 'insensitive' } } } },
+      ]),
+    );
+    // The tabs count what the search finds, not the whole queue.
+    expect(prisma.rescheduleRequest.groupBy.mock.calls[0][0].where).toEqual({ organizationId: ORG, OR: listed.OR });
+  });
+
+  it('finds visits by their kind of inspection, and searches nothing when the box is empty', async () => {
+    const { service, prisma } = queue();
+
+    await service.list(manager, 'open', 'occupied');
+    expect(prisma.rescheduleRequest.findMany.mock.calls[0][0].where.OR).toEqual(
+      expect.arrayContaining([{ inspection: { inspectionType: { in: ['OCCUPIED'] } } }]),
+    );
+
+    await service.list(manager, 'open', '   ');
+    expect(prisma.rescheduleRequest.findMany.mock.calls[1][0].where.OR).toBeUndefined();
+  });
+});
+
+/**
+ * 2026-11-19: "some of the reschedule jobs does not appear on the reschedule
+ * page". The job page said "Pest control to reschedule" from the technician's
+ * report, and only a request opened at submission reached the queue.
+ */
+describe('visits marked to book again that never reached the queue', () => {
+  const NOW = new Date('2026-11-19T18:00:00.000Z');
+
+  const visit = (over: Record<string, unknown> = {}) => ({
+    id: 'inspection-7',
+    organizationId: ORG,
+    inspectionType: 'OCCUPIED',
+    scheduledAt: new Date('2026-10-14T00:00:00.000Z'),
+    submittedAt: new Date('2026-10-14T19:30:00.000Z'),
+    completedAt: new Date('2026-10-14T19:30:00.000Z'),
+    servicesReport: {
+      services: {
+        pestControl: { done: false, reason: 'Tenant refused', reschedule: true },
+        filterChange: { done: true },
+      },
+      filtersInstalled: [],
+    },
+    completionBlockedReason: null,
+    propertywareBuildingId: 'building-1',
+    propertywareUnitId: null,
+    assignments: [{ technicianId: 'technician-1' }],
+    ...over,
+  });
+
+  function database(visits = [visit()], rebook: unknown = null, already: unknown = null) {
+    const tx = {
+      rescheduleRequest: {
+        findFirst: jest.fn().mockResolvedValue(already),
+        create: jest.fn().mockResolvedValue({ id: 'request-7' }),
+      },
+      inspection: { findFirst: jest.fn().mockResolvedValue(rebook) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const db = {
+      inspection: { findMany: jest.fn().mockResolvedValue(visits) },
+      $transaction: jest.fn(async (run: (client: unknown) => unknown): Promise<unknown> => run(tx)),
+    };
+    return { db, tx };
+  }
+
+  it('reads the request from the visit: the services left, or the whole visit nobody could get into', () => {
+    expect(missedRequestFor(visit())).toEqual({
+      kind: 'SERVICES_NOT_DONE',
+      services: ['pestControl'],
+      reason: 'Pest control: Tenant refused',
+    });
+    expect(missedRequestFor(visit({ completionBlockedReason: 'Could not get in: Locked gate' }))).toMatchObject({
+      kind: 'NO_ACCESS',
+      services: ['pestControl'],
+      reason: 'Locked gate',
+    });
+    expect(missedRequestFor(visit({ servicesReport: { services: { pestControl: { done: true } } } }))).toBeNull();
+  });
+
+  it('opens the request the technician asked for, when they asked, and puts it on the history', async () => {
+    const { db, tx } = database();
+
+    await expect(openMissedRescheduleRequests(db as never, NOW)).resolves.toEqual({ opened: 1, bookedAlready: 0 });
+
+    expect(tx.rescheduleRequest.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: ORG,
+        inspectionId: 'inspection-7',
+        kind: 'SERVICES_NOT_DONE',
+        services: ['pestControl'],
+        reason: 'Pest control: Tenant refused',
+        requestedById: 'technician-1',
+        createdAt: new Date('2026-10-14T19:30:00.000Z'),
+      },
+      select: { id: true },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'RESCHEDULE_REQUESTED',
+        entityId: 'inspection-7',
+        actorUserId: null,
+        metadata: expect.objectContaining({ rescheduleRequestId: 'request-7', foundBySweep: true }),
+      }),
+    });
+  });
+
+  it('looks only at recent done visits that never had a request, so nothing answered is asked again', async () => {
+    const { db } = database([]);
+
+    await openMissedRescheduleRequests(db as never, NOW);
+
+    const where = db.inspection.findMany.mock.calls[0][0].where;
+    expect(where.rescheduleRequests).toEqual({ none: {} });
+    expect(where.status.in).toEqual(expect.arrayContaining(['TECHNICIAN_SUBMITTED', 'COMPLETED']));
+    expect(where.status.in).not.toContain('SCHEDULED');
+    expect(where.scheduledAt.gte).toEqual(new Date(NOW.getTime() - MISSED_REQUEST_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+    expect(where.OR).toEqual(
+      expect.arrayContaining([
+        { servicesReport: { path: ['services', 'pestControl', 'reschedule'], equals: true } },
+        { completionBlockedReason: { startsWith: 'Could not get in' } },
+      ]),
+    );
+  });
+
+  it('opens it answered when the same visit was booked again after it asked', async () => {
+    const { db, tx } = database([visit()], { id: 'inspection-8', jobberVisitId: 'visit-8' });
+
+    await expect(openMissedRescheduleRequests(db as never, NOW)).resolves.toEqual({ opened: 0, bookedAlready: 1 });
+
+    const rebookWhere = tx.inspection.findFirst.mock.calls[0][0].where;
+    expect(rebookWhere).toMatchObject({
+      id: { not: 'inspection-7' },
+      propertywareBuildingId: 'building-1',
+      inspectionType: 'OCCUPIED',
+      createdAt: { gte: new Date('2026-10-14T19:30:00.000Z') },
+    });
+    expect(tx.rescheduleRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'DONE',
+          outcome: 'REBOOKED',
+          resolvedInJobber: true,
+          rebookInspectionId: 'inspection-8',
+          resolvedAt: NOW,
+        }),
+      }),
+    );
+  });
+
+  it('leaves a visit whose technician opened a request in the meantime', async () => {
+    const { db, tx } = database([visit()], null, { id: 'request-1' });
+
+    await expect(openMissedRescheduleRequests(db as never, NOW)).resolves.toEqual({ opened: 0, bookedAlready: 0 });
+    expect(tx.rescheduleRequest.create).not.toHaveBeenCalled();
   });
 });
 

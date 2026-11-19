@@ -1,7 +1,12 @@
 import { nextQuarter, quarterOf } from './quarter-plan.js';
 import { parseVisitDetails } from './visit-details.js';
 import { MAX_BOOKING_FILTER_QUANTITY, tenancyZoneLabel, type JobberBookingInput } from './visit-details-writer.js';
-import { REPORTABLE_VISIT_SERVICES, type ReportableVisitService } from './visit-services.js';
+import {
+  REPORTABLE_VISIT_SERVICES,
+  VISIT_SERVICE_LABEL,
+  type ReportableVisitService,
+  type VisitServicesReport,
+} from './visit-services.js';
 import { rescheduleMondaysOfQuarter } from './zone-rotation.js';
 
 /**
@@ -45,6 +50,12 @@ export interface RescheduleRequestView {
   resolvedInJobber: boolean;
   /** The booked services to do again. Empty when the visit itself is what is asked for. */
   services: ReportableVisitService[];
+  /**
+   * What is to be booked again, as a job (`rescheduleJobType`): "Pest control"
+   * when only that was left, else the whole visit's job, "AC filter change +
+   * Pest control + Occupied inspection".
+   */
+  jobType: string;
   reason: string;
   /** The day the technician suggested, `YYYY-MM-DD`. */
   preferredOn: string | null;
@@ -77,7 +88,8 @@ export interface RescheduleRequestView {
 
 export interface RescheduleRequestList {
   items: RescheduleRequestView[];
-  counts: { open: number; sending: number };
+  /** Every request in each list, the search in force: the closed list shows only its newest. */
+  counts: { open: number; sending: number; closed: number };
   /** Console edits reach Jobber on this server (JOBBER_PUSH_EDITS_ENABLED): a Jobber visit can be moved here. */
   jobberEditsPushed: boolean;
   /** Visits can be booked in Jobber from here (JOBBER_BOOKING_ENABLED). */
@@ -102,6 +114,39 @@ export interface DismissRescheduleRequestInput {
 
 /** A reason the office or the technician gives, kept to what a Jobber note can carry. */
 export const MAX_RESCHEDULE_REASON = 500;
+
+/** The longest search the queue takes: an address, a name, a job. */
+export const MAX_RESCHEDULE_SEARCH = 100;
+
+/**
+ * What a request asks to have done, as a job (the office, 2026-11-19: "if the
+ * reschedule is only for the pest control or just the filter change it should
+ * show the job type").
+ *
+ * The services left undone when the rest of the visit was done -- "Pest
+ * control", "AC filter change" -- and otherwise the whole visit's job as its
+ * page names it (`jobWork`), because the whole visit is what goes again.
+ */
+export function rescheduleJobType(request: {
+  kind: RescheduleRequestKind;
+  services: readonly ReportableVisitService[];
+  /** The visit's job, `jobWork`. */
+  work: readonly string[];
+}): string {
+  if (request.kind === 'SERVICES_NOT_DONE' && request.services.length)
+    return request.services.map((service) => VISIT_SERVICE_LABEL[service]).join(' + ');
+  return request.work.join(' + ');
+}
+
+/** "Pest control: Tenant refused; AC filter change: not done" -- why each service is to be booked again. */
+export function servicesNotDoneReason(
+  report: VisitServicesReport | null | undefined,
+  services: readonly ReportableVisitService[],
+): string {
+  return services
+    .map((service) => `${VISIT_SERVICE_LABEL[service]}: ${report?.services[service]?.reason?.trim() || 'not done'}`)
+    .join('; ');
+}
 
 /**
  * The next Monday kept for rescheduled visits after `today`.
