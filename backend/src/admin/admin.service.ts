@@ -1744,6 +1744,7 @@ export class AdminService {
       organizationId: user.organizationId,
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.portfolioId ? { propertywareBuilding: { portfolioId: query.portfolioId } } : {}),
+      ...(query.source ? { source: query.source } : {}),
       ...(narrowing.length ? { AND: narrowing } : {}),
     };
     const where: Prisma.InspectionWhereInput = {
@@ -1759,6 +1760,8 @@ export class AdminService {
       // And what a submitted visit still owes: with any, it is Partially complete.
       ...OPEN_WORK_SELECT,
       inspectionType: true,
+      // The maintenance app's work order this visit is, for the Work orders page.
+      workOrderNumber: true,
       baselineInspectionId: true,
       baselineInspection: {
         select: { id: true, inspectionType: true, scheduledAt: true, completedAt: true },

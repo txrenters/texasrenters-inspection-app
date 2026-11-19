@@ -1,6 +1,6 @@
 'use client';
 
-import { STOCK_CODE, formatMoney, normalizeStockCode, parseMoney, type SaveStockItemInput, type StockCategoryRow, type StockCompany, type StockItemRow } from '@texasrenters/shared';
+import { STOCK_CODE, formatMoney, normalizeStockCode, parseMoney, type SaveStockItemInput, type StockCategoryRow, type StockCompany, type StockItemRow, type StockList } from '@texasrenters/shared';
 import { PrinterIcon, TagIcon } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
@@ -38,10 +38,15 @@ import { useInventoryEdits } from '@/lib/inventory-queries';
 const NONE = 'none';
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
+type LineType = StockList['lineTypes'][number];
+/** The type a new item starts as: Item, or the first in use that keeps stock. */
+const firstType = (types: readonly LineType[]) => (types.find((type) => type.active && type.code === 'ITEM') ?? types.find((type) => type.active && type.keepsStock) ?? types.find((type) => type.active))?.id ?? NONE;
+
 const COLUMNS: Array<Column<StockItemRow>> = [
   { key: 'code', header: 'Item code', className: 'whitespace-nowrap', cell: (row) => <span className="font-mono font-semibold tabular-nums">{row.code}</span> },
   { key: 'name', header: 'Description', primary: true, cell: (row) => row.name },
   { key: 'unit', header: 'Unit of measure', hideBelow: 'sm', cell: (row) => row.unit },
+  { key: 'type', header: 'Type', hideBelow: 'md', cell: (row) => row.lineType?.name ?? EMPTY },
   { key: 'price', header: 'Price', numeric: true, cell: (row) => (row.priceCents === null ? <span className="text-muted-foreground text-xs">No price</span> : formatMoney(row.priceCents)) },
   { key: 'category', header: 'Category', hideBelow: 'md', cell: (row) => row.category?.name ?? EMPTY },
   { key: 'company', header: 'Company', hideBelow: 'lg', cell: (row) => row.company?.name ?? EMPTY },
@@ -50,6 +55,8 @@ const COLUMNS: Array<Column<StockItemRow>> = [
 
 interface Draft {
   categoryId: string;
+  /** One of the office's line types; NONE until there is one. */
+  lineTypeId: string;
   company: string;
   code: string;
   name: string;
@@ -70,7 +77,7 @@ function read(draft: Draft, needsCompany: boolean): { problem: string } | { fiel
   return { fields: { code, name: draft.name.trim(), unit: draft.unit.trim(), priceCents } };
 }
 
-function Fields({ draft, set, categories, companies, suggested, fixedCategory, prefix }: { draft: Draft; set: (next: Partial<Draft>) => void; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; suggested: string | null; fixedCategory: boolean; prefix: string }) {
+function Fields({ draft, set, categories, companies, lineTypes, suggested, fixedCategory, prefix }: { draft: Draft; set: (next: Partial<Draft>) => void; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; lineTypes: readonly LineType[]; suggested: string | null; fixedCategory: boolean; prefix: string }) {
   return (
     <>
       <Field>
@@ -90,6 +97,26 @@ function Fields({ draft, set, categories, companies, suggested, fixedCategory, p
         </Select>
         <FieldDescription>{fixedCategory ? 'An item keeps its category.' : 'Groups the item and starts its code.'}</FieldDescription>
       </Field>
+      {lineTypes.length ? (
+        <Field>
+          <FieldLabel htmlFor={`${prefix}-type`}>Type</FieldLabel>
+          <Select onValueChange={(lineTypeId) => set({ lineTypeId })} value={draft.lineTypeId}>
+            <SelectTrigger id={`${prefix}-type`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {lineTypes
+                .filter((type) => type.active || type.id === draft.lineTypeId)
+                .map((type) => (
+                  <SelectItem key={type.id} value={type.id}>
+                    {type.name} ({type.code}){type.keepsStock ? '' : ', keeps no stock'}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <FieldDescription>What it is on a requisition line. A type that keeps no stock, like a service, is never received into a place or counted.</FieldDescription>
+        </Field>
+      ) : null}
       {companies.length ? (
         <Field>
           <FieldLabel htmlFor={`${prefix}-company`}>Company</FieldLabel>
@@ -135,7 +162,7 @@ function Fields({ draft, set, categories, companies, suggested, fixedCategory, p
   );
 }
 
-export function ItemCodesTab({ items, categories, companies, canManage }: { items: readonly StockItemRow[]; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; canManage: boolean }) {
+export function ItemCodesTab({ items, categories, companies, lineTypes = [], canManage }: { items: readonly StockItemRow[]; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; lineTypes?: readonly LineType[]; canManage: boolean }) {
   const [words, setWords] = useState('');
   const [editing, setEditing] = useState<StockItemRow | null>(null);
   const [printing, setPrinting] = useState(false);
@@ -192,15 +219,15 @@ export function ItemCodesTab({ items, categories, companies, canManage }: { item
         </p>
       </section>
 
-      {canManage ? <NewItemCode categories={inUse} companies={companies} /> : null}
-      {editing ? <EditItemCode categories={categories} companies={companies} item={editing} onClose={() => setEditing(null)} /> : null}
+      {canManage ? <NewItemCode categories={inUse} companies={companies} lineTypes={lineTypes} /> : null}
+      {editing ? <EditItemCode categories={categories} companies={companies} item={editing} lineTypes={lineTypes} onClose={() => setEditing(null)} /> : null}
     </div>
   );
 }
 
-function NewItemCode({ categories, companies }: { categories: readonly StockCategoryRow[]; companies: readonly StockCompany[] }) {
+function NewItemCode({ categories, companies, lineTypes }: { categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; lineTypes: readonly LineType[] }) {
   const { createItem } = useInventoryEdits();
-  const blank = (): Draft => ({ categoryId: categories.length === 1 ? categories[0]!.id : NONE, company: companies.length === 1 ? companies[0]!.tenantId : NONE, code: '', name: '', unit: 'pcs', price: '' });
+  const blank = (): Draft => ({ categoryId: categories.length === 1 ? categories[0]!.id : NONE, lineTypeId: firstType(lineTypes), company: companies.length === 1 ? companies[0]!.tenantId : NONE, code: '', name: '', unit: 'pcs', price: '' });
   const [draft, setDraft] = useState<Draft>(blank);
   /** True once the stock keeper has typed in the code field: until then it follows the category's suggestion. */
   const [typed, setTyped] = useState(false);
@@ -226,6 +253,7 @@ function NewItemCode({ categories, companies }: { categories: readonly StockCate
       unit,
       categoryId: draft.categoryId,
       priceCents,
+      ...(draft.lineTypeId !== NONE ? { lineTypeId: draft.lineTypeId } : {}),
       ...(companies.length ? { xeroTenantId: draft.company } : {}),
       // Left as suggested, the console gives the number itself, so two people adding at once never get the same one.
       ...(typed && code !== suggested ? { code } : {}),
@@ -233,7 +261,7 @@ function NewItemCode({ categories, companies }: { categories: readonly StockCate
     try {
       const made = await createItem.mutateAsync(input);
       setAdded(made.item.code);
-      setDraft((now) => ({ ...blank(), categoryId: now.categoryId, company: now.company, unit: now.unit }));
+      setDraft((now) => ({ ...blank(), categoryId: now.categoryId, company: now.company, unit: now.unit, lineTypeId: now.lineTypeId }));
       setTyped(false);
     } catch {
       // The mutation holds the API's message; it is shown below.
@@ -245,7 +273,7 @@ function NewItemCode({ categories, companies }: { categories: readonly StockCate
       <h2 className="text-base font-semibold">New item code</h2>
       {categories.length ? (
         <>
-          <Fields categories={categories} companies={companies} draft={shown} fixedCategory={false} prefix="new-code" set={set} suggested={suggested} />
+          <Fields categories={categories} companies={companies} draft={shown} fixedCategory={false} lineTypes={lineTypes} prefix="new-code" set={set} suggested={suggested} />
           {createItem.error ? (
             <Alert variant="destructive">
               <AlertDescription>{createItem.error.message}</AlertDescription>
@@ -280,9 +308,9 @@ function NewItemCode({ categories, companies }: { categories: readonly StockCate
   );
 }
 
-function EditItemCode({ item, categories, companies, onClose }: { item: StockItemRow; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; onClose: () => void }) {
+function EditItemCode({ item, categories, companies, lineTypes, onClose }: { item: StockItemRow; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; lineTypes: readonly LineType[]; onClose: () => void }) {
   const { updateItem } = useInventoryEdits();
-  const [draft, setDraft] = useState<Draft>({ categoryId: item.category?.id ?? NONE, company: item.company?.tenantId ?? NONE, code: item.code, name: item.name, unit: item.unit, price: item.priceCents === null ? '' : dollars(item.priceCents) });
+  const [draft, setDraft] = useState<Draft>({ categoryId: item.category?.id ?? NONE, lineTypeId: item.lineType?.id ?? firstType(lineTypes), company: item.company?.tenantId ?? NONE, code: item.code, name: item.name, unit: item.unit, price: item.priceCents === null ? '' : dollars(item.priceCents) });
   // An item made before categories, or before companies, is not held to choosing one here.
   const result = read({ ...draft, categoryId: item.category ? draft.categoryId : 'kept' }, false);
   const options = categories.filter((category) => category.active || category.id === item.category?.id);
@@ -297,6 +325,7 @@ function EditItemCode({ item, categories, companies, onClose }: { item: StockIte
       priceCents,
       // Only what changed of the code, the category and the company: the server refuses a change it must, and says why.
       ...(code !== item.code ? { code } : {}),
+      ...(draft.lineTypeId !== NONE && draft.lineTypeId !== (item.lineType?.id ?? NONE) ? { lineTypeId: draft.lineTypeId } : {}),
       ...(!item.category && draft.categoryId !== NONE ? { categoryId: draft.categoryId } : {}),
       ...(companies.length && draft.company !== (item.company?.tenantId ?? NONE) ? { xeroTenantId: draft.company === NONE ? null : draft.company } : {}),
     };
@@ -316,7 +345,7 @@ function EditItemCode({ item, categories, companies, onClose }: { item: StockIte
           <DialogDescription>The description, unit and price can be changed any time. The code can be changed only while nothing has requested, ordered or stocked the item.</DialogDescription>
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
-          <Fields categories={options} companies={companies} draft={draft} fixedCategory={Boolean(item.category)} prefix="edit-code" set={(next) => setDraft((now) => ({ ...now, ...next }))} suggested={null} />
+          <Fields categories={options} companies={companies} draft={draft} fixedCategory={Boolean(item.category)} lineTypes={lineTypes} prefix="edit-code" set={(next) => setDraft((now) => ({ ...now, ...next }))} suggested={null} />
           {'problem' in result ? <FieldError>{result.problem}</FieldError> : null}
           {updateItem.error ? (
             <Alert variant="destructive">

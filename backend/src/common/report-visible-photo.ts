@@ -1,4 +1,4 @@
-import { FindingReviewStatus, type Prisma } from '@prisma/client';
+import { FindingReviewStatus, PhotoCaptureType, type Prisma } from '@prisma/client';
 
 /**
  * Which photographs a report sent to an owner or tenant prints: the inspection
@@ -29,3 +29,35 @@ import { FindingReviewStatus, type Prisma } from '@prisma/client';
 export const REPORT_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
   OR: [{ findingId: null }, { finding: { reviewStatus: { not: FindingReviewStatus.REJECTED } } }],
 };
+
+/**
+ * Whether the move-in report prints a photograph `REPORT_VISIBLE_PHOTO` admits.
+ *
+ * A move-in records the house as the tenant receives it, after the make-ready
+ * fixed what the move-out found (the office, 2026-11-20: "for move ins ... it
+ * should be in a good condition ... the ai should capture a wide angle of that
+ * area/room, that's what we need to attach"). The move-in report printed every
+ * still the AI cut from the walkthrough for a problem it spotted itself, before
+ * anybody looked: 87 of one move-in's 139 photographs were such close-ups.
+ *
+ * So on a move-in a still filed under a finding prints once the office has
+ * approved that finding -- a confirmed problem is shown, an unconfirmed claim
+ * is not. Everything else prints as on any report: the technician's own
+ * photographs, whatever they show, and the wide frames the AI chose of each
+ * room and each of its checklist items (`fileRoomPhotos`). Nothing the inspector recorded is hidden: the
+ * condition table and its comments print in full.
+ *
+ * In code rather than in the query: the query is shared by every inspection
+ * type, and a room holds a few dozen photographs at most.
+ */
+export function printsOnMoveIn(photo: {
+  captureType: PhotoCaptureType;
+  findingId: string | null;
+  finding: { reviewStatus: FindingReviewStatus } | null;
+}) {
+  return (
+    photo.captureType !== PhotoCaptureType.VIDEO_FRAME_SNAPSHOT ||
+    photo.findingId === null ||
+    photo.finding?.reviewStatus === FindingReviewStatus.APPROVED
+  );
+}

@@ -86,6 +86,8 @@ export interface StockCompany {
 export interface StockPlaceRow {
   id: string;
   name: string;
+  /** Its location code (2026-11-20): "STORE", "TRK-01". */
+  code: string;
   kind: StockPlaceKind;
   /** A truck's technician; null for a storeroom, or a truck any technician may use. */
   technicianId: string | null;
@@ -121,6 +123,8 @@ export interface StockItemRow {
   reorderLevel: number;
   reorderQuantity: number;
   usualVendor: { id: string; name: string } | null;
+  /** What it is on a line (2026-11-20): an Item that keeps stock, a Service that does not. */
+  lineType: { id: string; code: string; name: string; keepsStock: boolean } | null;
   /** What one usually costs, when the stock keeper has said; a purchase request line starts from it. */
   priceCents: number | null;
   active: boolean;
@@ -139,6 +143,8 @@ export interface StockList {
   companies: StockCompany[];
   vendors: { id: string; name: string }[];
   categories: StockCategoryRow[];
+  /** What an item can be on a line (2026-11-20): Item keeps stock, Service does not. */
+  lineTypes: { id: string; code: string; name: string; keepsStock: boolean; active: boolean }[];
 }
 
 /** A new category needs its name and prefix. The prefix can change only until it has numbered an item. */
@@ -200,6 +206,8 @@ export interface SaveStockItemInput {
   reorderLevel?: number;
   reorderQuantity?: number;
   usualVendorId?: string | null;
+  /** One of the office's line types. */
+  lineTypeId?: string;
   /** What one usually costs; null for none. */
   priceCents?: number | null;
   active?: boolean;
@@ -232,6 +240,8 @@ export const STOCK_PLACE_KIND_LABEL: Record<StockPlaceKind, string> = { STOCKROO
 
 export interface SaveStockPlaceInput {
   name?: string;
+  /** Left out on a new place, the console makes one from its name. */
+  code?: string;
   kind?: StockPlaceKind;
   technicianId?: string | null;
   active?: boolean;
@@ -239,6 +249,8 @@ export interface SaveStockPlaceInput {
 
 export interface VendorRow {
   id: string;
+  /** "V-00003", given by the console (2026-11-20). */
+  number: string;
   name: string;
   contactName: string | null;
   email: string | null;

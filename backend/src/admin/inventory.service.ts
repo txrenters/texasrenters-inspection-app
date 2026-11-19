@@ -23,6 +23,10 @@ import {
   type StockPlaces,
   type VendorRow,
   type Vendors,
+  normalizePurchasingCode,
+  purchasingCodeProblem,
+  suggestedPlaceCode,
+  vendorNumber,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -30,6 +34,8 @@ import { businessDate, dayWords } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
+import { defaultLineTypeId, lineTypeOf } from './purchasing-codes.service';
+import { nextDocumentNumber } from './purchasing.service';
 
 /**
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): the
@@ -53,6 +59,8 @@ const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g,
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
 const taken = (error: unknown) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+/** Which unique index refused it: a place's name and its code are both unique. */
+const takenOn = (error: unknown, column: string) => taken(error) && JSON.stringify((error as Prisma.PrismaClientKnownRequestError).meta?.target ?? '').includes(column);
 
 const ITEM_SELECT = {
   id: true,
@@ -66,12 +74,14 @@ const ITEM_SELECT = {
   priceCents: true,
   active: true,
   usualVendor: { select: { id: true, name: true } },
+  lineType: { select: { id: true, code: true, name: true, keepsStock: true } },
 } satisfies Prisma.StockItemSelect;
 type ItemRecord = Prisma.StockItemGetPayload<{ select: typeof ITEM_SELECT }>;
 
 const PLACE_SELECT = {
   id: true,
   name: true,
+  code: true,
   kind: true,
   technicianId: true,
   active: true,
@@ -79,7 +89,7 @@ const PLACE_SELECT = {
 } satisfies Prisma.StockPlaceSelect;
 type PlaceRecord = Prisma.StockPlaceGetPayload<{ select: typeof PLACE_SELECT }>;
 
-const VENDOR_SELECT = { id: true, name: true, contactName: true, email: true, phone: true, terms: true, notes: true, active: true } satisfies Prisma.VendorSelect;
+const VENDOR_SELECT = { id: true, number: true, name: true, contactName: true, email: true, phone: true, terms: true, notes: true, active: true } satisfies Prisma.VendorSelect;
 
 interface Level {
   itemId: string;
@@ -91,6 +101,7 @@ interface Level {
 const placeRow = (place: PlaceRecord, itemsHeld = 0): StockPlaceRow => ({
   id: place.id,
   name: place.name,
+  code: place.code,
   kind: place.kind,
   technicianId: place.technicianId,
   technicianName: place.technician?.displayName ?? null,
@@ -121,6 +132,7 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
     reorderLevel: item.reorderLevel,
     reorderQuantity: item.reorderQuantity,
     usualVendor: item.usualVendor,
+    lineType: item.lineType,
     priceCents: item.priceCents,
     active: item.active,
     onHand,
@@ -137,10 +149,10 @@ export class InventoryService {
 
   // ── Items ───────────────────────────────────────────────────────────────
 
-  /** Every item with what is on hand: six reads, whatever the number of items. */
+  /** Every item with what is on hand: seven reads, whatever the number of items. */
   async stock(user: AuthenticatedUser): Promise<StockList> {
     const organizationId = user.organizationId;
-    const [items, levels, places, organisations, vendors, categories] = await Promise.all([
+    const [items, levels, places, organisations, vendors, categories, lineTypes] = await Promise.all([
       this.prisma.stockItem.findMany({ where: { organizationId }, select: ITEM_SELECT, orderBy: [{ active: 'desc' }, { codeKey: 'asc' }] }),
       this.prisma.stockLevel.findMany({ where: { organizationId }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: PLACE_SELECT, orderBy: [{ active: 'desc' }, { kind: 'asc' }, { nameKey: 'asc' }] }),
@@ -151,6 +163,7 @@ export class InventoryService {
         select: { id: true, name: true, prefix: true, nextNumber: true, active: true, _count: { select: { items: true } } },
         orderBy: [{ active: 'desc' }, { nameKey: 'asc' }],
       }),
+      this.prisma.purchasingCode.findMany({ where: { organizationId, kind: 'LINE_TYPE' }, select: { id: true, code: true, name: true, keepsStock: true, active: true }, orderBy: [{ active: 'desc' }, { code: 'asc' }] }),
     ]);
     const kinds = new Map(places.map((place) => [place.id, place.kind]));
     const names = new Map(organisations.map((row) => [row.xeroTenantId, row.name]));
@@ -169,6 +182,7 @@ export class InventoryService {
         itemCount: category._count.items,
         active: category.active,
       })),
+      lineTypes,
     };
   }
 
@@ -256,6 +270,8 @@ export class InventoryService {
         // Typed by the stock keeper, or the category's next number.
         const code = typed ?? (await this.nextCode(tx, organizationId, categoryId, category.prefix));
         if (typed) await this.codeIsFree(tx, organizationId, typed);
+        // An Item unless the stock keeper chose another type.
+        const lineTypeId = input.lineTypeId ? (await lineTypeOf(tx, organizationId, input.lineTypeId)).id : await defaultLineTypeId(tx, organizationId);
         const item = await tx.stockItem.create({
           data: {
             organizationId,
@@ -269,6 +285,7 @@ export class InventoryService {
             reorderQuantity: input.reorderQuantity ?? 0,
             usualVendorId: input.usualVendorId ?? null,
             priceCents: input.priceCents ?? null,
+            lineTypeId,
           },
           select: { id: true },
         });
@@ -331,6 +348,15 @@ export class InventoryService {
     if (sent(input, 'usualVendorId')) data.usualVendorId = input.usualVendorId ?? null;
     if (sent(input, 'priceCents')) data.priceCents = input.priceCents ?? null;
     if (sent(input, 'active')) data.active = input.active;
+    if (sent(input, 'lineTypeId') && input.lineTypeId) {
+      const type = await lineTypeOf(this.prisma, organizationId, input.lineTypeId);
+      // An item on a shelf stays a type that keeps stock: the console would stop counting what is there.
+      if (!type.keepsStock) {
+        const held = await this.prisma.stockLevel.findFirst({ where: { organizationId, itemId, quantity: { not: 0 } }, select: { quantity: true } });
+        if (held) throw new ApplicationError(409, 'LINE_TYPE_HAS_STOCK', `That item has stock on hand, so it stays a type that keeps stock. ${type.code} keeps none.`);
+      }
+      data.lineTypeId = type.id;
+    }
     const typed = sent(input, 'code') ? this.typedCode(input.code) : null;
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { id: true, code: true, xeroTenantId: true, active: true, categoryId: true } });
@@ -610,14 +636,18 @@ export class InventoryService {
     if (!name) throw new ApplicationError(400, 'STOCK_PLACE_INCOMPLETE', 'A place needs a name.');
     const kind = input.kind ?? StockPlaceKind.STOCKROOM;
     const technicianId = await this.vanTechnician(organizationId, kind, input.technicianId ?? null);
+    const typed = input.code !== undefined ? this.placeCode(input.code) : null;
     try {
       await this.prisma.$transaction(async (tx) => {
-        const place = await tx.stockPlace.create({ data: { organizationId, name, nameKey: stockKey(name), kind, technicianId }, select: { id: true } });
+        // Typed by the stock keeper, or made from the name and numbered past any already taken.
+        const code = typed ?? (await this.freePlaceCode(tx, organizationId, suggestedPlaceCode(name)));
+        const place = await tx.stockPlace.create({ data: { organizationId, name, nameKey: stockKey(name), code, kind, technicianId }, select: { id: true } });
         await tx.auditLog.create({
-          data: { organizationId, ...auditActor(user), action: 'STOCK_PLACE_CREATED', entityType: 'StockPlace', entityId: place.id, metadata: { name, kind } },
+          data: { organizationId, ...auditActor(user), action: 'STOCK_PLACE_CREATED', entityType: 'StockPlace', entityId: place.id, metadata: { name, code, kind } },
         });
       });
     } catch (error) {
+      if (takenOn(error, 'code')) throw new ApplicationError(409, 'STOCK_PLACE_CODE_TAKEN', `${typed ?? 'That code'} is already another place's location code.`);
       if (taken(error)) throw new ApplicationError(409, 'STOCK_PLACE_NAME_TAKEN', `There is already a place called ${name}.`);
       throw error;
     }
@@ -637,6 +667,7 @@ export class InventoryService {
           data.name = name;
           data.nameKey = stockKey(name);
         }
+        if (sent(input, 'code')) data.code = this.placeCode(input.code);
         // A place keeps its kind: a storeroom is where deliveries land and a truck is what a technician takes from.
         if (sent(input, 'kind') && input.kind !== place.kind) throw new ApplicationError(409, 'STOCK_PLACE_KIND_FIXED', `${place.name} keeps its kind. Make another place instead.`);
         const kind = place.kind;
@@ -655,10 +686,29 @@ export class InventoryService {
         });
       });
     } catch (error) {
+      if (takenOn(error, 'code')) throw new ApplicationError(409, 'STOCK_PLACE_CODE_TAKEN', 'That is already another place\'s location code.');
       if (taken(error)) throw new ApplicationError(409, 'STOCK_PLACE_NAME_TAKEN', 'There is already a place with that name.');
       throw error;
     }
     return this.places(user);
+  }
+
+  /** A location code as typed, in capitals, or the reason it will not do. */
+  private placeCode(value: string | undefined): string {
+    const problem = purchasingCodeProblem(value ?? '');
+    if (problem) throw new ApplicationError(400, 'STOCK_PLACE_CODE_INVALID', problem);
+    return normalizePurchasingCode(value ?? '');
+  }
+
+  /** The suggested code, or the same with -2, -3... where another place has it. */
+  private async freePlaceCode(db: Prisma.TransactionClient, organizationId: string, stem: string): Promise<string> {
+    const taken = new Set((await db.stockPlace.findMany({ where: { organizationId, code: { startsWith: stem } }, select: { code: true } })).map((place) => place.code));
+    if (!taken.has(stem)) return stem;
+    for (let n = 2; n < 1000; n += 1) {
+      const code = `${stem.slice(0, 16)}-${n}`;
+      if (!taken.has(code)) return code;
+    }
+    throw new ApplicationError(409, 'STOCK_PLACE_CODE_TAKEN', 'Give the place a location code of its own.');
   }
 
   /** A van's technician is one of this office's technicians; a stockroom has none. */
@@ -682,11 +732,13 @@ export class InventoryService {
     if (!name) throw new ApplicationError(400, 'VENDOR_INCOMPLETE', 'A vendor needs a name.');
     try {
       await this.prisma.$transaction(async (tx) => {
+        // Numbered by the console, under the series row's lock: two vendors added at once never share one.
+        const number = vendorNumber(await nextDocumentNumber(tx, organizationId, 'V'));
         const vendor = await tx.vendor.create({
-          data: { organizationId, name, nameKey: stockKey(name), contactName: text(input.contactName), email: text(input.email), phone: text(input.phone), terms: text(input.terms), notes: input.notes?.trim() || null },
+          data: { organizationId, number, name, nameKey: stockKey(name), contactName: text(input.contactName), email: text(input.email), phone: text(input.phone), terms: text(input.terms), notes: input.notes?.trim() || null },
           select: { id: true },
         });
-        await tx.auditLog.create({ data: { organizationId, ...auditActor(user), action: 'VENDOR_CREATED', entityType: 'Vendor', entityId: vendor.id, metadata: { name } } });
+        await tx.auditLog.create({ data: { organizationId, ...auditActor(user), action: 'VENDOR_CREATED', entityType: 'Vendor', entityId: vendor.id, metadata: { name, number } } });
       });
     } catch (error) {
       if (taken(error)) throw new ApplicationError(409, 'VENDOR_NAME_TAKEN', `There is already a vendor called ${name}.`);

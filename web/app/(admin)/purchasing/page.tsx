@@ -16,6 +16,7 @@ import { useState, type FormEvent } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { CodesTab } from '@/components/purchasing/codes-tab';
 import { OrdersTab } from '@/components/purchasing/orders-tab';
 import { RequisitionStatusBadge, approverFor } from '@/components/purchasing/requisition-parts';
 import { Stat, StatGroup } from '@/components/stat-card';
@@ -78,6 +79,8 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
 
 export default function PurchasingPage() {
   const { has } = usePermissions();
+  // The code lists a requisition picks from (2026-11-20): only for whoever may manage them.
+  const canCode = has('purchasing:codes');
   const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = useRequisitions(show);
@@ -118,11 +121,17 @@ export default function PurchasingPage() {
         title="Purchasing"
       />
 
-      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : 'requisitions'}>
+      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : state.tab === 'codes' && canCode ? 'codes' : 'requisitions'}>
         <TabsList>
           <TabsTrigger value="requisitions">Requisitions</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
+          {canCode ? <TabsTrigger value="codes">Codes</TabsTrigger> : null}
         </TabsList>
+        {canCode ? (
+          <TabsContent value="codes">
+            <CodesTab enabled={state.tab === 'codes'} />
+          </TabsContent>
+        ) : null}
         <TabsContent value="orders">
           <OrdersTab setState={setState} state={state} />
         </TabsContent>

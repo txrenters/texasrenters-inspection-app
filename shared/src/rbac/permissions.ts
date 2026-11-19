@@ -47,6 +47,7 @@ export const PERMISSION_KEYS = [
   'purchasing:order',
   'purchasing:receive',
   'purchasing:bills',
+  'purchasing:codes',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -354,6 +355,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         description:
           "Enter the vendor's bill for an order, approve one that matches the order and what was received, and record its payment. No money moves in the console. A bill that does not match needs \"Approve any amount\".",
       },
+      {
+        key: 'purchasing:codes',
+        label: 'Manage purchasing codes',
+        description:
+          "Make and change the codes a requisition picks from: line types, request codes, department and cost center codes and their Xero tracking, and each company's purchaser code.",
+      },
     ],
   },
   {
@@ -461,6 +468,8 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'purchasing:order',
   'purchasing:receive',
   'purchasing:bills',
+  // The lists a requisition is coded with: changed by a person at the screen.
+  'purchasing:codes',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

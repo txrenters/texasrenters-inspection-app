@@ -39,6 +39,7 @@ const row = (over: Partial<StockItemRow> = {}): StockItemRow => ({
   reorderLevel: 24,
   reorderQuantity: 48,
   usualVendor: null,
+  lineType: { id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true },
   priceCents: 342,
   active: true,
   onHand: 27,
@@ -51,11 +52,15 @@ const row = (over: Partial<StockItemRow> = {}): StockItemRow => ({
 const list = (items: StockItemRow[]): StockList => ({
   items,
   places: [
-    { id: 'place-stockroom', name: 'Stockroom', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 2, active: true },
-    { id: 'place-shed', name: 'Old shed', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 0, active: false },
+    { id: 'place-stockroom', name: 'Stockroom', code: 'STOCKROOM', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 2, active: true },
+    { id: 'place-shed', name: 'Old shed', code: 'OLD-SHED', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 0, active: false },
   ],
   companies: [{ tenantId: 'tenant-thmp', name: 'THMP' }],
   vendors: [],
+  lineTypes: [
+    { id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true, active: true },
+    { id: 'type-service', code: 'SERVICE', name: 'Service', keepsStock: false, active: true },
+  ],
   categories: [
     { id: 'cat-filters', name: 'Filters', prefix: 'FLT', nextCode: 'FLT-0003', itemCount: 1, active: true },
     { id: 'cat-pest', name: 'Pest products', prefix: 'PST', nextCode: 'PST-0001', itemCount: 0, active: true },

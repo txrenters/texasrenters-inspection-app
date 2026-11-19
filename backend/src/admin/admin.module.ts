@@ -49,6 +49,8 @@ import { InventoryMonitoringController } from './inventory-monitoring.controller
 import { InventoryMonitoringService } from './inventory-monitoring.service';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
+import { PurchasingCodesController } from './purchasing-codes.controller';
+import { PurchasingCodesService } from './purchasing-codes.service';
 import { StockCountsController } from './stock-counts.controller';
 import { VendorBillsXeroController } from './vendor-bills-xero.controller';
 import { VendorBillsXeroService } from './vendor-bills-xero.service';
@@ -125,6 +127,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     // Before InventoryController: `inventory/slips` must not be read as an item's id.
     StockSlipsController,
     StockCountsController,
+    PurchasingCodesController,
     InventoryMonitoringController,
     VendorBillsXeroController,
     InventoryController,
@@ -183,6 +186,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryService,
     StockSlipsService,
     StockCountsService,
+    PurchasingCodesService,
     InventoryMonitoringService,
     VendorBillsXeroService,
     PurchasingService,

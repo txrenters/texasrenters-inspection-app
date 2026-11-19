@@ -4,6 +4,8 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AiAnalysisStatus,
   AiProvider,
+  AreaChecklistItemKind,
+  ChecklistResponseType,
   BaselineVisualStatus,
   ComparisonResult,
   FindingReviewStatus,
@@ -33,7 +35,13 @@ import { resizedPhotoKeyFor } from '../common/object-storage';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
-import { aiFiledMetadata, removeOrphanedAiFrames } from './ai-filed-frames';
+import {
+  AI_ROOM_PHOTO_KEY_MARK,
+  aiFiledMetadata,
+  aiRoomPhotoKey,
+  aiRoomPhotoMetadata,
+  removeOrphanedAiFrames,
+} from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from './room-summary';
@@ -178,7 +186,68 @@ export const scanResponseSchema = z.object({
     )
     .catch([])
     .default([]),
+  /**
+   * A move-in's: the frames that show the room, and each checklist item in it,
+   * best -- its photographs on the report. `item` is a checklist reference
+   * ("c2"), or null for the room as a whole.
+   */
+  photos: z
+    .array(
+      z.object({
+        item: z.string().max(10).nullable().catch(null),
+        frames: z.array(z.string()).catch([]).default([]),
+      }),
+    )
+    .max(40)
+    .catch([])
+    .default([]),
 });
+
+/** Frames per entry the scan may choose, and room photos per recording at most. */
+export const FRAMES_PER_ROOM_PHOTO_ENTRY = 2;
+export const MAX_ROOM_PHOTOS_PER_RECORDING = 12;
+
+/** One frame to file as a room photo: its moment, the item it shows, and where it sorts. */
+export interface RoomPhotoMoment {
+  second: number;
+  itemId: string | null;
+  order: number;
+}
+
+/**
+ * The moments to file as a move-in room's photographs, from the scan's choice.
+ *
+ * The room as a whole first, then each item in the checklist's own order, so
+ * the report shows the room and then its rows, as the office's own reports do.
+ * A frame the scan never showed is dropped, an item the room does not have is
+ * dropped, and a moment chosen twice is filed once, under the first entry
+ * that chose it.
+ */
+export function roomPhotoMoments(
+  entries: Array<{ item: string | null; frames: string[] }>,
+  secondOf: (label: string) => number | undefined,
+  items: Array<{ id: string }>,
+): RoomPhotoMoment[] {
+  const index = new Map(items.map((item, at) => [`c${at + 1}`, at]));
+  const ranked = entries
+    .map((entry) => ({ entry, at: entry.item === null ? -1 : index.get(entry.item.trim()) }))
+    .filter((ranked): ranked is { entry: typeof ranked.entry; at: number } => ranked.at !== undefined)
+    .sort((left, right) => left.at - right.at);
+  const taken = new Set<number>();
+  const moments: RoomPhotoMoment[] = [];
+  for (const { entry, at } of ranked) {
+    let kept = 0;
+    for (const label of entry.frames) {
+      const second = secondOf(label);
+      if (second === undefined || taken.has(second) || kept >= FRAMES_PER_ROOM_PHOTO_ENTRY) continue;
+      if (moments.length >= MAX_ROOM_PHOTOS_PER_RECORDING) return moments;
+      taken.add(second);
+      kept += 1;
+      moments.push({ second, itemId: at < 0 ? null : items[at].id, order: (at + 1) * FRAMES_PER_ROOM_PHOTO_ENTRY + kept });
+    }
+  }
+  return moments;
+}
 
 export const closeResponseSchema = z.object({
   items: z
@@ -263,6 +332,8 @@ export function scanPrompt(input: {
   decided: Array<{ title: string; reviewStatus: string }>;
   /** The office's house rules: what counts as a problem worth listing at all. */
   houseRules?: string | null;
+  /** A move-in's checklist items, for the photographs it is asked to choose. */
+  items?: Array<{ label: string }>;
 }) {
   const moveIn = input.inspectionType === InspectionType.MOVE_IN;
   return [
@@ -315,8 +386,15 @@ export function scanPrompt(input: {
     moveIn
       ? 'This is a MOVE-IN: everything you see is the condition the tenant receives, to be recorded.'
       : 'Do not judge who is responsible or whether anything is new; that is not your job here.',
+    ...(moveIn
+      ? [
+          `Task C. photos: this room's photographs for the move-in report, as a photographer shows a room to a new tenant. For the room as a whole (item null) and for each checklist item below, the labels of the one or ${FRAMES_PER_ROOM_PHOTO_ENTRY} frames that show it best: wide, sharp, level and well lit, with the whole thing in view -- the room from the doorway or a corner, a whole wall, the floor across the room, a door with its frame, a window with its blinds, the light or fan. Never a blurred frame, a close-up of a problem, or one pointed at nothing. Leave out an item no frame shows clearly.`,
+          'Checklist items of this room:',
+          ...(input.items?.length ? input.items.map((item, index) => `c${index + 1}: ${item.label}`) : ['(none)']),
+        ]
+      : []),
     'Frames come from a moving phone camera and many are blurred: judge from the sharpest ones.',
-    'Return JSON only, no prose: {"findings":[{"ref":"F1","visible":"VISIBLE","frames":["T021"],"observation":"..."}],"additional":[{"title":"...","description":"...","category":"...","kind":"DAMAGE","severity":"LOW","frames":["T040"],"observation":"..."}]}',
+    `Return JSON only, no prose: {"findings":[{"ref":"F1","visible":"VISIBLE","frames":["T021"],"observation":"..."}],"additional":[{"title":"...","description":"...","category":"...","kind":"DAMAGE","severity":"LOW","frames":["T040"],"observation":"..."}]${moveIn ? ',"photos":[{"item":null,"frames":["T003"]},{"item":"c2","frames":["T012","T030"]}]' : ''}}`,
   ].join('\n');
 }
 
@@ -383,7 +461,23 @@ export class VisualReviewService {
         inspectionAreaId: true,
         inspectionArea: {
           select: {
-            propertyArea: { select: { id: true, name: true } },
+            propertyArea: {
+              select: {
+                id: true,
+                name: true,
+                // A move-in's photographs are chosen item by item (2026-11-20).
+                checklistItems: {
+                  where: {
+                    kind: AreaChecklistItemKind.ROOM,
+                    archivedAt: null,
+                    responseType: ChecklistResponseType.STATUS,
+                  },
+                  orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+                  take: 30,
+                  select: { id: true, label: true },
+                },
+              },
+            },
             inspection: { select: { inspectionType: true } },
           },
         },
@@ -394,6 +488,8 @@ export class VisualReviewService {
 
     const inspectionType = media.inspectionArea.inspection.inspectionType;
     const roomName = media.inspectionArea.propertyArea.name;
+    const roomItems =
+      inspectionType === InspectionType.MOVE_IN ? (media.inspectionArea.propertyArea.checklistItems ?? []) : [];
     const [findingRows, decidedRows, answers] = await Promise.all([
       // This recording's findings from the narration, except those the office
       // rejected: there is nothing to look for in a finding ruled out.
@@ -509,6 +605,7 @@ export class VisualReviewService {
             findings: [...refs].map(([ref, finding]) => ({ ref, ...finding })),
             decided: decidedRows,
             houseRules: houseRules?.text ?? null,
+            items: roomItems,
           }),
         },
       ];
@@ -827,11 +924,29 @@ export class VisualReviewService {
         });
         return 0;
       });
+      // A move-in's photographs: the wide frames the scan chose of the room and
+      // of each item. Asked in the same scan, so they cost no call of their own.
+      const roomPhotosFiled =
+        inspectionType === InspectionType.MOVE_IN
+          ? await this.fileRoomPhotos(
+              media,
+              organizationId,
+              roomPhotoMoments(scan.photos, (label) => known.get(label), roomItems),
+            ).catch((error) => {
+              this.logger.warn({
+                event: 'ai_room_photo_filing_failed',
+                mediaId: media.id,
+                message: error instanceof Error ? error.message : 'unknown',
+              });
+              return 0;
+            })
+          : 0;
       return {
         checked: findingUpdates.length,
         suggested: suggestions.length,
         spotted: spottedRows.length,
         filed,
+        roomPhotos: roomPhotosFiled,
         usage,
       };
     } catch (error) {
@@ -947,6 +1062,106 @@ export class VisualReviewService {
     return filed;
   }
 
+  /**
+   * Files the wide frames the scan chose as a move-in room's photographs (the
+   * office, 2026-11-20: "the ai should capture a wide angle of that area/room,
+   * that's what we need to attach for the move in"), each under the checklist
+   * item it shows, so the report captions it with that item as the office's
+   * own move-in reports do.
+   *
+   * Each is the sharpest of three neighbouring frames at full height, filed as
+   * an overview of the area under no finding, credited to the technician who
+   * filmed it and marked as the AI's choice (`aiRoomPhotoMetadata`). A re-run
+   * that chooses again replaces this recording's earlier ones; a re-run that
+   * chooses none leaves them, rather than leave the room with no photograph.
+   */
+  private async fileRoomPhotos(
+    media: {
+      id: string;
+      inspectionId: string;
+      inspectionAreaId: string | null;
+      streamUid: string | null;
+      technicianId: string;
+      recordedAt: Date | null;
+      durationSeconds: number;
+    },
+    organizationId: string,
+    moments: RoomPhotoMoment[],
+  ) {
+    if (!moments.length || !this.storage || !this.stream?.customerCode || !media.streamUid || !media.inspectionAreaId)
+      return 0;
+    const base = this.thumbnailBase(media.streamUid);
+    const frames: Array<{ atMs: number; bytes: Buffer; itemId: string | null; order: number }> = [];
+    for (const moment of moments) {
+      const frame = await this.sharpestFrame(base, moment.second, media.durationSeconds);
+      // Two moments a second apart can sharpen to the same frame: filed once.
+      if (frame && !frames.some((other) => other.atMs === frame.atMs))
+        frames.push({ ...frame, itemId: moment.itemId, order: moment.order });
+    }
+    if (!frames.length) return 0;
+
+    const keep = new Set(frames.map((frame) => aiRoomPhotoKey(media.id, frame.atMs)));
+    const earlier = await this.prisma.inspectionPhoto.findMany({
+      where: {
+        inspectionAreaId: media.inspectionAreaId,
+        idempotencyKey: { startsWith: `${media.id}${AI_ROOM_PHOTO_KEY_MARK}` },
+      },
+      select: { id: true, storageKey: true, idempotencyKey: true },
+    });
+    const stale = earlier.filter((photo) => !keep.has(photo.idempotencyKey ?? ''));
+    if (stale.length) {
+      await this.prisma.inspectionPhoto.deleteMany({ where: { id: { in: stale.map((photo) => photo.id) } } });
+      for (const photo of stale) await this.storage.delete(photo.storageKey).catch(() => undefined);
+    }
+    const existing = new Set(earlier.map((photo) => photo.idempotencyKey));
+
+    let filed = 0;
+    for (const frame of frames) {
+      const idempotencyKey = aiRoomPhotoKey(media.id, frame.atMs);
+      // Before the technician's own, in the checklist's order.
+      const sequenceNumber = frame.order - 1000;
+      if (existing.has(idempotencyKey)) {
+        // The same moment, chosen again: under the item it is chosen for now.
+        await this.prisma.inspectionPhoto.update({
+          where: { idempotencyKey },
+          data: { checklistItemId: frame.itemId, sequenceNumber },
+        });
+        filed += 1;
+        continue;
+      }
+      const storageKey = `organizations/${organizationId}/inspections/${media.inspectionId}/photos/${idempotencyKey}.jpg`;
+      await this.storage.putBytes(storageKey, frame.bytes, 'image/jpeg');
+      await this.prisma.inspectionPhoto
+        .create({
+          data: {
+            organizationId,
+            inspectionId: media.inspectionId,
+            inspectionAreaId: media.inspectionAreaId,
+            capturedById: media.technicianId,
+            provider: this.storage.providerName(),
+            storageKey,
+            captureType: PhotoCaptureType.AREA_OVERVIEW,
+            sequenceNumber,
+            // The report captions it with its item; the room as a whole by this.
+            checklistItemId: frame.itemId,
+            label: frame.itemId ? null : 'Room overview',
+            mimeType: 'image/jpeg',
+            sizeBytes: frame.bytes.byteLength,
+            idempotencyKey,
+            ...captureTimeForFrame(media, frame.atMs),
+            metadata: aiRoomPhotoMetadata(frame.atMs),
+          },
+          select: { id: true },
+        })
+        .catch(async (error: unknown) => {
+          await this.storage!.delete(storageKey).catch(() => undefined);
+          throw error;
+        });
+      filed += 1;
+    }
+    return filed;
+  }
+
   /** A signed still URL for any moment of the recording, short-lived. */
   private thumbnailBase(streamUid: string) {
     const { token } = this.stream!.signPlaybackToken(streamUid, FRAME_TOKEN_TTL_SECONDS);
@@ -1037,6 +1252,8 @@ export class VisualReviewService {
         inspectionAreaId,
         storageStatus: PhotoStorageStatus.UPLOADED,
         captureType: { not: PhotoCaptureType.VIDEO_FRAME_SNAPSHOT },
+        // Nor the AI's own room photos: they are frames, and shown as such.
+        OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { contains: AI_ROOM_PHOTO_KEY_MARK } } }],
       },
       orderBy: [{ sequenceNumber: 'asc' }, { capturedAt: 'asc' }],
       take: MAX_ROOM_PHOTOS,

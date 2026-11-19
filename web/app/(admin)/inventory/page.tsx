@@ -106,7 +106,7 @@ export default function InventoryPage() {
           ) : !stock.data ? (
             <DataTableSkeleton columns={STOCK_COLUMNS} label="Loading item codes" rows={6} />
           ) : (
-            <ItemCodesTab canManage={canManage} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} />
+            <ItemCodesTab canManage={canManage} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} lineTypes={stock.data.lineTypes} />
           )}
         </TabsContent>
         <TabsContent value="withdrawals">
