@@ -555,6 +555,8 @@ export interface AdminInspection {
   id: string;
   status: AdminInspectionStatus;
   inspectionType: InspectionType;
+  /** The maintenance app's work order number, on a visit it handed over (source WORK_ORDER). */
+  workOrderNumber?: number | null;
   baselineInspectionId?: string | null;
   baselineInspection?: {
     id: string;

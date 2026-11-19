@@ -4,6 +4,7 @@ import {
   AreaEnvironment,
   FindingRejectReason,
   FindingType,
+  InspectionSource,
   InspectionType,
   Severity,
   SkillRequirementLevel,
@@ -100,6 +101,11 @@ export class InspectionListQueryDto extends PaginationDto {
   @IsOptional() @IsUUID() propertyId?: string;
   @IsOptional() @IsUUID() technicianId?: string;
   @IsOptional() @IsEnum(InspectionType) inspectionType?: InspectionType;
+  /**
+   * Where the visit came from. `WORK_ORDER` is the repair work the maintenance
+   * app handed over for the in-house crews: the Work orders page lists those.
+   */
+  @IsOptional() @IsEnum(InspectionSource) source?: InspectionSource;
   @IsOptional() @IsIn(['ASSIGNED', 'UNASSIGNED']) assignmentStatus?: string;
   /**
    * Where the visit stands, in the office's words (`VisitState`): Scheduled,
