@@ -90,6 +90,20 @@ export interface QuarterCoverageProperty {
    * Unscheduled list or booked. A person should cancel them in Jobber.
    */
   previousLeaseOpen: number;
+  /**
+   * Its enrolled leases with no stop in this quarter's plan: what "Add to the
+   * quarter" would add. A lease that joined after the quarter was built.
+   */
+  missingLeases: number;
+}
+
+/** What adding a property to a quarter did (`POST quarters/:planId/properties/:buildingId`). */
+export interface AddToQuarterResult {
+  planId: string;
+  /** The stops made, one for each of its enrolled leases that had none, with no day yet. */
+  added: string[];
+  /** Its leases' stops already in the plan, left as they were. */
+  kept: string[];
 }
 
 /** Out of the package now, with a visit this quarter still going ahead. */

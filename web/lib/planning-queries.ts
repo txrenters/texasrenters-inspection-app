@@ -1,6 +1,12 @@
 'use client';
 
-import type { GroupTemplateChanges, GroupTemplateOp, QuarterCoverage, QuarterPackageChanges } from '@texasrenters/shared';
+import type {
+  AddToQuarterResult,
+  GroupTemplateChanges,
+  GroupTemplateOp,
+  QuarterCoverage,
+  QuarterPackageChanges,
+} from '@texasrenters/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
@@ -832,6 +838,13 @@ export function usePlanningMutations() {
     // this is what carries it the last step, published visits included.
     refreshFilterSizes: useMutation({
       mutationFn: (planId: string) => post<FilterSizeRefresh>(`/quarters/${planId}/filter-sizes`),
+      onSuccess: refresh,
+    }),
+    // A property in the package the quarter has no visit for, given one with no
+    // day yet, from the Coverage tab (the office, 2026-11-20).
+    addToQuarter: useMutation({
+      mutationFn: ({ planId, buildingId }: { planId: string; buildingId: string }) =>
+        post<AddToQuarterResult>(`/quarters/${planId}/properties/${buildingId}`),
       onSuccess: refresh,
     }),
     setType: useMutation({

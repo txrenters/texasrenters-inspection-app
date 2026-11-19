@@ -45,10 +45,16 @@ type Show = 'ALL' | CoverageGroup;
 export function QuarterCoverageView({
   coverage,
   onOpenStop,
+  onAdd,
+  adding = null,
 }: {
   coverage: QuarterCoverage;
   /** Opens a plan visit's window, where it is given a day or fixed. */
   onOpenStop?: (stopId: string) => void;
+  /** Gives a property its missing visit in the quarter; absent for someone who cannot change the plan. */
+  onAdd?: (buildingId: string) => void;
+  /** The property being added, while it is. */
+  adding?: string | null;
 }) {
   const [show, setShow] = useState<Show>('ALL');
   const [search, setSearch] = useState('');
@@ -162,7 +168,14 @@ export function QuarterCoverageView({
             </TableHeader>
             <TableBody>
               {listed.map((property) => (
-                <CoverageRow key={property.buildingId} onOpenStop={onOpenStop} property={property} />
+                <CoverageRow
+                  adding={adding === property.buildingId}
+                  key={property.buildingId}
+                  onAdd={onAdd}
+                  onOpenStop={onOpenStop}
+                  property={property}
+                  quarter={quarter}
+                />
               ))}
             </TableBody>
           </Table>
@@ -178,7 +191,19 @@ export function QuarterCoverageView({
   );
 }
 
-function CoverageRow({ property, onOpenStop }: { property: QuarterCoverageProperty; onOpenStop?: (stopId: string) => void }) {
+function CoverageRow({
+  property,
+  quarter,
+  onOpenStop,
+  onAdd,
+  adding,
+}: {
+  property: QuarterCoverageProperty;
+  quarter: string;
+  onOpenStop?: (stopId: string) => void;
+  onAdd?: (buildingId: string) => void;
+  adding: boolean;
+}) {
   const { visit } = property;
   const badge = DETAIL_BADGE[property.detail];
   const facts = [property.city, zoneLabel(property.zone), visitTypeLabel(visit?.inspectionType)].filter(Boolean).join(' · ');
@@ -205,6 +230,16 @@ function CoverageRow({ property, onOpenStop }: { property: QuarterCoverageProper
         <p className="text-sm">{nextStep(property)}</p>
         {notes.length ? <p className="text-muted-foreground text-xs">{notes.join(' · ')}</p> : null}
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+          {onAdd && property.missingLeases ? (
+            <button
+              className="text-primary font-medium hover:underline disabled:opacity-60"
+              disabled={adding}
+              onClick={() => onAdd(property.buildingId)}
+              type="button"
+            >
+              {adding ? 'Adding…' : `Add to ${quarter}`}
+            </button>
+          ) : null}
           {fixHere ? (
             <button className="text-primary font-medium hover:underline" onClick={() => onOpenStop!(visit!.stopId!)} type="button">
               Open in the plan
@@ -215,7 +250,7 @@ function CoverageRow({ property, onOpenStop }: { property: QuarterCoverageProper
               Open visit
             </Link>
           ) : null}
-          {property.detail === 'NOT_PLANNED' ? (
+          {property.detail === 'NOT_PLANNED' && !onAdd ? (
             <Link className="text-primary font-medium hover:underline" href="/group-maker">
               Find it a group
             </Link>

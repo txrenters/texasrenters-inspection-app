@@ -96,13 +96,15 @@ export function nextStep(property: QuarterCoverageProperty): string {
         ? 'Planned for the previous lease, with no day: give it a day for the new one'
         : 'On Jobber’s Unscheduled list: give it a day';
     case 'NOT_SENT':
-      return 'In the plan but never booked: publish the rest';
+      return visit?.scheduledOn
+        ? 'Has a day but was never booked: publish the rest'
+        : 'In the plan with no day: give it a day, then publish the rest';
     case 'EXCLUDED':
       return visit?.note ?? 'Taken out of this quarter';
     default:
       return property.firstOnReport
-        ? `On the tenant report since ${formatDate(property.firstOnReport)}, after the quarter was built: find it a group`
-        : 'Not in this quarter’s plan: find it a group';
+        ? `On the tenant report since ${formatDate(property.firstOnReport)}, after the quarter was built`
+        : 'Not in this quarter’s plan';
   }
 }
 
@@ -114,6 +116,11 @@ export function extraNotes(property: QuarterCoverageProperty): string[] {
       ? `${property.previousLeaseOpen === 1 ? 'A visit' : `${property.previousLeaseOpen} visits`} for an ended lease still waiting in Jobber: cancel ${property.previousLeaseOpen === 1 ? 'it' : 'them'}`
       : null,
     property.leases > 1 ? `${property.leases} enrolled leases` : null,
+    // A visit for the property, but not for every lease it has now: a new
+    // tenant, or a unit the quarter left out. Whether it needs one is the office's call.
+    property.missingLeases && property.group !== 'NONE'
+      ? `${property.missingLeases === 1 ? 'Its current lease has' : `${property.missingLeases} of its leases have`} no visit this quarter`
+      : null,
   ].filter((note): note is string => Boolean(note));
 }
 
