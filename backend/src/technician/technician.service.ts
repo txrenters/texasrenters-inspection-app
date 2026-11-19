@@ -29,9 +29,9 @@ import {
   servicesReportProblems,
   SERVICE_PHOTO_AREA,
   SERVICE_PHOTO_AREA_NAMES,
+  servicesNotDoneReason,
   servicesToReschedule,
   technicianJobNotes,
-  VISIT_SERVICE_LABEL,
   type BookedFilter,
   type ReportableVisitService,
   type VisitFilterOutcome,
@@ -1507,9 +1507,7 @@ export class TechnicianService {
           inspectionId: id,
           kind: RescheduleRequestKind.SERVICES_NOT_DONE,
           services: toRebook,
-          reason: toRebook
-            .map((service) => `${VISIT_SERVICE_LABEL[service]}: ${report?.services[service]?.reason?.trim() || 'not done'}`)
-            .join('; '),
+          reason: servicesNotDoneReason(report, toRebook),
           requestedById: user.id,
         });
       else

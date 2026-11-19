@@ -52,6 +52,7 @@ import {
   useInspectionAudit,
   useInspectionFindings,
 } from '@/lib/queries';
+import { reschedulesHref } from '@/lib/reschedule-queries';
 import { useUrlState } from '@/lib/url-state';
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
@@ -144,6 +145,8 @@ function InspectionDetail() {
    * off that directly is what threw "Cannot read properties of undefined".
    */
   const current = (item.assignments ?? []).find((assignment) => assignment.isCurrent);
+  // The queue opens searched for this visit's property, on whichever list it is.
+  const address = item.propertywareBuilding?.addressLine1 ?? item.propertywareBuilding?.name ?? null;
   /**
    * The visit is over: submitted, or cancelled.
    *
@@ -221,7 +224,7 @@ function InspectionDetail() {
         // What the technician was sent to do stays readable after the visit:
         // the office reads it against what was done (2026-11-17).
         instructionsOpen
-        rescheduleHref={permissions.hasAny('inspections:manage', 'planning:publish') ? '/reschedules' : undefined}
+        rescheduleHref={permissions.hasAny('inspections:manage', 'planning:publish') ? reschedulesHref(address) : undefined}
         technicianName={current?.technician?.displayName ?? null}
       />
   );
@@ -375,7 +378,7 @@ function InspectionDetail() {
               This visit stays Partially complete until that is done on a return visit, or the
               office takes it off the job in Reschedules.
               {permissions.hasAny('inspections:manage', 'planning:publish') ? (
-                <Link className="text-foreground mt-1 block font-medium underline underline-offset-4" href="/reschedules">
+                <Link className="text-foreground mt-1 block font-medium underline underline-offset-4" href={reschedulesHref(address)}>
                   Open Reschedules
                 </Link>
               ) : null}

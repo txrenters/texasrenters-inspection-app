@@ -5,7 +5,9 @@ import {
   jobberBookingProblems,
   nextRescheduleMonday,
   rebookingFromVisit,
+  rescheduleJobType,
   rescheduleServices,
+  servicesNotDoneReason,
   suggestedRescheduleDay,
   type JobberBookingInput,
 } from '../src/index.js';
@@ -103,5 +105,40 @@ describe('booking a visit again from the one that asked', () => {
     });
 
     expect(again).toMatchObject({ zone: null, benefitPackage: false, filters: [], tenants: [] });
+  });
+});
+
+describe('the job a request books again', () => {
+  const work = ['AC filter change', 'Pest control', 'Occupied inspection'];
+
+  it('is only the service left when the rest of the visit was done', () => {
+    expect(rescheduleJobType({ kind: 'SERVICES_NOT_DONE', services: ['pestControl'], work })).toBe('Pest control');
+    expect(rescheduleJobType({ kind: 'SERVICES_NOT_DONE', services: ['filterChange'], work })).toBe('AC filter change');
+    expect(rescheduleJobType({ kind: 'SERVICES_NOT_DONE', services: ['filterChange', 'pestControl'], work })).toBe(
+      'AC filter change + Pest control',
+    );
+  });
+
+  it("is the whole visit's job when the whole visit goes again", () => {
+    expect(rescheduleJobType({ kind: 'NO_ACCESS', services: ['pestControl'], work })).toBe(
+      'AC filter change + Pest control + Occupied inspection',
+    );
+    expect(rescheduleJobType({ kind: 'BEFORE_VISIT', services: [], work: ['Move-out inspection'] })).toBe(
+      'Move-out inspection',
+    );
+  });
+});
+
+describe('why each service is to be booked again', () => {
+  it("reads the technician's reason, and says not done where none was given", () => {
+    expect(
+      servicesNotDoneReason(
+        {
+          services: { pestControl: { done: false, reason: ' Tenant refused ', reschedule: true }, filterChange: { done: false, reschedule: true } },
+          filtersInstalled: [],
+        } as never,
+        ['filterChange', 'pestControl'],
+      ),
+    ).toBe('AC filter change: not done; Pest control: Tenant refused');
   });
 });

@@ -1,4 +1,5 @@
 import {
+  InspectionStatus,
   JobberOutboundKind,
   JobberOutboundStatus,
   RescheduleRequestKind,
@@ -7,6 +8,17 @@ import {
   type InspectionType,
   type Prisma,
 } from '@prisma/client';
+import {
+  COULD_NOT_GET_IN_PREFIX,
+  REPORTABLE_VISIT_SERVICES,
+  servicesNotDoneReason,
+  servicesToReschedule,
+  type ReportableVisitService,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
+
+import { DONE_INSPECTION_STATUSES } from './inspection-done';
+import type { PrismaService } from './prisma.service';
 
 /**
  * A visit somebody has to book again, as rows (2026-10-21).
@@ -319,4 +331,174 @@ export async function settleRebookedInJobber(
     },
   });
   return request.id;
+}
+
+/**
+ * How far back the sweep looks for a visit marked to book again that never
+ * reached the queue: as far as a rebooking made in Jobber is read as an
+ * answer, so the two agree on what is still recent.
+ */
+export const MISSED_REQUEST_WINDOW_DAYS = REBOOKED_IN_JOBBER_WINDOW_DAYS;
+
+/** The most visits one sweep opens requests for; the next sweep takes the rest. */
+export const MISSED_REQUEST_BATCH = 200;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The request a done visit's own account asks for, or null when it asks for
+ * nothing: the visit nobody could get into, whole; else the services the
+ * technician left "not done, book it again" -- the same request the
+ * technician's report opens (`TechnicianService`).
+ */
+export function missedRequestFor(visit: {
+  servicesReport: unknown;
+  completionBlockedReason: string | null;
+}): { kind: RescheduleRequestKind; services: ReportableVisitService[]; reason: string } | null {
+  const report = visit.servicesReport as VisitServicesReport | null;
+  const services = servicesToReschedule(report);
+  const blocked = visit.completionBlockedReason?.trim() ?? '';
+  if (blocked.startsWith(COULD_NOT_GET_IN_PREFIX))
+    return {
+      kind: RescheduleRequestKind.NO_ACCESS,
+      services,
+      // "Could not get in: Locked gate" was written from the technician's reason.
+      reason: blocked.slice(COULD_NOT_GET_IN_PREFIX.length).replace(/^[\s:.-]+/, '').trim() || COULD_NOT_GET_IN_PREFIX,
+    };
+  if (!services.length) return null;
+  return { kind: RescheduleRequestKind.SERVICES_NOT_DONE, services, reason: servicesNotDoneReason(report, services) };
+}
+
+/**
+ * Opens the requests that done visits asked for and the queue never had
+ * (2026-11-19: "some of the reschedule jobs does not appear on the reschedule
+ * page").
+ *
+ * A request is opened by the technician's report -- could not get in, or a
+ * service left "book it again" at submission. A visit closed any other way kept
+ * the mark in its report, and the job page said "Pest control to reschedule"
+ * beside a link to a queue that did not have it: every visit submitted before
+ * the queue existed (2026-10-22), and one the office completed by hand while
+ * the technician's checklist was saved part-way. This finds them all, whichever
+ * way they were closed, and any way added later.
+ *
+ * Only a visit with no request at all -- one the office dismissed or answered
+ * is never asked again -- and only a recent one. A visit of the same kind at
+ * the same property, booked after this one asked and within the window, is the
+ * rebooking somebody already made, as the sync reads one made in Jobber
+ * (`settleRebookedInJobber`): the request is opened answered by it, so it is on
+ * the queue's Answered list and nobody books a second one.
+ *
+ * Asked when the technician asked, so the queue keeps its oldest-first order.
+ * Writes nothing to Jobber, whose completion note already said it.
+ */
+export async function openMissedRescheduleRequests(
+  db: Pick<PrismaService, 'inspection' | '$transaction'>,
+  now: Date = new Date(),
+): Promise<{ opened: number; bookedAlready: number }> {
+  const visits = await db.inspection.findMany({
+    where: {
+      status: { in: DONE_INSPECTION_STATUSES },
+      scheduledAt: { gte: new Date(now.getTime() - MISSED_REQUEST_WINDOW_DAYS * DAY_MS) },
+      rescheduleRequests: { none: {} },
+      OR: [
+        ...REPORTABLE_VISIT_SERVICES.map((service) => ({
+          servicesReport: { path: ['services', service, 'reschedule'], equals: true },
+        })),
+        { completionBlockedReason: { startsWith: COULD_NOT_GET_IN_PREFIX } },
+      ],
+    },
+    orderBy: { scheduledAt: 'asc' },
+    take: MISSED_REQUEST_BATCH,
+    select: {
+      id: true,
+      organizationId: true,
+      inspectionType: true,
+      scheduledAt: true,
+      submittedAt: true,
+      completedAt: true,
+      servicesReport: true,
+      completionBlockedReason: true,
+      propertywareBuildingId: true,
+      propertywareUnitId: true,
+      assignments: { where: { isCurrent: true }, take: 1, select: { technicianId: true } },
+    },
+  });
+
+  let opened = 0;
+  let bookedAlready = 0;
+  for (const visit of visits) {
+    const account = missedRequestFor(visit);
+    if (!account) continue;
+    const askedAt = visit.submittedAt ?? visit.completedAt ?? visit.scheduledAt;
+    const outcome = await db.$transaction(async (tx) => {
+      // Read again inside: a technician resubmitting this minute opens their own.
+      const already = await tx.rescheduleRequest.findFirst({
+        where: { organizationId: visit.organizationId, inspectionId: visit.id },
+        select: { id: true },
+      });
+      if (already) return null;
+      const rebook = visit.propertywareBuildingId
+        ? await tx.inspection.findFirst({
+            where: {
+              organizationId: visit.organizationId,
+              id: { not: visit.id },
+              propertywareBuildingId: visit.propertywareBuildingId,
+              propertywareUnitId: visit.propertywareUnitId,
+              inspectionType: visit.inspectionType,
+              status: { not: InspectionStatus.CANCELLED },
+              scheduledAt: {
+                gte: visit.scheduledAt,
+                lte: new Date(visit.scheduledAt.getTime() + REBOOKED_IN_JOBBER_WINDOW_DAYS * DAY_MS),
+              },
+              createdAt: { gte: askedAt },
+            },
+            orderBy: { scheduledAt: 'asc' },
+            select: { id: true, jobberVisitId: true },
+          })
+        : null;
+      const request = await tx.rescheduleRequest.create({
+        data: {
+          organizationId: visit.organizationId,
+          inspectionId: visit.id,
+          kind: account.kind,
+          services: account.services,
+          reason: account.reason,
+          requestedById: visit.assignments[0]?.technicianId ?? null,
+          createdAt: askedAt,
+          ...(rebook
+            ? {
+                status: RescheduleRequestStatus.DONE,
+                outcome: RescheduleRequestOutcome.REBOOKED,
+                resolvedInJobber: Boolean(rebook.jobberVisitId),
+                rebookInspectionId: rebook.id,
+                resolvedAt: now,
+              }
+            : {}),
+        },
+        select: { id: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: visit.organizationId,
+          actorUserId: null,
+          action: 'RESCHEDULE_REQUESTED',
+          entityType: 'Inspection',
+          entityId: visit.id,
+          metadata: {
+            rescheduleRequestId: request.id,
+            kind: account.kind,
+            services: account.services,
+            // Not asked just now: found in the visit's report by the sweep.
+            foundBySweep: true,
+            ...(rebook ? { bookedAgainAs: rebook.id } : {}),
+          },
+        },
+      });
+      return rebook ? 'booked' : 'opened';
+    });
+    if (outcome === 'opened') opened += 1;
+    if (outcome === 'booked') bookedAlready += 1;
+  }
+  return { opened, bookedAlready };
 }

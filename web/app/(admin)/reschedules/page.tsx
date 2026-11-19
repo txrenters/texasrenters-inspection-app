@@ -2,7 +2,7 @@
 
 import {
   RESCHEDULE_KIND_LABEL,
-  VISIT_SERVICE_LABEL,
+  RESCHEDULE_REQUEST_FILTERS,
   type RescheduleRequestFilter,
   type RescheduleRequestList,
   type RescheduleRequestView,
@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { useConsoleShell } from '@/components/console-shell-context';
+import { ListToolbar } from '@/components/list-toolbar';
 import { ReschedulesSummary } from '@/components/summaries/directory-summaries';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
@@ -44,6 +45,8 @@ import {
   useMoveRescheduleRequest,
   useRescheduleRequests,
 } from '@/lib/reschedule-queries';
+import { useUrlState } from '@/lib/url-state';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 /**
  * The visits to book again (2026-10-21).
@@ -59,13 +62,24 @@ function typeName(type: string) {
   return INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
 }
 
-/** What is asked for: the services still to do, or the visit itself -- with what it carried. */
-function asked(request: RescheduleRequestView) {
-  if (request.kind === 'BEFORE_VISIT') return 'Another day';
-  const services = request.services.map((service) => VISIT_SERVICE_LABEL[service]);
-  if (request.kind === 'SERVICES_NOT_DONE' && services.length) return services.join(', ');
-  const visit = `The whole ${typeName(request.inspection.inspectionType).toLowerCase()} visit`;
-  return services.length ? `${visit}, with ${services.join(' and ').toLowerCase().replace('ac ', 'AC ')}` : visit;
+/** Only what was left, or the whole visit: how much of it goes again. */
+function servicesOnly(request: RescheduleRequestView) {
+  return request.kind === 'SERVICES_NOT_DONE' && request.services.length > 0;
+}
+
+/** Under the job type: what else the visit was, and that it was done. */
+function jobScope(request: RescheduleRequestView) {
+  return servicesOnly(request)
+    ? `The rest of the ${typeName(request.inspection.inspectionType).toLowerCase()} visit was done`
+    : 'The whole visit';
+}
+
+/** "AC filter change, pest control and occupied inspection": the job type mid-sentence. */
+function jobInSentence(jobType: string) {
+  const parts = jobType
+    .split(' + ')
+    .map((part) => (/^[A-Z]{2,}\b/.test(part) ? part : part.charAt(0).toLowerCase() + part.slice(1)));
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : (parts[0] ?? '');
 }
 
 /** Where the request stands, in a word and a line. */
@@ -104,30 +118,36 @@ const columns: Array<Column<RescheduleRequestView>> = [
     cell: (request) => (
       <div className="grid min-w-36">
         <span className="font-medium text-pretty">{request.inspection.address ?? 'An address not on file'}</span>
-        <span className="text-muted-foreground text-xs">
-          {[typeName(request.inspection.inspectionType), request.inspection.city].filter(Boolean).join(' · ')}
-        </span>
+        {request.inspection.city ? (
+          <span className="text-muted-foreground text-xs">{request.inspection.city}</span>
+        ) : null}
       </div>
     ),
   },
   {
-    key: 'asked',
-    header: 'Asked',
-    className: 'max-w-sm',
+    // What goes again (the office, 2026-11-19): "Pest control" when only that
+    // was left, and the visit's whole job when the whole visit goes again.
+    key: 'job',
+    header: 'Job type',
+    className: 'max-w-xs',
     cell: (request) => (
       <div className="grid gap-0.5">
-        <span className="font-medium">{asked(request)}</span>
-        <span className="text-muted-foreground text-xs text-pretty">{request.reason}</span>
+        <span className="font-medium text-pretty">{request.jobType}</span>
+        <span className="text-muted-foreground text-xs text-pretty">{jobScope(request)}</span>
+        {/* A phone has no Why column: the reason reads here instead. */}
+        <span className="text-xs text-pretty md:hidden">{request.reason}</span>
       </div>
     ),
   },
   {
     key: 'why',
-    header: 'From',
+    header: 'Why',
     hideBelow: 'md',
+    className: 'max-w-sm',
     cell: (request) => (
-      <div className="grid">
+      <div className="grid gap-0.5">
         <span>{RESCHEDULE_KIND_LABEL[request.kind]}</span>
+        <span className="text-muted-foreground text-xs text-pretty">{request.reason}</span>
         <span className="text-muted-foreground text-xs">
           {[request.requestedBy?.displayName, formatRelative(request.requestedAt)].filter(Boolean).join(' · ')}
         </span>
@@ -173,12 +193,21 @@ type Answering = { request: RescheduleRequestView; answer: 'move' | 'book' | 'di
 /** Radix's select has no empty value: this one stands for "nobody". */
 const NOBODY = 'nobody';
 
+/** The list a link or the address bar names, else the open one. */
+function listOf(value: string): RescheduleRequestFilter {
+  return (RESCHEDULE_REQUEST_FILTERS as readonly string[]).includes(value) ? (value as RescheduleRequestFilter) : 'open';
+}
+
 export default function ReschedulesPage() {
   const { has } = usePermissions();
   const canManage = has('inspections:manage');
   const jobber = useConsoleShell() === 'jobber';
-  const [filter, setFilter] = useState<RescheduleRequestFilter>('open');
-  const requests = useRescheduleRequests(filter);
+  // In the address, so the job page's "Open Reschedules" can open it searched for its visit.
+  const [state, setState, reset] = useUrlState({ filter: 'open', q: '' });
+  const filter = listOf(state.filter);
+  const search = useDebouncedValue(state.q);
+  const searching = state.q.trim() !== search.trim();
+  const requests = useRescheduleRequests(filter, true, search);
   const [answering, setAnswering] = useState<Answering | null>(null);
 
   const header = (
@@ -206,7 +235,7 @@ export default function ReschedulesPage() {
     />
   );
 
-  if (requests.isLoading)
+  if (requests.isLoading && !requests.data)
     return (
       <>
         {header}
@@ -222,22 +251,54 @@ export default function ReschedulesPage() {
     );
 
   const data = requests.data!;
+  const term = state.q.trim();
+  const openCount = data.counts.open + data.counts.sending;
+  // Older servers answer without it; the tab then shows no figure rather than a wrong one.
+  const closedCount = data.counts.closed as number | undefined;
+  const otherCount = filter === 'open' ? closedCount : openCount;
+  const busy = searching || requests.isPlaceholderData;
+  const shown = data.items.length.toLocaleString();
+  const resultLabel = busy
+    ? 'Searching reschedules…'
+    : filter === 'open'
+      ? `${shown} open`
+      : closedCount !== undefined && closedCount > data.items.length
+        ? `The newest ${shown} of ${closedCount.toLocaleString()} answered`
+        : `${shown} answered`;
   return (
     <>
       {header}
       {jobber ? <ReschedulesSummary /> : null}
       <div className="grid gap-4">
-        <Tabs onValueChange={(value) => setFilter(value as RescheduleRequestFilter)} value={filter}>
+        <Tabs onValueChange={(value) => setState({ filter: listOf(value) })} value={filter}>
           <TabsList>
             <TabsTrigger value="open">
               Open{' '}
-              <span className="text-muted-foreground font-mono text-xs tabular-nums">
-                {(data.counts.open + data.counts.sending).toLocaleString()}
-              </span>
+              <span className="text-muted-foreground font-mono text-xs tabular-nums">{openCount.toLocaleString()}</span>
             </TabsTrigger>
-            <TabsTrigger value="closed">Answered</TabsTrigger>
+            <TabsTrigger value="closed">
+              Answered
+              {closedCount === undefined ? null : (
+                <>
+                  {' '}
+                  <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                    {closedCount.toLocaleString()}
+                  </span>
+                </>
+              )}
+            </TabsTrigger>
           </TabsList>
         </Tabs>
+        <ListToolbar
+          heading={filter === 'open' ? 'Open reschedules' : 'Answered reschedules'}
+          onClear={reset}
+          onSearch={(q) => setState({ q })}
+          pending={searching}
+          resultLabel={resultLabel}
+          search={state.q}
+          searchLabel="Search address, technician, reason or job type"
+          searchPlaceholder="Search reschedules…"
+        />
         {data.items.length ? (
           <DataTable
             actions={
@@ -261,13 +322,30 @@ export default function ReschedulesPage() {
         ) : (
           <EmptyState
             description={
-              filter === 'open'
-                ? 'Nothing is waiting. A request appears here when a technician asks for a visit to be booked again.'
-                : 'Nothing has been answered yet.'
+              term
+                ? otherCount
+                  ? `Nothing ${filter === 'open' ? 'open' : 'answered'} matches "${term}". ${otherCount.toLocaleString()} ${
+                      filter === 'open' ? 'answered' : 'open'
+                    } ${otherCount === 1 ? 'request does' : 'requests do'}.`
+                  : `No request matches "${term}".`
+                : filter === 'open'
+                  ? 'Nothing is waiting. A request appears here when a technician asks for a visit to be booked again.'
+                  : 'Nothing has been answered yet.'
             }
             icon={CalendarCheckIcon}
-            title={filter === 'open' ? 'No visits to book again' : 'No answered requests'}
-          />
+            title={term ? 'No reschedules match' : filter === 'open' ? 'No visits to book again' : 'No answered requests'}
+          >
+            {/* Where a search found it on the other list, one press goes there. */}
+            {term && otherCount ? (
+              <Button onClick={() => setState({ filter: filter === 'open' ? 'closed' : 'open' })} variant="outline">
+                {filter === 'open' ? 'Show answered' : 'Show open'}
+              </Button>
+            ) : term ? (
+              <Button onClick={reset} variant="outline">
+                Clear search
+              </Button>
+            ) : null}
+          </EmptyState>
         )}
       </div>
 
@@ -346,6 +424,7 @@ function DayDialog({
   const pending = move.isPending || book.isPending;
   const today = businessToday();
   const type = typeName(request.inspection.inspectionType).toLowerCase();
+  const job = jobInSentence(request.jobType);
 
   const submit = () => {
     const done = {
@@ -380,7 +459,7 @@ function DayDialog({
               ? request.inspection.inJobber
                 ? 'Moved here and in Jobber, with its plan stop.'
                 : 'Moved here, with its plan stop.'
-              : `A new ${type} visit for ${asked(request).toLowerCase()}${
+              : `A new ${servicesOnly(request) ? `${type} visit` : 'visit'} for ${job}${
                   request.inspection.inJobber ? ', booked in Jobber too' : ''
                 }.`}
           </DialogDescription>

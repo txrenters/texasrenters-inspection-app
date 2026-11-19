@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Post, Query, Req, 
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   MAX_RESCHEDULE_REASON,
+  MAX_RESCHEDULE_SEARCH,
   RESCHEDULE_REQUEST_FILTERS,
   type RescheduleRequestFilter,
 } from '@texasrenters/shared';
@@ -13,6 +14,8 @@ import { RescheduleRequestsService } from './reschedule-requests.service';
 export class RescheduleRequestListQueryDto {
   /** What is still with the office, or what was answered. */
   @IsOptional() @IsIn(RESCHEDULE_REQUEST_FILTERS) filter?: RescheduleRequestFilter;
+  /** An address, a name, a reason or a job, in either list. */
+  @IsOptional() @IsString() @MaxLength(MAX_RESCHEDULE_SEARCH) q?: string;
 }
 
 export class MoveRescheduleRequestDto {
@@ -48,7 +51,7 @@ export class RescheduleRequestsController {
 
   @Get()
   list(@Req() request: AuthenticatedRequest, @Query() query: RescheduleRequestListQueryDto) {
-    return this.service.list(request.user, query.filter ?? 'open');
+    return this.service.list(request.user, query.filter ?? 'open', query.q);
   }
 
   /** The visit to another day, here and in Jobber. */

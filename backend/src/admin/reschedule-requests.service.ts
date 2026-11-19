@@ -1,10 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   booksAnyService,
+  inspectionWords,
   isBookableInspectionType,
+  jobWork,
   rebookingFromVisit,
+  REPORTABLE_VISIT_SERVICES,
+  rescheduleJobType,
   rescheduleServices,
   suggestedRescheduleDay,
+  VISIT_SERVICE_LABEL,
   type BookAgainRescheduleRequestInput,
   type DismissRescheduleRequestInput,
   type MoveRescheduleRequestInput,
@@ -13,6 +18,7 @@ import {
   type RescheduleRequestView,
 } from '@texasrenters/shared';
 import {
+  InspectionType,
   JobberOutboundKind,
   RescheduleRequestKind,
   RescheduleRequestOutcome,
@@ -77,6 +83,10 @@ const requestSelect = {
       jobberVisitId: true,
       jobberJobId: true,
       jobberCompanionOfId: true,
+      // What the visit is for, so the queue can say which job goes again.
+      jobberVisitDetails: true,
+      jobberCompanionOf: { select: { inspectionType: true } },
+      jobberCompanions: { select: { inspectionType: true } },
       propertywareBuilding: { select: { name: true, addressLine1: true, city: true } },
       assignments: {
         where: { isCurrent: true },
@@ -100,13 +110,15 @@ function inJobber(inspection: RequestRow['inspection']) {
 
 function view(row: RequestRow, today: string): RescheduleRequestView {
   const preferredOn = row.preferredOn ? day(row.preferredOn) : null;
+  const services = rescheduleServices(row.services);
   return {
     id: row.id,
     kind: row.kind,
     status: row.status,
     outcome: row.outcome,
     resolvedInJobber: row.resolvedInJobber,
-    services: rescheduleServices(row.services),
+    services,
+    jobType: rescheduleJobType({ kind: row.kind, services, work: jobWork(row.inspection) }),
     reason: row.reason,
     preferredOn,
     requestedAt: row.createdAt.toISOString(),
@@ -133,6 +145,29 @@ function view(row: RequestRow, today: string): RescheduleRequestView {
   };
 }
 
+/**
+ * The requests a search finds (the office, 2026-11-19: "there's no search for
+ * the reschedule"): by the property's address, name or city, the technician or
+ * who asked, the reason, or the job -- "pest" finds every request with pest
+ * control to do again, "occupied" every occupied visit.
+ */
+function searchWhere(search: string): Prisma.RescheduleRequestWhereInput {
+  const text = { contains: search, mode: 'insensitive' as const };
+  const words = search.toLowerCase();
+  const services = REPORTABLE_VISIT_SERVICES.filter((service) => VISIT_SERVICE_LABEL[service].toLowerCase().includes(words));
+  const types = Object.values(InspectionType).filter((type) => inspectionWords(type).toLowerCase().includes(words));
+  return {
+    OR: [
+      { reason: text },
+      { inspection: { propertywareBuilding: { is: { OR: [{ addressLine1: text }, { name: text }, { city: text }] } } } },
+      { inspection: { assignments: { some: { isCurrent: true, technician: { displayName: text } } } } },
+      { requestedBy: { is: { displayName: text } } },
+      ...(services.length ? [{ services: { hasSome: services } }] : []),
+      ...(types.length ? [{ inspection: { inspectionType: { in: types } } }] : []),
+    ],
+  };
+}
+
 @Injectable()
 export class RescheduleRequestsService {
   constructor(
@@ -140,13 +175,20 @@ export class RescheduleRequestsService {
     @Inject(AdminService) private readonly admin: AdminService,
   ) {}
 
-  async list(user: AuthenticatedUser, filter: RescheduleRequestFilter = 'open'): Promise<RescheduleRequestList> {
+  async list(
+    user: AuthenticatedUser,
+    filter: RescheduleRequestFilter = 'open',
+    search = '',
+  ): Promise<RescheduleRequestList> {
     this.requireQueue(user);
     const open = filter === 'open';
+    const term = search.trim();
+    // Both lists and their counts read the same search, so a tab's figure is what it lists.
+    const matching = { organizationId: user.organizationId, ...(term ? searchWhere(term) : {}) };
     const [rows, counts] = await Promise.all([
       this.prisma.rescheduleRequest.findMany({
         where: {
-          organizationId: user.organizationId,
+          ...matching,
           status: open
             ? { in: OPEN_RESCHEDULE_STATUSES }
             : { in: [RescheduleRequestStatus.DONE, RescheduleRequestStatus.DISMISSED] },
@@ -156,11 +198,7 @@ export class RescheduleRequestsService {
         ...(open ? {} : { take: CLOSED_LIMIT }),
         select: requestSelect,
       }),
-      this.prisma.rescheduleRequest.groupBy({
-        by: ['status'],
-        where: { organizationId: user.organizationId, status: { in: OPEN_RESCHEDULE_STATUSES } },
-        _count: { _all: true },
-      }),
+      this.prisma.rescheduleRequest.groupBy({ by: ['status'], where: matching, _count: { _all: true } }),
     ]);
     const count = (status: RescheduleRequestStatus) =>
       counts.find((row) => row.status === status)?._count._all ?? 0;
@@ -168,7 +206,11 @@ export class RescheduleRequestsService {
     const today = businessDate();
     return {
       items: rows.map((row) => view(row, today)),
-      counts: { open: count(RescheduleRequestStatus.OPEN), sending: count(RescheduleRequestStatus.SENDING) },
+      counts: {
+        open: count(RescheduleRequestStatus.OPEN),
+        sending: count(RescheduleRequestStatus.SENDING),
+        closed: count(RescheduleRequestStatus.DONE) + count(RescheduleRequestStatus.DISMISSED),
+      },
       jobberEditsPushed: config.pushEditsEnabled,
       jobberBookingEnabled: config.bookingEnabled,
     };

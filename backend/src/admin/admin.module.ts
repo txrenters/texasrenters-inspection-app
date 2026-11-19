@@ -83,6 +83,7 @@ import { InspectionNotesController } from './inspection-notes.controller';
 import { InspectionNotesService } from './inspection-notes.service';
 import { RescheduleRequestsController } from './reschedule-requests.controller';
 import { RescheduleRequestsService } from './reschedule-requests.service';
+import { RescheduleSweepScheduler } from './reschedule-sweep.scheduler';
 import { AuthModule } from '../auth/auth.module';
 import { MediaModule } from '../media/media.module';
 import { LocalIdentityProvider } from '../auth/local-identity.provider';
@@ -173,6 +174,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceFileStorageService,
     ReportShareService,
     RescheduleRequestsService,
+    RescheduleSweepScheduler,
     InvoicesService,
     InvoiceEditsService,
     InvoiceBatchService,
