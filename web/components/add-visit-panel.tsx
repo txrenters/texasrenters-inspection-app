@@ -1,12 +1,13 @@
 'use client';
 
 import { isFinishedStatus, type PropertyPosition } from '@texasrenters/shared';
-import { ArrowLeftIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
+import { ArrowLeftIcon, PlusIcon, SearchIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { SECTION_LABEL } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { humanize } from '@/lib/format';
@@ -94,6 +95,7 @@ export function AddVisitPanel({
   technicianId: string;
   technicianName: string;
 }) {
+  const openNewJob = useNewJob();
   const [query, setQuery] = useState('');
   const [assigning, setAssigning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,18 +293,19 @@ export function AddVisitPanel({
                         {property.city ? `, ${property.city}` : ''}
                       </span>
                     </button>
-                    {/* A new tab, so the map -- and the day being planned on it -- stays put. */}
-                    <a
-                      aria-label={`New visit at ${property.name}`}
-                      className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'h-7 gap-1 px-2.5 text-xs')}
-                      href={`/inspections/new?${new URLSearchParams({ propertyId: property.id, technicianId, date }).toString()}`}
-                      rel="noopener"
-                      target="_blank"
-                      title="Opens the full form in a new tab, filled in with this property, the technician and the day"
+                    {/* The New job panel beside the map, so the day being planned stays put (2026-11-20). */}
+                    <Button
+                      aria-label={`New job at ${property.name}`}
+                      className="h-7 gap-1 px-2.5 text-xs"
+                      onClick={() => openNewJob({ propertyId: property.id, technicianId, date, from: 'from the map' })}
+                      size="sm"
+                      title="Opens the New job panel with this property, the technician and the day"
+                      type="button"
+                      variant="outline"
                     >
+                      <PlusIcon aria-hidden className="size-3" />
                       New
-                      <ExternalLinkIcon aria-hidden className="size-3" />
-                    </a>
+                    </Button>
                   </li>
                 ))}
                 {matches.length > LISTED_PROPERTIES ? (

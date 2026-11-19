@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { JobberConnectionStatus, JobberOutboundStatus, UserRole } from '@prisma/client';
-import type { JobberDayComparison } from '@texasrenters/shared';
+import { InspectionStatus, JobberConnectionStatus, JobberOutboundStatus, UserRole } from '@prisma/client';
+import { jobKindsInOrder, type JobberDayComparison } from '@texasrenters/shared';
 
 import { businessDate, businessDayBounds, businessDayFromQuery } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
@@ -43,6 +43,19 @@ export class JobberDayService {
           jobberOutboundTasks: {
             where: { status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] } },
             select: { kind: true },
+          },
+          // Its job, and every live kind of work in it -- the companions this
+          // read leaves out too -- so the Schedule draws one card a job.
+          job: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              inspections: {
+                where: { status: { not: InspectionStatus.CANCELLED } },
+                select: { inspectionType: true },
+              },
+            },
           },
         },
       }),
@@ -126,6 +139,14 @@ export class JobberDayService {
           row.propertywareBuilding?.addressLine1 ?? row.propertywareBuilding?.name ?? 'Property snapshot',
         technician: row.assignments[0]?.technician ?? null,
         waitingKinds: row.jobberOutboundTasks.map((task) => task.kind),
+        job: row.job
+          ? {
+              id: row.job.id,
+              number: row.job.number,
+              title: row.job.title,
+              kinds: jobKindsInOrder(row.job.inspections.map((inspection) => inspection.inspectionType)),
+            }
+          : null,
       })),
       visits,
       linkedElsewhere: new Map(

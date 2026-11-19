@@ -216,4 +216,17 @@ describe('a day against Jobber', () => {
 
     expect(result.rows[0].waitingToSend).toBe(true);
   });
+
+  it("carries the inspection's job, so the Schedule draws one card a job (2026-11-20)", () => {
+    const job = { id: 'job-1', number: 'J-00042', title: 'Occupied + HVAC', kinds: ['HVAC', 'OCCUPIED'] };
+    const result = day({ inspections: [inspection({ job })] });
+
+    expect(result.rows[0].job).toEqual(job);
+  });
+
+  it('leaves the job empty for a visit booked before jobs, and for one only Jobber has', () => {
+    expect(day().rows[0].job).toBeNull();
+    const jobberOnly = day({ inspections: [], visits: [visit({ inspectionId: null, status: 'REJECTED' })] });
+    expect(jobberOnly.rows[0].job).toBeUndefined();
+  });
 });

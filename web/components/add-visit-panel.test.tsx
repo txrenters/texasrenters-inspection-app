@@ -9,6 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const unassigned = vi.hoisted(() => ({ items: [] as Partial<AdminInspection>[] }));
+// The New job panel is the shell's; here only whether it is asked to open, and with what.
+const openNewJob = vi.hoisted(() => vi.fn());
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => openNewJob }));
 vi.mock('@/lib/queries', () => ({
   useUnassignedOnDay: (_date: string, enabled: boolean) =>
     enabled
@@ -111,21 +114,21 @@ describe('the day’s unassigned visits', () => {
 });
 
 describe('searching for a property', () => {
-  it('lists the matches, shows them all on the map, and opens a prefilled form in a new tab', () => {
+  it('lists the matches, shows them all on the map, and opens the New job panel beside it, filled in', () => {
     const { props } = renderPanel({ canAssign: false });
 
     fireEvent.change(screen.getByPlaceholderText('Search a property or an address'), { target: { value: 'example' } });
 
     expect(props.onSearchChange).toHaveBeenLastCalledWith(['p1', 'p3']);
-    const links = screen.getAllByRole('link', { name: /new visit/i });
-    expect(links).toHaveLength(2);
-    expect(links[0]).toHaveAttribute('target', '_blank');
-    const href = new URL(links[0]!.getAttribute('href')!, 'https://console.example');
-    expect(href.pathname).toBe('/inspections/new');
-    expect(Object.fromEntries(href.searchParams)).toEqual({
+    const buttons = screen.getAllByRole('button', { name: /new job at/i });
+    expect(buttons).toHaveLength(2);
+    openNewJob.mockClear();
+    fireEvent.click(buttons[0]!);
+    expect(openNewJob).toHaveBeenCalledWith({
       propertyId: 'p1',
       technicianId: 'tech-1',
       date: '2026-10-02',
+      from: 'from the map',
     });
   });
 
@@ -133,7 +136,7 @@ describe('searching for a property', () => {
     const { props } = renderPanel({ canAssign: false });
 
     fireEvent.change(screen.getByPlaceholderText('Search a property or an address'), { target: { value: 'court' } });
-    fireEvent.click(screen.getByRole('button', { name: /300 Example Court/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^300 Example Court/ }));
 
     expect(props.onFocusProperty).toHaveBeenCalledWith('p3');
   });

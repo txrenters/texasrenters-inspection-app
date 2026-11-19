@@ -9,6 +9,7 @@ import {
   monthOf,
   monthTitle,
   NO_FILTERS,
+  oneCardPerJob,
   sortVisits,
   statusGroup,
   stepAnchor,
@@ -143,5 +144,29 @@ describe('the Day view’s columns', () => {
       'a',
       'b',
     ]);
+  });
+});
+
+describe('one card a job (2026-11-20)', () => {
+  const job = { id: 'job-1', number: 'J-00042', title: 'Occupied + HVAC', kinds: ['HVAC', 'OCCUPIED'] };
+
+  it("keeps the job's lead, wherever it sits, and drops the job's other rows", () => {
+    const occupied = row({ inspectionId: 'occ', inspectionType: 'OCCUPIED', job });
+    const hvac = row({ inspectionId: 'hvac', inspectionType: 'HVAC', job });
+    const other = row({ inspectionId: 'other' });
+    expect(oneCardPerJob([occupied, other, hvac]).map((kept) => kept.inspectionId)).toEqual(['other', 'hvac']);
+  });
+
+  it("keeps a job's rows apart when they are with different technicians", () => {
+    const rows = [
+      row({ inspectionId: 'occ', inspectionType: 'OCCUPIED', job }),
+      row({ inspectionId: 'hvac', inspectionType: 'HVAC', technicianId: 'tech-b', job }),
+    ];
+    expect(oneCardPerJob(rows)).toHaveLength(2);
+  });
+
+  it('leaves rows with no job as they are', () => {
+    const rows = [row({ inspectionId: 'a' }), row({ inspectionId: 'b', job: null })];
+    expect(oneCardPerJob(rows)).toEqual(rows);
   });
 });

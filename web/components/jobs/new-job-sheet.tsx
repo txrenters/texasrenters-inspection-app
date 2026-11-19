@@ -152,6 +152,12 @@ export function NewJobSheet({ prefill, onClose }: { prefill: NewJobPrefill; onCl
   const leases = useLeases(unitId);
   const technicians = useTechnicians({ page: 1, pageSize: 100, active: true });
   const technicianName = technicians.data?.items.find((item) => item.id === technicianId)?.displayName;
+  // A technician handed over (a Schedule column) who is not an active
+  // technician any more: nobody, rather than a blank box the server refuses.
+  useEffect(() => {
+    if (technicianId && technicians.data && !technicians.data.items.some((item) => item.id === technicianId))
+      setTechnicianId('');
+  }, [technicianId, technicians.data]);
 
   /**
    * The services and the Jobber booking, as the create form keeps them. A job

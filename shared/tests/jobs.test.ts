@@ -4,6 +4,7 @@ import {
   formatJobNumber,
   isJobInspectionType,
   jobCanCarryServices,
+  jobKindsInOrder,
   jobLeadType,
   jobTitleFor,
   jobWorkLines,
@@ -85,5 +86,12 @@ describe('what a job can hold', () => {
     expect(isJobInspectionType('SUPRA_LOCKBOX_PLACEMENT')).toBe(true);
     expect(isJobInspectionType('MAINTENANCE')).toBe(false);
     expect(isJobInspectionType('AC_FILTER_DELIVERY')).toBe(false);
+  });
+});
+
+describe("a job's kinds as the Schedule lists them", () => {
+  it('puts the lead first, then the office order, each once, and a joined work order last', () => {
+    expect(jobKindsInOrder(['OCCUPIED', 'MAINTENANCE', 'HVAC', 'MOVE_IN', 'OCCUPIED'])).toEqual(['HVAC', 'MOVE_IN', 'OCCUPIED', 'MAINTENANCE']);
+    expect(jobKindsInOrder([])).toEqual([]);
   });
 });
