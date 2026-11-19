@@ -115,6 +115,9 @@ describe('drafting a finished visit’s invoices by itself', () => {
     await new InvoiceAutoDraftsService(db as never).run(ORG);
     const where = db.inspection.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ organizationId: ORG, propertywareBuildingId: { not: null }, invoices: { none: {} } });
+    // A work order's visit is the maintenance app's to bill. Left in, one with
+    // no billing rule is passed over every run and keeps a place in the window.
+    expect(where.source).toEqual({ not: 'WORK_ORDER' });
     expect(where.AND).toEqual([
       { OR: [{ submittedAt: { gte: ON_SINCE } }, { completedAt: { gte: ON_SINCE } }] },
       { OR: [{ completionBlockedReason: null }, { NOT: { completionBlockedReason: { startsWith: 'Could not get in' } } }] },

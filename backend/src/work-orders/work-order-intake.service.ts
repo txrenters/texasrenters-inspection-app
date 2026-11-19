@@ -5,10 +5,11 @@ import {
   InspectionType,
   WorkOrderImportStatus,
 } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
 import { auditActor, type AuthenticatedUser } from '../common/auth';
+import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { workOrderHandoffSchema, type WorkOrderHandoff } from './work-order-handoff.schema';
@@ -57,15 +58,23 @@ export class WorkOrderIntakeService {
     const handoff = parsed.data;
     const organizationId = user.organizationId;
     const now = new Date();
+    const key = {
+      organizationId,
+      sourceSystem: handoff.source_system,
+      externalKey: handoff.idempotency_key,
+    };
+
+    // What the last send said, before this one takes its place in the staging
+    // row: the notes it wrote are the part of the visit's notes this send may
+    // replace. The rest is the office's.
+    const previous = await this.prisma.workOrderImport.findUnique({
+      where: { organizationId_sourceSystem_externalKey: key },
+      select: { payload: true },
+    });
+    const previousNotes = previousNotesFrom(previous?.payload);
 
     const staged = await this.prisma.workOrderImport.upsert({
-      where: {
-        organizationId_sourceSystem_externalKey: {
-          organizationId,
-          sourceSystem: handoff.source_system,
-          externalKey: handoff.idempotency_key,
-        },
-      },
+      where: { organizationId_sourceSystem_externalKey: key },
       create: {
         organizationId,
         sourceSystem: handoff.source_system,
@@ -88,7 +97,7 @@ export class WorkOrderIntakeService {
     });
 
     try {
-      const filed = await this.file(user, handoff);
+      const filed = await this.file(user, handoff, previousNotes);
       await this.prisma.workOrderImport.update({
         where: { id: staged.id },
         data: {
@@ -130,54 +139,69 @@ export class WorkOrderIntakeService {
   private async file(
     user: AuthenticatedUser,
     handoff: WorkOrderHandoff,
+    previousNotes: string | null,
   ): Promise<{ inspectionId: string | null; outcome: WorkOrderIntakeOutcome }> {
     const organizationId = user.organizationId;
     const closed = isClosed(handoff.work_order.status);
-    const existing = await this.prisma.inspection.findFirst({
-      where: { organizationId, workOrderKey: handoff.idempotency_key },
-      select: { id: true, status: true },
-    });
+    const existing = await this.findVisit(organizationId, handoff);
+    if (existing) return this.revise(user, handoff, existing, previousNotes);
 
-    if (existing) {
-      if (closed) {
-        if (existing.status !== InspectionStatus.SCHEDULED)
-          return { inspectionId: existing.id, outcome: 'unchanged' };
-        await this.prisma.$transaction(async (tx) => {
-          await tx.inspection.update({
-            where: { id: existing.id },
-            data: { status: InspectionStatus.CANCELLED },
-          });
-          await tx.auditLog.create({
-            data: {
-              organizationId,
-              ...auditActor(user),
-              action: 'WORK_ORDER_CANCELLED',
-              entityType: 'Inspection',
-              entityId: existing.id,
-              metadata: {
-                workOrderKey: handoff.idempotency_key,
-                workOrderStatus: handoff.work_order.status,
-              },
-            },
-          });
-        });
-        return { inspectionId: existing.id, outcome: 'cancelled' };
-      }
-      await this.prisma.$transaction(async (tx) => {
-        await tx.inspection.update({
-          where: { id: existing.id },
+    // Already closed before anyone here saw it: nothing to schedule.
+    if (closed) return { inspectionId: null, outcome: 'ignored_closed' };
+
+    try {
+      return await this.create(user, handoff);
+    } catch (error) {
+      /**
+       * Two first sends at once -- a retry overtaking the original -- both
+       * find no visit, and the second insert hits the work order's unique
+       * key. The visit exists; it is the other send's. Revised as a repeat
+       * would be, rather than refused as a duplicate booking, which the
+       * sender would take as final.
+       */
+      if (!isDuplicateKey(error)) throw error;
+      const raced = await this.findVisit(organizationId, handoff);
+      if (!raced) throw error;
+      return this.revise(user, handoff, raced, previousNotes);
+    }
+  }
+
+  private findVisit(organizationId: string, handoff: WorkOrderHandoff) {
+    return this.prisma.inspection.findFirst({
+      where: { organizationId, workOrderKey: handoff.idempotency_key },
+      select: { id: true, status: true, internalNotes: true },
+    });
+  }
+
+  /** The visit this work order already has, brought up to date with it. */
+  private async revise(
+    user: AuthenticatedUser,
+    handoff: WorkOrderHandoff,
+    existing: { id: string; status: InspectionStatus; internalNotes: string | null },
+    previousNotes: string | null,
+  ): Promise<{ inspectionId: string; outcome: WorkOrderIntakeOutcome }> {
+    const organizationId = user.organizationId;
+
+    if (isClosed(handoff.work_order.status)) {
+      if (existing.status !== InspectionStatus.SCHEDULED)
+        return { inspectionId: existing.id, outcome: 'unchanged' };
+      const cancelled = await this.prisma.$transaction(async (tx) => {
+        // Guarded on the status just read: a technician who started the
+        // visit in between keeps it, and the sender hears "unchanged".
+        const { count } = await tx.inspection.updateMany({
+          where: { id: existing.id, status: InspectionStatus.SCHEDULED },
           data: {
-            priority: priorityFor(handoff),
-            internalNotes: notesFor(handoff),
-            workOrderNumber: handoff.work_order.number,
-            jobberJobId: handoff.work_order.jobber.job_gid ?? undefined,
+            status: InspectionStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancellationReason: `Work order ${handoff.work_order.status?.toLowerCase() ?? 'closed'} in the maintenance app`,
           },
         });
+        if (count === 0) return false;
         await tx.auditLog.create({
           data: {
             organizationId,
             ...auditActor(user),
-            action: 'WORK_ORDER_UPDATED',
+            action: 'WORK_ORDER_CANCELLED',
             entityType: 'Inspection',
             entityId: existing.id,
             metadata: {
@@ -186,12 +210,55 @@ export class WorkOrderIntakeService {
             },
           },
         });
+        return true;
       });
-      return { inspectionId: existing.id, outcome: 'updated' };
+      return { inspectionId: existing.id, outcome: cancelled ? 'cancelled' : 'unchanged' };
     }
 
-    // Already closed before anyone here saw it: nothing to schedule.
-    if (closed) return { inspectionId: null, outcome: 'ignored_closed' };
+    // A work order closed and then opened again: its visit was cancelled, and
+    // is scheduled again rather than left cancelled behind an "updated".
+    const reopened = existing.status === InspectionStatus.CANCELLED;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspection.update({
+        where: { id: existing.id },
+        data: {
+          priority: priorityFor(handoff),
+          internalNotes: mergedNotes(existing.internalNotes, previousNotes, notesFor(handoff)),
+          workOrderNumber: handoff.work_order.number,
+          jobberJobId: handoff.work_order.jobber.job_gid ?? undefined,
+          ...(reopened
+            ? {
+                status: InspectionStatus.SCHEDULED,
+                cancelledAt: null,
+                cancellationReason: null,
+                scheduledAt: scheduledDayFor(handoff),
+              }
+            : {}),
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: reopened ? 'WORK_ORDER_REOPENED' : 'WORK_ORDER_UPDATED',
+          entityType: 'Inspection',
+          entityId: existing.id,
+          metadata: {
+            workOrderKey: handoff.idempotency_key,
+            workOrderStatus: handoff.work_order.status,
+            ...approvalMetadata(handoff),
+          },
+        },
+      });
+    });
+    return { inspectionId: existing.id, outcome: 'updated' };
+  }
+
+  private async create(
+    user: AuthenticatedUser,
+    handoff: WorkOrderHandoff,
+  ): Promise<{ inspectionId: string; outcome: WorkOrderIntakeOutcome }> {
+    const organizationId = user.organizationId;
 
     /**
      * A Crystal Creek Air job at a home that is not a Texas Renters property.
@@ -287,6 +354,7 @@ export class WorkOrderIntakeService {
             priority: priorityFor(handoff),
             scheduledAt: scheduledAt.toISOString().slice(0, 10),
             sourceSystem: handoff.source_system,
+            ...approvalMetadata(handoff),
           },
         },
       });
@@ -298,6 +366,59 @@ export class WorkOrderIntakeService {
 
 export function isClosed(status: string | null | undefined): boolean {
   return CLOSED_STATUSES.has((status ?? '').trim().toLowerCase());
+}
+
+/** The work order's unique key refused a second visit: Postgres P2002, as Prisma or `insertInspection` report it. */
+function isDuplicateKey(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === 'P2002';
+  return error instanceof ApplicationError && error.code === 'DUPLICATE_INSPECTION';
+}
+
+/** The notes the last send wrote, re-made from the envelope it staged; null when there was none or it no longer reads. */
+export function previousNotesFrom(payload: unknown): string | null {
+  if (!payload) return null;
+  const parsed = workOrderHandoffSchema.safeParse(payload);
+  return parsed.success ? notesFor(parsed.data) : null;
+}
+
+/**
+ * The visit's notes after this send: the work order's part replaced, the
+ * office's part kept. The office edits internal notes in the console, and a
+ * re-send that wrote them whole took those edits away. Where the last send's
+ * text is no longer there -- the office rewrote the lot -- the new text goes
+ * under theirs, and the next send finds it there to replace.
+ */
+export function mergedNotes(
+  current: string | null | undefined,
+  previous: string | null,
+  next: string,
+): string {
+  if (!current?.trim()) return next;
+  if (previous && current.includes(previous)) return current.replace(previous, next);
+  if (current.includes(next)) return current;
+  return `${current.trimEnd()}\n\n${next}`;
+}
+
+/**
+ * What stood behind the work order being sent at all, for the audit row: the
+ * rule that let it through and, when that was the AI's reading of the owner's
+ * messages, how sure it was. Nothing here approves a charge; the record says
+ * who, or what, did on the sending side.
+ */
+export function approvalMetadata(handoff: WorkOrderHandoff): Prisma.InputJsonObject {
+  const approval = handoff.approval;
+  return {
+    costEstimate: handoff.work_order.cost_estimate ?? null,
+    approval: approval
+      ? {
+          rule: approval.rule ?? null,
+          threshold: approval.threshold,
+          estimate: approval.estimate,
+          recordedBy: approval.recorded_by ?? null,
+          aiConfidence: approval.ai_confidence,
+        }
+      : null,
+  };
 }
 
 /** Pest control is Crystal Creek Pest's; everything else the crews repair is maintenance. */
@@ -322,18 +443,24 @@ export function priorityFor(handoff: WorkOrderHandoff): string {
  * and the column cannot be empty: the day the tenant allowed entry when the
  * office recorded one, else the day it arrived here. The office moves it when
  * it schedules the crew; until then it reads as "came in today".
+ *
+ * "Today" is the Texas day, held as its UTC midnight the way every
+ * `scheduledAt` is. The UTC day is already tomorrow from about 6 p.m. in
+ * Texas, and a work order handed over in the evening belongs to the day the
+ * crew is still working.
  */
 export function scheduledDayFor(handoff: WorkOrderHandoff, today: Date = new Date()): Date {
+  const todayStart = new Date(`${businessDate(today)}T00:00:00.000Z`);
   for (const candidate of [
     handoff.work_order.date_to_enter,
     handoff.work_order.scheduled_end_date,
   ]) {
     if (!candidate) continue;
     const parsed = new Date(candidate);
-    if (!Number.isNaN(parsed.getTime()) && parsed.getTime() >= startOfUtcDay(today).getTime())
+    if (!Number.isNaN(parsed.getTime()) && parsed.getTime() >= todayStart.getTime())
       return startOfUtcDay(parsed);
   }
-  return startOfUtcDay(today);
+  return todayStart;
 }
 
 function startOfUtcDay(date: Date): Date {
@@ -396,6 +523,13 @@ export function notesFor(handoff: WorkOrderHandoff): string {
       manual: 'sent by hand from the maintenance app',
     };
     lines.push('', `Owner approval: ${how[approval.rule] ?? approval.rule}`);
+    // An AI's reading of the owner's messages is not the owner's approval,
+    // and nobody on either side has confirmed it. The technician is told so
+    // rather than left to take "APPROVED" below as a person's word.
+    if (approval.rule === 'owner_approved_in_messages')
+      lines.push(
+        `Read by AI, not confirmed by a person: check with the office before work over the $${approval.threshold.toFixed(0)} threshold.`,
+      );
     if (approval.summary) lines.push(approval.summary);
     for (const problem of approval.problems) {
       const decision =

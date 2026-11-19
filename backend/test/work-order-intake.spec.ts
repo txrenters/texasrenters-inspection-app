@@ -1,4 +1,4 @@
-import { InspectionSource, InspectionStatus, InspectionType } from '@prisma/client';
+import { InspectionSource, InspectionStatus, InspectionType, Prisma } from '@prisma/client';
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -115,9 +115,15 @@ function envelope(
 function build({
   existing = null,
   building = property,
+  previous = null,
+  cancelCount = 1,
 }: {
-  existing?: { id: string; status: InspectionStatus } | null;
+  existing?: { id: string; status: InspectionStatus; internalNotes?: string | null } | null;
   building?: typeof property | null;
+  /** The envelope the staging row held before this send, if any. */
+  previous?: WorkOrderHandoff | null;
+  /** How many rows the guarded cancel finds still scheduled. */
+  cancelCount?: number;
 } = {}) {
   const tx = {
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(building) },
@@ -135,11 +141,15 @@ function build({
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'visit-1' }),
       update: jest.fn().mockResolvedValue({ id: existing?.id ?? 'visit-1' }),
+      updateMany: jest.fn().mockResolvedValue({ count: cancelCount }),
     },
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
   };
   const prisma = {
     workOrderImport: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(previous ? { id: 'import-1', payload: previous } : null),
       upsert: jest.fn().mockResolvedValue({ id: 'import-1' }),
       update: jest.fn().mockResolvedValue({ id: 'import-1' }),
     },
@@ -254,10 +264,12 @@ describe('receiving a work order from the maintenance app', () => {
     const scheduled = build({ existing: { id: 'visit-9', status: InspectionStatus.SCHEDULED } });
     const cancelled = await scheduled.service.receive(machine, envelope({ status: 'Closed' }));
     expect(cancelled.outcome).toBe('cancelled');
-    expect(scheduled.tx.inspection.update).toHaveBeenCalledWith(
+    // Guarded on the status it read, so a visit a technician starts between the
+    // read and the write is not cancelled under them.
+    expect(scheduled.tx.inspection.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'visit-9' },
-        data: { status: InspectionStatus.CANCELLED },
+        where: { id: 'visit-9', status: InspectionStatus.SCHEDULED },
+        data: expect.objectContaining({ status: InspectionStatus.CANCELLED }),
       }),
     );
     expect(scheduled.tx.auditLog.create).toHaveBeenCalledWith(
@@ -270,6 +282,134 @@ describe('receiving a work order from the maintenance app', () => {
     const left = await started.service.receive(machine, envelope({ status: 'Canceled By Tenant' }));
     expect(left.outcome).toBe('unchanged');
     expect(started.tx.inspection.update).not.toHaveBeenCalled();
+    expect(started.tx.inspection.updateMany).not.toHaveBeenCalled();
+
+    // Read as scheduled, started a moment later: the guarded write finds nothing.
+    const raced = build({
+      existing: { id: 'visit-9', status: InspectionStatus.SCHEDULED },
+      cancelCount: 0,
+    });
+    const kept = await raced.service.receive(machine, envelope({ status: 'Closed' }));
+    expect(kept.outcome).toBe('unchanged');
+    expect(raced.tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('schedules a cancelled visit again when its work order comes back open', async () => {
+    const { service, tx } = build({
+      existing: { id: 'visit-9', status: InspectionStatus.CANCELLED },
+    });
+
+    const answer = await service.receive(machine, envelope({ status: 'Open' }));
+
+    expect(answer).toEqual({ id: 'visit-9', importId: 'import-1', outcome: 'updated' });
+    expect(tx.inspection.create).not.toHaveBeenCalled();
+    expect(tx.inspection.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'visit-9' },
+        data: expect.objectContaining({
+          status: InspectionStatus.SCHEDULED,
+          cancelledAt: null,
+          cancellationReason: null,
+          scheduledAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'WORK_ORDER_REOPENED' }),
+      }),
+    );
+  });
+
+  it('keeps what the office added to the notes when the work order is sent again', async () => {
+    const before = envelope();
+    const { service, tx } = build({
+      existing: {
+        id: 'visit-9',
+        status: InspectionStatus.SCHEDULED,
+        internalNotes: `${notesFor(before)}\n\nOffice: gate code 1234, call Pat first.`,
+      },
+      previous: before,
+    });
+
+    await service.receive(machine, envelope({ description: 'Now no cooling at all' }));
+
+    const written: string = tx.inspection.update.mock.calls[0][0].data.internalNotes;
+    expect(written).toContain('Now no cooling at all');
+    expect(written).not.toContain('AC not cooling since Monday');
+    expect(written).toContain('Office: gate code 1234, call Pat first.');
+  });
+
+  it('adds the work order under notes the office rewrote, rather than over them', async () => {
+    const { service, tx } = build({
+      existing: {
+        id: 'visit-9',
+        status: InspectionStatus.SCHEDULED,
+        internalNotes: 'Office: everything rewritten by hand.',
+      },
+      previous: envelope(),
+    });
+
+    await service.receive(machine, envelope({ description: 'Now no cooling at all' }));
+
+    const written: string = tx.inspection.update.mock.calls[0][0].data.internalNotes;
+    expect(written.startsWith('Office: everything rewritten by hand.')).toBe(true);
+    expect(written).toContain('Now no cooling at all');
+  });
+
+  it('answers with the visit the other send made when two first sends race', async () => {
+    const { service, tx, prisma } = build();
+    prisma.inspection.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'visit-7', status: InspectionStatus.SCHEDULED });
+    tx.inspection.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'test' }),
+    );
+
+    const answer = await service.receive(machine, envelope());
+
+    expect(answer).toEqual({ id: 'visit-7', importId: 'import-1', outcome: 'updated' });
+    expect(prisma.workOrderImport.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'PROCESSED', inspectionId: 'visit-7' }),
+      }),
+    );
+  });
+
+  it('records which rule let the work order through, and the AI confidence, in the audit', async () => {
+    const { service, tx } = build();
+
+    await service.receive(
+      machine,
+      envelope(
+        { cost_estimate: 450 },
+        {
+          approval: {
+            rule: 'owner_approved_in_messages',
+            threshold: 300,
+            estimate: 450,
+            recorded_by: null,
+            recorded_at: null,
+            ai_confidence: 92,
+            ai_read_at: '2026-11-19T15:04:00+00:00',
+            summary: null,
+            problems: [],
+          },
+        },
+      ),
+    );
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'WORK_ORDER_RECEIVED',
+          metadata: expect.objectContaining({
+            costEstimate: 450,
+            approval: { rule: 'owner_approved_in_messages', threshold: 300, estimate: 450, recordedBy: null, aiConfidence: 92 },
+          }),
+        }),
+      }),
+    );
   });
 
   it('files nothing for a work order that was already closed the first time it was seen', async () => {
@@ -399,6 +539,16 @@ describe('reading the work order', () => {
     ).toBe('2026-11-12T00:00:00.000Z');
   });
 
+  it('dates "today" by the Texas day, not the UTC one', () => {
+    // 7 p.m. in Texas on the 12th is already the 13th in UTC.
+    const texasEvening = new Date('2026-11-13T01:00:00Z');
+    expect(scheduledDayFor(envelope(), texasEvening).toISOString()).toBe('2026-11-12T00:00:00.000Z');
+    // The tenant allowed entry today: still ahead, as the office reads it.
+    expect(
+      scheduledDayFor(envelope({ date_to_enter: '2026-11-12T00:00:00+00:00' }), texasEvening).toISOString(),
+    ).toBe('2026-11-12T00:00:00.000Z');
+  });
+
   it('writes the notes the technician needs, with the links back', () => {
     const notes = notesFor(envelope({ is_emergency: true }));
 
@@ -467,6 +617,8 @@ describe('reading the work order', () => {
 
     expect(notes).toContain('Estimate: $450.00');
     expect(notes).toContain('Owner approval: read from messages by AI (92%)');
+    // An AI's reading is not a person's approval; the technician is told so.
+    expect(notes).toContain('not confirmed by a person');
     expect(notes).toContain('Owner approved the hallway light by text on 2026-11-10');
     expect(notes).toContain(
       '- hallway light: APPROVED — "Go ahead with the light. — owner, 2026-11-10 14:02 (SMS)"',
