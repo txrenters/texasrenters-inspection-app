@@ -9,10 +9,12 @@ const line = (quantity: number, estimatedUnitCostCents: number) => ({ quantity, 
 const quote = (chosen: boolean) => ({ chosen });
 
 describe('a requisition\'s number', () => {
-  it('is PR- and at least four digits', () => {
-    expect(requisitionNumber(1)).toBe('PR-0001');
-    expect(requisitionNumber(12)).toBe('PR-0012');
+  // Five digits since 2026-11-20, as NAV writes them (PR-00000).
+  it('is PR- and at least five digits', () => {
+    expect(requisitionNumber(1)).toBe('PR-00001');
+    expect(requisitionNumber(12)).toBe('PR-00012');
     expect(requisitionNumber(12345)).toBe('PR-12345');
+    expect(requisitionNumber(123456)).toBe('PR-123456');
   });
 });
 
@@ -26,9 +28,10 @@ describe('what it comes to', () => {
 describe('whether it can be submitted', () => {
   const ready = { reason: 'Filters are out.', lines: [line(36, 390)], quotes: [] as { chosen: boolean }[] };
 
-  it('needs a reason and something asked for', () => {
+  // The reason is optional since 2026-11-20: it sits under "Show more fields" on the NAV-style page.
+  it('needs something asked for, and no reason', () => {
     expect(requisitionSubmitProblem(ready, SETTINGS)).toBeNull();
-    expect(requisitionSubmitProblem({ ...ready, reason: '  ' }, SETTINGS)).toBe('Say why it is needed.');
+    expect(requisitionSubmitProblem({ ...ready, reason: '  ' }, SETTINGS)).toBeNull();
     expect(requisitionSubmitProblem({ ...ready, lines: [] }, SETTINGS)).toBe('Add at least one item.');
   });
 
