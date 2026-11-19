@@ -75,7 +75,10 @@ export function ItemCodePicker({
   canMakeItemCodes,
   companyCode,
   onHighlight,
+  variant,
 }: {
+  /** `cell`: drawn as a cell of the Lines grid, with no box of its own. */
+  variant?: 'cell';
   id: string;
   label: string;
   /** The items this line may take: its company's, of its type, and none already on another line. */
@@ -134,7 +137,13 @@ export function ItemCodePicker({
   return (
     <Popover onOpenChange={show} open={open}>
       <PopoverAnchor asChild>
-        <div className={cn('border-input bg-background flex h-8 items-center rounded-sm border', open ? 'ring-ring/50 ring-2' : '')}>
+        <div
+          className={cn(
+            'flex h-8 items-center',
+            variant === 'cell' ? 'group/cell focus-within:ring-primary focus-within:ring-2 focus-within:ring-inset' : 'border-input bg-background rounded-sm border',
+            open ? (variant === 'cell' ? 'ring-primary ring-2 ring-inset' : 'ring-ring/50 ring-2') : '',
+          )}
+        >
           <input
             aria-activedescendant={open && current ? `${listId}-${current.id}` : undefined}
             aria-autocomplete="list"
@@ -156,7 +165,17 @@ export function ItemCodePicker({
             spellCheck={false}
             value={typed ?? value?.code ?? ''}
           />
-          <button aria-label={`Show the item codes for ${label.toLowerCase()}`} className="text-muted-foreground hover:text-foreground flex h-full items-center border-l px-1.5" onClick={() => show(!open)} tabIndex={-1} type="button">
+          <button
+            aria-label={`Show the item codes for ${label.toLowerCase()}`}
+            className={cn(
+              'text-muted-foreground hover:text-foreground flex h-full items-center px-1.5',
+              // In the grid the ▾ shows on hover and while the cell is being typed in, as the canvas draws it.
+              variant === 'cell' ? (open ? '' : 'opacity-0 group-hover/cell:opacity-100 group-focus-within/cell:opacity-100') : 'border-l',
+            )}
+            onClick={() => show(!open)}
+            tabIndex={-1}
+            type="button"
+          >
             <ChevronDownIcon className="size-3.5" />
           </button>
         </div>

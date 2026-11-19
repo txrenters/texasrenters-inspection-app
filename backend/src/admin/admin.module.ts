@@ -61,6 +61,7 @@ import { StockSlipsService } from './stock-slips.service';
 import { PurchasingController } from './purchasing.controller';
 import { PurchasingService } from './purchasing.service';
 import { RequisitionFilesService } from './requisition-files.service';
+import { RequisitionNotesService } from './requisition-notes.service';
 import { PurchaseOrdersController } from './purchase-orders.controller';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { PurchaseReceivingController } from './purchase-receiving.controller';
@@ -194,6 +195,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     PurchasingService,
     PurchasingFileStorageService,
     RequisitionFilesService,
+    RequisitionNotesService,
     PurchaseOrdersService,
     PurchaseReceivingService,
     ActualVsBudgetGateway,

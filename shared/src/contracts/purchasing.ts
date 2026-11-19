@@ -225,6 +225,55 @@ export interface RequisitionActions {
   approveBlocked: string | null;
   /** Attach files and tick which go to the vendor: anybody who sees it, until it is finished with. */
   attach: boolean;
+  /** "Cancel Approval Request": its requester takes it back to a draft while nobody has decided it. */
+  recall: boolean;
+  /** "Reopen": an approved one with no order yet goes back to being changed, and is approved again. Its requester or an approver. */
+  reopen: boolean;
+}
+
+// ── Notes, comments and links (2026-11-20, the ribbon's Show Attached) ───────
+
+export const REQUISITION_NOTE_MAX_LENGTH = 2000;
+/** Notes and comments together on one requisition, at most. */
+export const REQUISITION_NOTES_MAX = 200;
+export const REQUISITION_LINKS_MAX = 20;
+export const REQUISITION_LINK_TITLE_MAX_LENGTH = 120;
+export const REQUISITION_LINK_MAX_LENGTH = 2000;
+
+/** A note on the record, or one message of its comments. */
+export interface RequisitionNote {
+  id: string;
+  text: string;
+  by: { id: string; name: string; code: string };
+  at: string;
+  /** Its writer takes a note off; a comment stays in the thread. */
+  canRemove: boolean;
+}
+
+export interface RequisitionLink {
+  id: string;
+  /** Always http(s). */
+  url: string;
+  title: string;
+  by: { id: string; name: string; code: string };
+  at: string;
+  canRemove: boolean;
+}
+
+export interface AddRequisitionNoteInput {
+  text: string;
+}
+
+export interface AddRequisitionLinkInput {
+  url: string;
+  title: string;
+}
+
+/** A web address a link may keep: http or https, nothing that runs when opened. Null when it is not one. */
+export function requisitionLinkUrl(value: string): string | null {
+  const url = value.trim();
+  if (!/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(url) || url.length > REQUISITION_LINK_MAX_LENGTH) return null;
+  return url;
 }
 
 // ── Files on a requisition (2026-11-20, part 3) ──────────────────────────────
@@ -303,6 +352,11 @@ export interface RequisitionDetail extends RequisitionRow {
   order: { id: string; number: string | null } | null;
   /** What is attached to it, oldest first. */
   files: RequisitionFile[];
+  /** Notes on the record, oldest first. */
+  notes: RequisitionNote[];
+  /** Its comment thread, oldest first. */
+  comments: RequisitionNote[];
+  links: RequisitionLink[];
   can: RequisitionActions;
   settings: PurchasingSettings;
 }

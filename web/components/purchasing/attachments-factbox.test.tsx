@@ -46,7 +46,7 @@ describe('the Attachments FactBox', () => {
     render(<AttachmentsFactBox />);
     expect(screen.getByRole('region', { name: 'Attachments' })).toBeTruthy();
     expect(screen.getByText('Save the requisition first, then attach pictures or files to it.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Attach/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Attach…' })).toBeNull();
   });
 
   it('lists each file with its kind, size and who attached it; only whoever may take one off sees the cross', () => {

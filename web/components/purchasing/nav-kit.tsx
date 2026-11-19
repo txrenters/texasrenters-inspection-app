@@ -24,31 +24,67 @@ export function Ribbon({ label, children }: { label: string; children: ReactNode
 /** One group of the ribbon, named under its buttons as NAV names them. */
 export function RibbonGroup({ caption, children }: { caption: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-20 flex-col justify-between border-r px-2.5 pt-1.5 pb-1 last:border-r-0">
+    <div className="flex min-h-20 flex-col justify-between border-r px-1.5 pt-1.5 pb-1 last:border-r-0">
       <div className="flex flex-wrap items-start gap-1">{children}</div>
       <div className="text-muted-foreground mt-1 text-center text-[11px]">{caption}</div>
     </div>
   );
 }
 
-/** A large ribbon button with its icon above the words, or a small one of words alone. */
-export function RibbonButton({ icon: Icon, label, onClick, disabled, busy, tone }: { icon?: LucideIcon; label: string; onClick: () => void; disabled?: boolean; busy?: boolean; tone?: 'danger' }) {
+/**
+ * A large ribbon button with its icon above the words, or a small one of words
+ * alone. `hint` says what it does, or why it cannot be pressed now; `pressed`
+ * marks a toggle that is on (Notes, Links, Comments).
+ */
+export function RibbonButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  busy,
+  tone,
+  hint,
+  pressed,
+}: {
+  icon?: LucideIcon;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: 'danger';
+  hint?: string;
+  pressed?: boolean;
+}) {
   return (
     <button
+      aria-pressed={pressed}
       className={cn(
         'focus-visible:ring-ring/50 rounded-sm text-xs font-medium outline-none focus-visible:ring-[3px] disabled:cursor-default disabled:opacity-40',
-        Icon ? 'flex min-h-11 min-w-16 flex-col items-center gap-0.5 px-1.5 py-1 text-center' : 'block min-h-6 px-1 py-0.5 text-left',
+        // A large button's words wrap under its icon, two lines at most, as NAV's do; a small one's stay on one line.
+        Icon ? 'flex min-h-11 max-w-24 min-w-14 flex-col items-center gap-0.5 px-1 py-1 text-center leading-tight' : 'block min-h-6 px-1 py-0.5 text-left whitespace-nowrap',
         tone === 'danger' ? 'text-destructive' : 'text-heading',
+        pressed ? 'bg-accent' : '',
         'enabled:hover:bg-accent',
       )}
       disabled={disabled || busy}
       onClick={onClick}
+      title={hint}
       type="button"
     >
       {Icon ? <Icon aria-hidden="true" className="size-5" /> : null}
       {label}
     </button>
   );
+}
+
+/** Small ribbon buttons one above another, as NAV stacks them. */
+export function RibbonStack({ children }: { children: ReactNode }) {
+  return <div className="grid content-start">{children}</div>;
+}
+
+/** The record's own name under the ribbon, "PR-00042", as NAV heads a card page. */
+export function DocumentTitle({ children }: { children: ReactNode }) {
+  return <h1 className="text-info text-2xl leading-tight font-normal tracking-wide">{children}</h1>;
 }
 
 /** A section that folds, with its name in a strip across the top. */
@@ -101,22 +137,42 @@ export function FieldValue({ children, id }: { children: ReactNode; id?: string 
   );
 }
 
-/** A FactBox down the right of the page: a few facts about the record or the line the cursor is on. */
-export function FactBox({ title, facts, children }: { title: string; facts?: readonly { label: string; value: ReactNode }[]; children?: ReactNode }) {
+/**
+ * A FactBox down the right of the page: a few facts about the record or the
+ * line the cursor is on. It folds to its name with ▲, as NAV's do; `id` lets
+ * a ribbon button bring it into view.
+ */
+export function FactBox({ title, facts, children, id }: { title: string; facts?: readonly { label: string; value: ReactNode }[]; children?: ReactNode; id?: string }) {
+  const [open, setOpen] = useState(true);
+  const bodyId = useId();
   return (
-    <section aria-label={title} className="bg-card rounded-sm border">
-      <h2 className="bg-muted/60 text-heading border-b px-3 py-1.5 text-sm font-medium">{title}</h2>
-      {facts ? (
-        <dl className="px-3 py-1.5">
-          {facts.map((fact) => (
-            <div className="flex items-baseline justify-between gap-3 py-0.5 text-sm" key={fact.label}>
-              <dt>{fact.label}:</dt>
-              <dd className="text-info text-right tabular-nums">{fact.value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-      {children ? <div className="px-3 py-2 text-sm">{children}</div> : null}
+    <section aria-label={title} className="bg-card scroll-mt-20 rounded-sm border" id={id}>
+      <div className={cn('bg-muted/60 flex items-center justify-between gap-2 px-3 py-1.5', open ? 'border-b' : '')}>
+        <h2 className="text-heading text-sm font-medium">{title}</h2>
+        <button
+          aria-controls={bodyId}
+          aria-expanded={open}
+          aria-label={`${open ? 'Fold' : 'Open'} ${title}`}
+          className="text-muted-foreground hover:text-foreground rounded-sm p-0.5"
+          onClick={() => setOpen(!open)}
+          type="button"
+        >
+          {open ? <ChevronUpIcon className="size-4" /> : <ChevronDownIcon className="size-4" />}
+        </button>
+      </div>
+      <div className={open ? '' : 'hidden'} id={bodyId}>
+        {facts ? (
+          <dl className="px-3 py-1.5">
+            {facts.map((fact) => (
+              <div className="flex items-baseline justify-between gap-3 py-0.5 text-sm" key={fact.label}>
+                <dt>{fact.label}:</dt>
+                <dd className="text-info text-right tabular-nums">{fact.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+        {children ? <div className="px-3 py-2 text-sm">{children}</div> : null}
+      </div>
     </section>
   );
 }

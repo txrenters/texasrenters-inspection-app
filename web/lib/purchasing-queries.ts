@@ -2,6 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  AddRequisitionLinkInput,
+  AddRequisitionNoteInput,
   ApproveVendorBillInput,
   CancelPurchaseOrderInput,
   CloseShortInput,
@@ -147,7 +149,8 @@ export function usePurchaseReceivingEdits() {
   };
 }
 
-export type RequisitionStep = 'submit' | 'cancel' | 'approve' | 'send-back' | 'reject';
+/** `recall` is "Cancel Approval Request", `reopen` NAV's Reopen (2026-11-20). */
+export type RequisitionStep = 'submit' | 'cancel' | 'approve' | 'send-back' | 'reject' | 'recall' | 'reopen';
 
 export function usePurchasingEdits() {
   const client = useQueryClient();
@@ -212,6 +215,48 @@ export function useRequisitionFiles(requisitionId: string) {
       onSuccess: saved,
     }),
   };
+}
+
+/**
+ * Notes, comments and links on a requisition (2026-11-20, Show Attached). Each
+ * answers with the requisition as it now is, kept as it came. Nothing billed.
+ */
+export function useRequisitionNotes(requisitionId: string) {
+  const client = useQueryClient();
+  const saved = (detail: RequisitionDetail) => client.setQueryData(purchasingKeys.detail(detail.id), detail);
+  const path = `${BASE}/requisitions/${encodeURIComponent(requisitionId)}`;
+  const post = (where: string, body: AddRequisitionNoteInput | AddRequisitionLinkInput) => api<RequisitionDetail>(`${path}/${where}`, { method: 'POST', body: JSON.stringify(body) });
+  return {
+    addNote: useMutation({ mutationFn: (text: string) => post('notes', { text }), onSuccess: saved }),
+    removeNote: useMutation({ mutationFn: (noteId: string) => api<RequisitionDetail>(`${path}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }), onSuccess: saved }),
+    comment: useMutation({ mutationFn: (text: string) => post('comments', { text }), onSuccess: saved }),
+    addLink: useMutation({ mutationFn: (link: AddRequisitionLinkInput) => post('links', link), onSuccess: saved }),
+    removeLink: useMutation({ mutationFn: (linkId: string) => api<RequisitionDetail>(`${path}/links/${encodeURIComponent(linkId)}`, { method: 'DELETE' }), onSuccess: saved }),
+  };
+}
+
+/**
+ * Previous and Next on the ribbon: the requisition before or after this one,
+ * open ones first, newest first, as the list shows them. The lists are read
+ * only when one is pressed, and kept a minute like the list page's.
+ */
+export function useRequisitionSiblings() {
+  const client = useQueryClient();
+  return async (requisitionId: string, step: 1 | -1): Promise<string | null> => {
+    const lists = await Promise.all(
+      (['open', 'closed'] as const).map((show) =>
+        client.fetchQuery({ queryKey: purchasingKeys.list(show), queryFn: () => api<RequisitionList>(`${BASE}/requisitions?show=${show}`), staleTime: KEPT.staleTime }),
+      ),
+    );
+    const ids = lists.flatMap((list) => list.requisitions.map((row) => row.id));
+    const at = ids.indexOf(requisitionId);
+    return at < 0 ? null : (ids[at + step] ?? null);
+  };
+}
+
+/** Another requisition's whole detail, read once on asking: "Copy Document" copies its lines. */
+export function readRequisition(requisitionId: string) {
+  return api<RequisitionDetail>(`${BASE}/requisitions/${encodeURIComponent(requisitionId)}`);
 }
 
 /**

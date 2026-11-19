@@ -656,6 +656,8 @@ model UserProfile {
   requisitionsRequested      PurchaseRequisition[] @relation("RequisitionRequestedBy")
   requisitionsDecided        PurchaseRequisition[] @relation("RequisitionDecidedBy")
   requisitionFilesAttached   PurchaseRequisitionFile[] @relation("RequisitionFileAttachedBy")
+  requisitionNotesWritten    PurchaseRequisitionNote[] @relation("RequisitionNoteWrittenBy")
+  requisitionLinksAdded      PurchaseRequisitionLink[] @relation("RequisitionLinkAddedBy")
   purchaseOrdersMade         PurchaseOrder[]       @relation("PurchaseOrderMadeBy")
   purchaseOrdersApproved     PurchaseOrder[]       @relation("PurchaseOrderApprovedBy")
   purchaseOrdersCancelled    PurchaseOrder[]       @relation("PurchaseOrderCancelledBy")
@@ -5984,6 +5986,8 @@ model PurchaseRequisition {
   lines            PurchaseRequisitionLine[]
   quotes           PurchaseRequisitionQuote[]
   files            PurchaseRequisitionFile[]
+  notes            PurchaseRequisitionNote[]
+  links            PurchaseRequisitionLink[]
   orders           PurchaseOrder[]
 
   @@unique([organizationId, number])
@@ -6059,6 +6063,39 @@ model PurchaseRequisitionFile {
   attachedBy  UserProfile         @relation("RequisitionFileAttachedBy", fields: [attachedById], references: [id], onDelete: Restrict)
 
   @@index([organizationId, requisitionId, attachedAt])
+}
+
+/// A note written on a purchase requisition, or one message in its comments
+/// (2026-11-20): `kind` is NOTE or COMMENT.
+model PurchaseRequisitionNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  requisitionId  String   @db.Uuid
+  kind           String
+  text           String
+  writtenById    String   @db.Uuid
+  writtenAt      DateTime @default(now())
+
+  requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  writtenBy   UserProfile         @relation("RequisitionNoteWrittenBy", fields: [writtenById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, requisitionId, writtenAt])
+}
+
+/// A web address kept on a purchase requisition (2026-11-20): only http(s), checked.
+model PurchaseRequisitionLink {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  requisitionId  String   @db.Uuid
+  url            String
+  title          String
+  addedById      String   @db.Uuid
+  addedAt        DateTime @default(now())
+
+  requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  addedBy     UserProfile         @relation("RequisitionLinkAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, requisitionId, addedAt])
 }
 
 /// A kind of stock (2026-11-19): its prefix starts its items' codes, and it
