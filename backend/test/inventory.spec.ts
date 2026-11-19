@@ -70,6 +70,13 @@ function database() {
     { id: RETIRED, organizationId: ORG, name: 'Old parts', nameKey: 'old parts', prefix: 'OLD', nextNumber: 1, active: false },
   ];
   const vendors: Row[] = [];
+  // The office's line types (2026-11-20): Item keeps stock, Service does not.
+  const lineTypes: Row[] = [
+    { id: id(901), organizationId: ORG, kind: 'LINE_TYPE', code: 'ITEM', name: 'Item', keepsStock: true, active: true },
+    { id: id(902), organizationId: ORG, kind: 'LINE_TYPE', code: 'SERVICE', name: 'Service', keepsStock: false, active: true },
+    { id: id(903), organizationId: ORG, kind: 'LINE_TYPE', code: 'OLD', name: 'Old type', keepsStock: true, active: false },
+  ];
+  let vendorsNumbered = 0;
   const movements: Row[] = [];
   const audits: Row[] = [];
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
@@ -127,6 +134,7 @@ function database() {
     },
     stockPlace: table(places, (data) => ({ id: id(100 + places.length), active: true, technician: null, ...data })),
     vendor: table(vendors),
+    purchasingCode: { ...table(lineTypes), createMany: jest.fn(async () => ({ count: 0 })) },
     stockMovement: {
       findFirst: jest.fn(async ({ where }: { where: Row }) => {
         const found = movements.find((row) => matches(row, where));
@@ -144,6 +152,7 @@ function database() {
     },
     stockLevel: {
       findMany: jest.fn(async ({ where }: { where: Row }) => levels(where)),
+      findFirst: jest.fn(async ({ where }: { where: Row }) => levels(where)[0] ?? null),
       findUnique: jest.fn(async ({ where }: { where: { itemId_placeId: Row } }) => levels(where.itemId_placeId)[0] ?? null),
       aggregate: jest.fn(async ({ where }: { where: Row }) => ({ _sum: { quantity: levels(where).reduce((sum, level) => sum + (level.quantity as number), 0) } })),
       // How many different items each place has any of.
@@ -169,6 +178,8 @@ function database() {
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
     // The advisory lock answers nothing; taking a category's next number answers the number taken.
     $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
+      // The vendor series answers the next vendor number (2026-11-20).
+      if (sql.join('').includes('DocumentSeries')) return [{ taken: (vendorsNumbered += 1) }];
       if (!sql.join('').includes('StockCategory')) return [];
       const category = categories.find((row) => row.id === values[0])!;
       category.nextNumber = (category.nextNumber as number) + 1;
@@ -177,7 +188,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, movements, audits, items, places, vendors, categories, service: new InventoryService(db as never) };
+  return { db, movements, audits, items, places, vendors, categories, lineTypes, service: new InventoryService(db as never) };
 }
 
 const opening = (over: Partial<OpeningBalanceInput> = {}): OpeningBalanceInput => ({ placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', requestKey: KEY, ...over });
@@ -506,15 +517,56 @@ describe('places and vendors', () => {
   });
 });
 
+describe('the codes items, places and vendors carry (2026-11-20)', () => {
+  it('make an item an Item unless the stock keeper chose another type, and only a type in use', async () => {
+    const { service, items } = database();
+    await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS });
+    expect(items.at(-1)).toMatchObject({ name: 'Filter 20x20x1', lineTypeId: id(901) });
+
+    await service.createItem(office, { name: 'Duct cleaning', categoryId: FILTERS, lineTypeId: id(902) });
+    expect(items.at(-1)).toMatchObject({ name: 'Duct cleaning', lineTypeId: id(902) });
+
+    await expect(service.createItem(office, { name: 'X', categoryId: FILTERS, lineTypeId: id(903) })).rejects.toMatchObject({ code: 'LINE_TYPE_SWITCHED_OFF' });
+    await expect(service.createItem(office, { name: 'X', categoryId: FILTERS, lineTypeId: id(999) })).rejects.toMatchObject({ code: 'LINE_TYPE_NOT_FOUND' });
+  });
+
+  it('keep an item with stock on hand a type that keeps stock', async () => {
+    const { service, items } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    await expect(service.updateItem(office, FILTER, { lineTypeId: id(902) })).rejects.toMatchObject({ code: 'LINE_TYPE_HAS_STOCK' });
+    // An item with nothing on a shelf can become a service.
+    await service.updateItem(office, BATTERY, { lineTypeId: id(902) });
+    expect(items.find((item) => item.id === BATTERY)).toMatchObject({ lineTypeId: id(902) });
+  });
+
+  it('give a vendor the next number, never typed', async () => {
+    const { service, vendors } = database();
+    await service.createVendor(office, { name: 'Hill Country Supply' });
+    await service.createVendor(office, { name: 'Battery Wholesale' });
+    expect(vendors.map((vendor) => vendor.number)).toEqual(['V-00001', 'V-00002']);
+  });
+
+  it('give a place a location code from its name, or the one typed, in capitals', async () => {
+    const { service, places } = database();
+    await service.createPlace(office, { name: 'Office Storeroom' });
+    expect(places.at(-1)).toMatchObject({ name: 'Office Storeroom', code: 'OFFICE-STOREROOM' });
+    await service.createPlace(office, { name: 'Truck 3', kind: 'VAN', code: ' trk-03 ' });
+    expect(places.at(-1)).toMatchObject({ code: 'TRK-03' });
+    await expect(service.createPlace(office, { name: 'Bad', code: 'BAD!' })).rejects.toMatchObject({ code: 'STOCK_PLACE_CODE_INVALID' });
+    await service.updatePlace(office, STOCKROOM, { code: 'store' });
+    expect(places.find((place) => place.id === STOCKROOM)).toMatchObject({ code: 'STORE' });
+  });
+});
+
 describe('the requests the page sends', () => {
   const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
   const check = (body: unknown, metatype: new () => object) => pipe.transform(body, { type: 'body', metatype });
 
   it('name every field of their contracts', async () => {
-    const item: Required<SaveStockItemInput> = { code: 'flt-16251', priceCents: 342, name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true };
+    const item: Required<SaveStockItemInput> = { code: 'flt-16251', priceCents: 342, name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true , lineTypeId: 'a0000000-0000-4000-8000-000000009001' };
     const balance: Required<OpeningBalanceInput> = { placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', note: 'Counted', requestKey: KEY };
     const reversal: Required<ReverseMovementInput> = { reason: 'Counted the wrong shelf' };
-    const place: Required<SaveStockPlaceInput> = { name: 'Van 1', kind: 'VAN', technicianId: TECH, active: true };
+    const place: Required<SaveStockPlaceInput> = { name: 'Van 1', code: 'trk-01', kind: 'VAN', technicianId: TECH, active: true };
     const category: Required<SaveStockCategoryInput> = { name: 'Filters', prefix: 'flt', active: true };
     const vendor: Required<SaveVendorInput> = { name: 'Hill Country Supply', contactName: 'A person', email: 'orders@example.com', phone: '512-555-0100', terms: 'Net 30', notes: 'Delivers Tuesdays', active: true };
 

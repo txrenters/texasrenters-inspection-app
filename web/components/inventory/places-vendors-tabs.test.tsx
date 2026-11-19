@@ -10,7 +10,7 @@ import { VendorsTab } from './vendors-tab';
 const hooks = vi.hoisted(() => ({ useStockPlaces: vi.fn(), useVendors: vi.fn(), useInventoryEdits: vi.fn() }));
 vi.mock('@/lib/inventory-queries', () => hooks);
 
-const place = (over: Partial<StockPlaceRow> = {}): StockPlaceRow => ({ id: 'place-storeroom', name: 'Storeroom', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 42, active: true, ...over });
+const place = (over: Partial<StockPlaceRow> = {}): StockPlaceRow => ({ id: 'place-storeroom', name: 'Storeroom', code: 'STORE', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 42, active: true, ...over });
 const PLACES = [
   place(),
   place({ id: 'place-truck-1', name: 'Truck 1', kind: 'VAN', technicianId: 'tech-ana', technicianName: 'Ana Sample', itemsHeld: 11 }),
@@ -21,7 +21,7 @@ const TECHNICIANS = [
   { id: 'tech-ana', name: 'Ana Sample' },
   { id: 'tech-ben', name: 'Ben Sample' },
 ];
-const vendor = (over: Partial<VendorRow> = {}): VendorRow => ({ id: 'vendor-hill', name: 'Hill Country Supply', contactName: 'A Person', email: 'orders@example.test', phone: '512-555-0100', terms: 'Net 30', notes: null, active: true, ...over });
+const vendor = (over: Partial<VendorRow> = {}): VendorRow => ({ id: 'vendor-hill', number: 'V-00003', name: 'Hill Country Supply', contactName: 'A Person', email: 'orders@example.test', phone: '512-555-0100', terms: 'Net 30', notes: null, active: true, ...over });
 const VENDORS = [vendor(), vendor({ id: 'vendor-pest', name: 'Lone Star Pest Supply', contactName: null, email: null, phone: '830-555-0177', terms: 'Net 15' }), vendor({ id: 'vendor-old', name: 'Old Filter Co', active: false })];
 
 const mutation = () => ({ mutateAsync: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({})), isPending: false, error: null as Error | null, reset: vi.fn() });
@@ -69,6 +69,28 @@ describe('the Places tab', () => {
     await waitFor(() => expect(edits.createPlace.mutateAsync).toHaveBeenLastCalledWith({ name: 'Truck 4', kind: 'VAN', technicianId: 'tech-ben' }));
   });
 
+  it('suggests a location code from the name, and sends one only when it is typed (2026-11-20)', async () => {
+    render(<PlacesTab canManage enabled />);
+    const form = screen.getByRole('form', { name: 'New place' });
+    fireEvent.change(field(form, 'Name'), { target: { value: 'Truck 3' } });
+    expect(within(form).getByText(/Left empty, it is TRUCK-3/)).toBeTruthy();
+    expect((field(form, 'Location code') as HTMLInputElement).placeholder).toBe('TRUCK-3');
+    fireEvent.change(field(form, 'Location code'), { target: { value: 'trk-03' } });
+    expect((field(form, 'Location code') as HTMLInputElement).value).toBe('TRK-03');
+    fireEvent.click(within(form).getByRole('button', { name: 'Add place' }));
+    await waitFor(() => expect(edits.createPlace.mutateAsync).toHaveBeenCalledWith({ name: 'Truck 3', kind: 'VAN', code: 'TRK-03' }));
+
+    fireEvent.change(field(form, 'Name'), { target: { value: 'Truck 4' } });
+    fireEvent.change(field(form, 'Location code'), { target: { value: 'NOT/OK' } });
+    expect(within(form).getByText(/A code is 1 to 20 capitals/)).toBeTruthy();
+    expect((within(form).getByRole('button', { name: 'Add place' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows each place\'s location code', () => {
+    render(<PlacesTab canManage enabled />);
+    expect(within(screen.getByRole('table', { name: 'Places stock is kept' })).getByRole('row', { name: /^Storeroom/ }).textContent).toContain('STORE');
+  });
+
   it('adds a storeroom with nobody on it', async () => {
     render(<PlacesTab canManage enabled />);
     const form = screen.getByRole('form', { name: 'New place' });
@@ -111,6 +133,11 @@ describe('the Places tab', () => {
 });
 
 describe('the Vendors tab', () => {
+  it('shows each vendor\'s number, given by the console (2026-11-20)', () => {
+    render(<VendorsTab canManage enabled />);
+    expect(within(screen.getByRole('table', { name: 'Vendors' })).getByRole('row', { name: /Hill Country Supply/ }).textContent).toContain('V-00003');
+  });
+
   it('lists each vendor, and narrows by name or contact', () => {
     render(<VendorsTab canManage enabled />);
     const table = screen.getByRole('table', { name: 'Vendors' });

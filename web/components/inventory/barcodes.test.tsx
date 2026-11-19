@@ -20,6 +20,7 @@ const item = (over: Partial<StockItemRow> = {}): StockItemRow => ({
   reorderLevel: 24,
   reorderQuantity: 48,
   usualVendor: null,
+  lineType: { id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true },
   priceCents: 342,
   active: true,
   onHand: 27,

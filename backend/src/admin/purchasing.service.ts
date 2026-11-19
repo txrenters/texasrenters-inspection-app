@@ -110,7 +110,7 @@ export async function readPurchasingSettings(db: Pick<Db, 'purchasingSettings'>,
  * orders, "RCV" receipts -- taken under the series row's lock: two submitted at once never
  * share one.
  */
-export async function nextDocumentNumber(db: Pick<Db, '$queryRaw'>, organizationId: string, kind: 'PR' | 'PO' | 'RCV' | 'WD' | 'RT' | 'TR' | 'CNT'): Promise<number> {
+export async function nextDocumentNumber(db: Pick<Db, '$queryRaw'>, organizationId: string, kind: 'PR' | 'PO' | 'RCV' | 'WD' | 'RT' | 'TR' | 'CNT' | 'V'): Promise<number> {
   const [taken] = await db.$queryRaw<{ taken: number }[]>`
     INSERT INTO "DocumentSeries" ("organizationId", "kind", "next")
     VALUES (${organizationId}::uuid, ${kind}, 2)

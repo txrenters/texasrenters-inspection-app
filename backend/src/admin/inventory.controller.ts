@@ -38,6 +38,7 @@ export class SaveStockItemDto implements Required<SaveStockItemInput> {
   @ValidateIf(SET) @IsUUID() usualVendorId!: string | null;
   @ValidateIf(SET) @IsInt() @Min(0) @Max(MOST_ITEM_PRICE_CENTS) priceCents!: number | null;
   @IsOptional() @IsBoolean() active!: boolean;
+  @IsOptional() @IsUUID() lineTypeId!: string;
 }
 
 /** The prefix in either case; the service stores it upper case and the database checks its shape. */
@@ -62,6 +63,8 @@ export class ReverseMovementDto implements Required<ReverseMovementInput> {
 
 export class SaveStockPlaceDto implements Required<SaveStockPlaceInput> {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(80) name!: string;
+  /** In either case; the service keeps it in capitals and says what shape it must be. */
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(40) code!: string;
   @IsOptional() @IsIn(STOCK_PLACE_KINDS) kind!: StockPlaceKind;
   @ValidateIf(SET) @IsUUID() technicianId!: string | null;
   @IsOptional() @IsBoolean() active!: boolean;

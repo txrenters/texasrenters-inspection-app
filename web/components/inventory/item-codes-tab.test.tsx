@@ -19,6 +19,7 @@ const item = (over: Partial<StockItemRow> = {}): StockItemRow => ({
   reorderLevel: 24,
   reorderQuantity: 48,
   usualVendor: null,
+  lineType: { id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true },
   priceCents: 342,
   active: true,
   onHand: 27,
@@ -42,8 +43,13 @@ const COMPANIES = [
 const mutation = (answer: unknown = { item: item({ code: 'FLT-20201' }) }) => ({ mutateAsync: vi.fn<(input: unknown) => Promise<unknown>>(async () => answer), isPending: false, error: null as Error | null, reset: vi.fn() });
 let createItem: ReturnType<typeof mutation>;
 let updateItem: ReturnType<typeof mutation>;
-const mount = (over: { canManage?: boolean; companies?: typeof COMPANIES; items?: StockItemRow[] } = {}) =>
-  render(<ItemCodesTab canManage={over.canManage ?? true} categories={CATEGORIES} companies={over.companies ?? COMPANIES} items={over.items ?? ITEMS} />);
+const LINE_TYPES = [
+  { id: 'type-item', code: 'ITEM', name: 'Item', keepsStock: true, active: true },
+  { id: 'type-service', code: 'SERVICE', name: 'Service', keepsStock: false, active: true },
+  { id: 'type-old', code: 'OLD', name: 'Old type', keepsStock: true, active: false },
+];
+const mount = (over: { canManage?: boolean; companies?: typeof COMPANIES; items?: StockItemRow[]; lineTypes?: typeof LINE_TYPES } = {}) =>
+  render(<ItemCodesTab canManage={over.canManage ?? true} categories={CATEGORIES} companies={over.companies ?? COMPANIES} items={over.items ?? ITEMS} lineTypes={over.lineTypes} />);
 const pick = (root: HTMLElement, label: string, option: string | RegExp) => {
   fireEvent.keyDown(within(root).getByLabelText(label), { key: 'ArrowDown' });
   fireEvent.click(screen.getByRole('option', { name: option }));
@@ -159,6 +165,33 @@ describe('a new item code', () => {
     await waitFor(() => expect(createItem.mutateAsync).toHaveBeenCalled());
     expect(within(form).getByText('FLT-16251 is already Filter 16x25x1. Choose another code.')).toBeTruthy();
     expect(field(form, 'Description').value).toBe('Another filter');
+  });
+});
+
+describe('an item code\'s type (2026-11-20)', () => {
+  it('starts as an Item, offers the types in use, and sends the one chosen', async () => {
+    mount({ lineTypes: LINE_TYPES });
+    const form = screen.getByRole('form', { name: 'New item code' });
+    expect(within(form).getByLabelText('Type').textContent).toContain('Item (ITEM)');
+    fireEvent.keyDown(within(form).getByLabelText('Type'), { key: 'ArrowDown' });
+    expect(screen.queryByRole('option', { name: /Old type/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'Service (SERVICE), keeps no stock' }));
+    pick(form, 'Category', 'Filters (FLT)');
+    pick(form, 'Company', 'Example Home Services LLC');
+    fireEvent.change(field(form, 'Description'), { target: { value: 'Duct cleaning' } });
+    fireEvent.click(add(form));
+    await waitFor(() => expect(createItem.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ name: 'Duct cleaning', lineTypeId: 'type-service' })));
+  });
+
+  it('is shown in the list, and sent on an edit only when it changed', async () => {
+    mount({ lineTypes: LINE_TYPES });
+    expect(within(screen.getByRole('table', { name: 'Item codes' })).getByRole('row', { name: /FLT-16251/ }).textContent).toContain('Item');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit FLT-16251' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit FLT-16251' });
+    fireEvent.change(field(dialog, 'Description'), { target: { value: 'Filter 16x25x1, MERV 8' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateItem.mutateAsync).toHaveBeenCalled());
+    expect(updateItem.mutateAsync.mock.calls[0]![0]).not.toHaveProperty('input.lineTypeId');
   });
 });
 

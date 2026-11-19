@@ -29,6 +29,7 @@ import { useInventoryEdits, useVendors } from '@/lib/inventory-queries';
  */
 
 const COLUMNS: Array<Column<VendorRow>> = [
+  { key: 'number', header: 'No.', className: 'whitespace-nowrap', cell: (row) => <span className="font-mono font-semibold">{row.number}</span> },
   { key: 'name', header: 'Vendor', primary: true, cell: (row) => <span className="font-medium">{row.name}</span> },
   { key: 'contact', header: 'Contact', hideBelow: 'md', cell: (row) => row.contactName ?? EMPTY },
   { key: 'email', header: 'Email', hideBelow: 'lg', cell: (row) => row.email ?? <span className="text-muted-foreground text-xs">No email</span> },
