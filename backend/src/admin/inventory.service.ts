@@ -88,12 +88,13 @@ interface Level {
   valueCents: number;
 }
 
-const placeRow = (place: PlaceRecord): StockPlaceRow => ({
+const placeRow = (place: PlaceRecord, itemsHeld = 0): StockPlaceRow => ({
   id: place.id,
   name: place.name,
   kind: place.kind,
   technicianId: place.technicianId,
   technicianName: place.technician?.displayName ?? null,
+  itemsHeld,
   active: place.active,
 });
 
@@ -157,7 +158,7 @@ export class InventoryService {
     for (const level of levels) byItem.set(level.itemId, [...(byItem.get(level.itemId) ?? []), level]);
     return {
       items: items.map((item) => itemRow(item, byItem.get(item.id) ?? [], kinds, names)),
-      places: places.map(placeRow),
+      places: places.map((place) => placeRow(place, levels.filter((level) => level.placeId === place.id && level.quantity > 0).length)),
       companies: organisations.filter((row) => row.status === 'CONNECTED').map((row) => ({ tenantId: row.xeroTenantId, name: row.name })),
       vendors,
       categories: categories.map((category) => ({
@@ -585,16 +586,19 @@ export class InventoryService {
 
   async places(user: AuthenticatedUser): Promise<StockPlaces> {
     const organizationId = user.organizationId;
-    const [places, members] = await Promise.all([
+    const [places, held, members] = await Promise.all([
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: PLACE_SELECT, orderBy: [{ active: 'desc' }, { kind: 'asc' }, { nameKey: 'asc' }] }),
+      // How many different items each place has any of: one grouped read, whatever the number of places.
+      this.prisma.stockLevel.groupBy({ by: ['placeId'], where: { organizationId, quantity: { gt: 0 } }, _count: { _all: true } }),
       this.prisma.organizationMember.findMany({
         where: { organizationId, role: UserRole.INSPECTION_TECHNICIAN, userProfile: { isActive: true } },
         select: { userProfile: { select: { id: true, displayName: true } } },
       }),
     ]);
     const technicians = new Map(members.map(({ userProfile }) => [userProfile.id, userProfile.displayName]));
+    const itemsHeld = new Map(held.map((row) => [row.placeId, row._count._all]));
     return {
-      places: places.map(placeRow),
+      places: places.map((place) => placeRow(place, itemsHeld.get(place.id) ?? 0)),
       technicians: [...technicians].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name)),
     };
   }
@@ -632,10 +636,10 @@ export class InventoryService {
           data.name = name;
           data.nameKey = stockKey(name);
         }
-        const kind = input.kind ?? place.kind;
-        if (sent(input, 'kind')) data.kind = kind;
-        if (sent(input, 'kind') || sent(input, 'technicianId'))
-          data.technicianId = await this.vanTechnician(organizationId, kind, sent(input, 'technicianId') ? (input.technicianId ?? null) : place.technicianId);
+        // A place keeps its kind: a storeroom is where deliveries land and a truck is what a technician takes from.
+        if (sent(input, 'kind') && input.kind !== place.kind) throw new ApplicationError(409, 'STOCK_PLACE_KIND_FIXED', `${place.name} keeps its kind. Make another place instead.`);
+        const kind = place.kind;
+        if (sent(input, 'technicianId')) data.technicianId = await this.vanTechnician(organizationId, kind, input.technicianId ?? null);
         if (sent(input, 'active')) {
           if (input.active === false && place.active) {
             const held = await tx.stockLevel.aggregate({ where: { organizationId, placeId }, _sum: { quantity: true } });

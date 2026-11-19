@@ -51,8 +51,8 @@ const row = (over: Partial<StockItemRow> = {}): StockItemRow => ({
 const list = (items: StockItemRow[]): StockList => ({
   items,
   places: [
-    { id: 'place-stockroom', name: 'Stockroom', kind: 'STOCKROOM', technicianId: null, technicianName: null, active: true },
-    { id: 'place-shed', name: 'Old shed', kind: 'STOCKROOM', technicianId: null, technicianName: null, active: false },
+    { id: 'place-stockroom', name: 'Stockroom', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 2, active: true },
+    { id: 'place-shed', name: 'Old shed', kind: 'STOCKROOM', technicianId: null, technicianName: null, itemsHeld: 0, active: false },
   ],
   companies: [{ tenantId: 'tenant-thmp', name: 'THMP' }],
   vendors: [],

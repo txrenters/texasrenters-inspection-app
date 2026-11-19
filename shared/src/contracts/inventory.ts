@@ -87,9 +87,11 @@ export interface StockPlaceRow {
   id: string;
   name: string;
   kind: StockPlaceKind;
-  /** A van's technician; null for the stockroom or a van nobody drives yet. */
+  /** A truck's technician; null for a storeroom, or a truck any technician may use. */
   technicianId: string | null;
   technicianName: string | null;
+  /** How many different items it has any of now. */
+  itemsHeld: number;
   active: boolean;
 }
 
@@ -224,6 +226,9 @@ export interface StockPlaces {
   places: StockPlaceRow[];
   technicians: { id: string; name: string }[];
 }
+
+/** What the office calls each kind of place (2026-11-19: a van is "the truck" to this office). The stored value stays VAN. */
+export const STOCK_PLACE_KIND_LABEL: Record<StockPlaceKind, string> = { STOCKROOM: 'Storeroom', VAN: 'Truck' };
 
 export interface SaveStockPlaceInput {
   name?: string;

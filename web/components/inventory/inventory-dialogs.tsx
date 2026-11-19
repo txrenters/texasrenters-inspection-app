@@ -465,8 +465,8 @@ export function ReverseMovementDialog({
 // ── Place ─────────────────────────────────────────────────────────────────
 
 const PLACE_KINDS: { value: StockPlaceKind; label: string }[] = [
-  { value: 'STOCKROOM', label: 'Stockroom' },
-  { value: 'VAN', label: "A technician's van" },
+  { value: 'STOCKROOM', label: 'Storeroom' },
+  { value: 'VAN', label: 'Truck' },
 ];
 
 export function PlaceDialog({
@@ -492,17 +492,18 @@ export function PlaceDialog({
   const technicianId = kind === 'VAN' ? chosen(technician) : null;
   const input: SaveStockPlaceInput = {};
   if (name.trim() !== (place?.name ?? '')) input.name = name.trim();
-  if (kind !== place?.kind) input.kind = kind;
+  // A place keeps its kind: it is chosen when the place is made, and only then.
+  if (!place) input.kind = kind;
   if (technicianId !== (place?.technicianId ?? null)) input.technicianId = technicianId;
   if (place && active !== place.active) input.active = active;
-  // The van's technician, even if they have left the office since.
+  // The truck's technician, even if they have left the office since.
   const options = technicians.map((person) => ({ value: person.id, label: person.name }));
   if (place?.technicianId && place.technicianName && !options.some((option) => option.value === place.technicianId))
     options.push({ value: place.technicianId, label: place.technicianName });
 
   return (
     <FormDialog
-      description="Where stock is kept. A van is its own place, so what is in it can be counted."
+      description="Where stock is kept. A truck is its own place, so what is in it can be counted. A place keeps its kind."
       disabled={!name.trim() || !Object.keys(input).length}
       error={error}
       onClose={onClose}
@@ -515,8 +516,8 @@ export function PlaceDialog({
         <FieldLabel htmlFor="place-name">Name</FieldLabel>
         <Input autoComplete="off" id="place-name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
       </Field>
-      <Choice id="place-kind" label="Kind" onChange={(value) => setKind(value as StockPlaceKind)} options={PLACE_KINDS} value={kind} />
-      {kind === 'VAN' ? <Choice id="place-technician" label="Technician" none="Nobody yet" onChange={setTechnician} options={options} value={technician} /> : null}
+      {place ? null : <Choice id="place-kind" label="Kind" onChange={(value) => setKind(value as StockPlaceKind)} options={PLACE_KINDS} value={kind} />}
+      {kind === 'VAN' ? <Choice id="place-technician" label="Technician" none="Nobody: any technician may use it" onChange={setTechnician} options={options} value={technician} /> : null}
       {place ? <ActiveSwitch checked={active} id="place-active" label="In use" onChange={setActive} /> : null}
     </FormDialog>
   );

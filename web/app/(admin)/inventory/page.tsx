@@ -1,15 +1,17 @@
 'use client';
 
-import { formatMoney, stockSummary, type StockCategoryRow, type StockItemRow, type StockPlaceRow, type VendorRow } from '@texasrenters/shared';
-import { BoxesIcon, PencilIcon, TagsIcon, TruckIcon, WarehouseIcon } from 'lucide-react';
+import { formatMoney, stockSummary, type StockCategoryRow, type StockItemRow } from '@texasrenters/shared';
+import { BoxesIcon, PencilIcon, TagsIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { CountsTab } from '@/components/inventory/counts-tab';
 import { ReorderTab } from '@/components/inventory/reorder-tab';
-import { CategoryDialog, ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
+import { CategoryDialog, ItemDialog } from '@/components/inventory/inventory-dialogs';
 import { ItemCodesTab } from '@/components/inventory/item-codes-tab';
+import { PlacesTab } from '@/components/inventory/places-tab';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
+import { VendorsTab } from '@/components/inventory/vendors-tab';
 import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
 import { PageHeader } from '@/components/page-header';
 import { Stat, StatGroup } from '@/components/stat-card';
@@ -21,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatCount } from '@/lib/format';
-import { useInventoryEdits, useStock, useStockPlaces, useVendors } from '@/lib/inventory-queries';
+import { useInventoryEdits, useStock } from '@/lib/inventory-queries';
 import { useUrlState } from '@/lib/url-state';
 
 /**
@@ -49,8 +51,6 @@ export default function InventoryPage() {
   const canRequest = permissions.has('purchasing:request');
   const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '', period: '30d', technician: '' });
   const [item, setItem] = useState(false);
-  const [place, setPlace] = useState<Editing<StockPlaceRow>>(null);
-  const [vendor, setVendor] = useState<Editing<VendorRow>>(null);
   const [category, setCategory] = useState<Editing<StockCategoryRow>>(null);
   const stock = useStock();
   const edits = useInventoryEdits();
@@ -58,13 +58,10 @@ export default function InventoryPage() {
   const add =
     state.tab === 'categories' ? (
       <Button onClick={() => setCategory({})}>New category</Button>
-    ) : state.tab === 'places' ? (
-      <Button onClick={() => setPlace({})}>New place</Button>
-    ) : state.tab === 'vendors' ? (
-      <Button onClick={() => setVendor({})}>New vendor</Button>
-    ) : state.tab === 'withdrawals' || state.tab === 'counts' || state.tab === 'reorder' || state.tab === 'codes' ? undefined : (
+    ) : state.tab === 'stock' ? (
       <Button onClick={() => setItem(true)}>New item</Button>
-    );
+    ) : // Every other tab has its own form beside its list.
+    undefined;
 
   return (
     <>
@@ -143,10 +140,10 @@ export default function InventoryPage() {
           )}
         </TabsContent>
         <TabsContent value="places">
-          <PlacesTab canManage={canManage} enabled={state.tab === 'places'} onEdit={(row) => setPlace({ row })} />
+          <PlacesTab canManage={canManage} enabled={state.tab === 'places'} />
         </TabsContent>
         <TabsContent value="vendors">
-          <VendorsTab canManage={canManage} enabled={state.tab === 'vendors'} onEdit={(row) => setVendor({ row })} />
+          <VendorsTab canManage={canManage} enabled={state.tab === 'vendors'} />
         </TabsContent>
       </Tabs>
 
@@ -177,20 +174,6 @@ export default function InventoryPage() {
           pending={edits.updateCategory.isPending || edits.createCategory.isPending}
         />
       ) : null}
-      {place ? <PlaceEditor editing={place} onClose={() => setPlace(null)} /> : null}
-      {vendor ? (
-        <VendorDialog
-          error={(vendor.row ? edits.updateVendor : edits.createVendor).error}
-          onClose={() => {
-            setVendor(null);
-            edits.updateVendor.reset();
-            edits.createVendor.reset();
-          }}
-          onSave={(input) => (vendor.row ? edits.updateVendor.mutateAsync({ vendorId: vendor.row.id, input }) : edits.createVendor.mutateAsync(input))}
-          pending={edits.updateVendor.isPending || edits.createVendor.isPending}
-          vendor={vendor.row}
-        />
-      ) : null}
     </>
   );
 }
@@ -211,8 +194,8 @@ const STOCK_COLUMNS: Array<Column<StockItemRow>> = [
     ),
   },
   { key: 'company', header: 'Company', hideBelow: 'lg', cell: (row) => row.company?.name ?? EMPTY },
-  { key: 'stockrooms', header: 'Stockroom', numeric: true, hideBelow: 'md', cell: (row) => formatCount(row.inStockrooms) },
-  { key: 'vans', header: 'In vans', numeric: true, hideBelow: 'md', cell: (row) => formatCount(row.inVans) },
+  { key: 'stockrooms', header: 'Storeroom', numeric: true, hideBelow: 'md', cell: (row) => formatCount(row.inStockrooms) },
+  { key: 'vans', header: 'In trucks', numeric: true, hideBelow: 'md', cell: (row) => formatCount(row.inVans) },
   { key: 'onHand', header: 'On hand', numeric: true, cell: (row) => <span className="font-semibold">{formatCount(row.onHand)}</span> },
   { key: 'reorder', header: 'Reorder at', numeric: true, hideBelow: 'sm', cell: (row) => (row.reorderLevel ? formatCount(row.reorderLevel) : EMPTY) },
   { key: 'value', header: 'Value', numeric: true, hideBelow: 'xl', cell: (row) => formatMoney(row.valueCents) },
@@ -331,88 +314,10 @@ const CATEGORY_COLUMNS: Array<Column<StockCategoryRow>> = [
   { key: 'status', header: 'Status', cell: (row) => <InUseBadge active={row.active} /> },
 ];
 
-// ── Places ────────────────────────────────────────────────────────────────
-
-const PLACE_COLUMNS: Array<Column<StockPlaceRow>> = [
-  { key: 'name', header: 'Place', primary: true, cell: (row) => <span className="font-medium">{row.name}</span> },
-  { key: 'kind', header: 'Kind', cell: (row) => (row.kind === 'VAN' ? 'Van' : 'Stockroom') },
-  { key: 'technician', header: 'Technician', cell: (row) => row.technicianName ?? EMPTY },
-  { key: 'status', header: 'Status', cell: (row) => <InUseBadge active={row.active} /> },
-];
-
 function EditButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <Button aria-label={label} onClick={onClick} size="icon-sm" variant="ghost">
       <PencilIcon />
     </Button>
-  );
-}
-
-function PlacesTab({ enabled, canManage, onEdit }: { enabled: boolean; canManage: boolean; onEdit: (row: StockPlaceRow) => void }) {
-  const places = useStockPlaces(enabled);
-  if (places.isError) return <ErrorState error={places.error} retry={() => void places.refetch()} />;
-  if (!places.data) return <DataTableSkeleton columns={PLACE_COLUMNS} label="Loading places" rows={3} />;
-  if (!places.data.places.length)
-    return (
-      <EmptyState
-        description={canManage ? 'Add the stockroom first, then a place for each van that carries stock.' : 'No place has been added yet.'}
-        icon={WarehouseIcon}
-        title="No places yet"
-      />
-    );
-  return (
-    <DataTable
-      actions={canManage ? (row) => <EditButton label={`Edit ${row.name}`} onClick={() => onEdit(row)} /> : undefined}
-      columns={PLACE_COLUMNS}
-      label="Places stock is kept"
-      rowKey={(row) => row.id}
-      rows={places.data.places}
-    />
-  );
-}
-
-/** Its own component so the technicians are read only when the form is open. */
-function PlaceEditor({ editing, onClose }: { editing: { row?: StockPlaceRow }; onClose: () => void }) {
-  const places = useStockPlaces(true);
-  const { createPlace, updatePlace } = useInventoryEdits();
-  const row = editing.row;
-  if (!places.data) return null;
-  return (
-    <PlaceDialog
-      error={(row ? updatePlace : createPlace).error}
-      onClose={onClose}
-      onSave={(input) => (row ? updatePlace.mutateAsync({ placeId: row.id, input }) : createPlace.mutateAsync(input))}
-      pending={updatePlace.isPending || createPlace.isPending}
-      place={row}
-      technicians={places.data.technicians}
-    />
-  );
-}
-
-// ── Vendors ───────────────────────────────────────────────────────────────
-
-const VENDOR_COLUMNS: Array<Column<VendorRow>> = [
-  { key: 'name', header: 'Vendor', primary: true, cell: (row) => <span className="font-medium">{row.name}</span> },
-  { key: 'contact', header: 'Contact', hideBelow: 'md', cell: (row) => row.contactName ?? EMPTY },
-  { key: 'email', header: 'Email', hideBelow: 'lg', cell: (row) => row.email ?? EMPTY },
-  { key: 'phone', header: 'Phone', hideBelow: 'md', cell: (row) => row.phone ?? EMPTY },
-  { key: 'terms', header: 'Terms', hideBelow: 'sm', cell: (row) => row.terms ?? EMPTY },
-  { key: 'status', header: 'Status', cell: (row) => <InUseBadge active={row.active} /> },
-];
-
-function VendorsTab({ enabled, canManage, onEdit }: { enabled: boolean; canManage: boolean; onEdit: (row: VendorRow) => void }) {
-  const vendors = useVendors(enabled);
-  if (vendors.isError) return <ErrorState error={vendors.error} retry={() => void vendors.refetch()} />;
-  if (!vendors.data) return <DataTableSkeleton columns={VENDOR_COLUMNS} label="Loading vendors" rows={3} />;
-  if (!vendors.data.vendors.length)
-    return <EmptyState description={canManage ? 'Add who the office buys stock from.' : 'No vendor has been added yet.'} icon={TruckIcon} title="No vendors yet" />;
-  return (
-    <DataTable
-      actions={canManage ? (row) => <EditButton label={`Edit ${row.name}`} onClick={() => onEdit(row)} /> : undefined}
-      columns={VENDOR_COLUMNS}
-      label="Vendors"
-      rowKey={(row) => row.id}
-      rows={vendors.data.vendors}
-    />
   );
 }
