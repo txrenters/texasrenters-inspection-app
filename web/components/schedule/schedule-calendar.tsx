@@ -2,19 +2,29 @@
 
 import type { JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
 import { useQueries } from '@tanstack/react-query';
-import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, MapIcon } from 'lucide-react';
-import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, MapIcon, PlusIcon } from 'lucide-react';
+import { Fragment, useMemo, useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
 
+import { useNewJob } from '@/components/jobs/new-job-context';
 import { FilterPill, type FilterOption } from '@/components/planning/filter-pill';
 import { ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
 import { businessToday } from '@/lib/clock';
 import { fromDateValue, toDateValue } from '@/lib/date-range';
+import { formatDay } from '@/lib/format';
 import { typeTitle } from '@/lib/inspection-type-tone';
 import { jobberDayQuery } from '@/lib/queries';
 import {
@@ -29,6 +39,7 @@ import {
   monthTitle,
   NOBODY,
   NO_FILTERS,
+  oneCardPerJob,
   sortVisits,
   STATUS_GROUPS,
   stepAnchor,
@@ -96,6 +107,8 @@ export function ScheduleCalendar({
   const { has } = usePermissions();
   const canMap = has('technicians:read') && has('properties:read');
   const [hidden, setHidden] = useState<CalendarFilters>(NO_FILTERS);
+  const openNewJob = useNewJob();
+  const canCreate = has('inspections:manage');
 
   const days = useMemo(() => daysToRead(view, anchor), [view, anchor]);
   const results = useQueries({
@@ -125,7 +138,9 @@ export function ScheduleCalendar({
   const nameOf: NameOf = (row) => (row.technicianId ? (names.get(row.technicianId) ?? personOf(row)) : null);
 
   const options = filterOptions(byDate, nameOf);
-  const shownOn = (date: string) => (byDate.get(date)?.rows ?? []).filter((row) => isShown(row, hidden));
+  // One card a job: its inspections on the day are one visit (2026-11-20).
+  const shownOn = (date: string) =>
+    oneCardPerJob((byDate.get(date)?.rows ?? []).filter((row) => isShown(row, hidden)));
   /**
    * A day picked in the Week or Month view. With the map on, it is the map's
    * day and the calendar stays where it is (the office, 2026-11-05: "if we
@@ -138,6 +153,19 @@ export function ScheduleCalendar({
   const openDayView = (date: string) => onChange({ view: 'day', anchor: date });
   const openDay = (date: string) => (mapOn ? onChange({ anchor: date }) : openDayView(date));
   const mapDay = mapOn ? anchor : null;
+  /**
+   * What a right click on a day offers (2026-11-20): a new job on it -- for
+   * the technician whose column it is, on the Day view -- and the day itself.
+   */
+  const dayMenu: DayMenuActions = {
+    canCreate,
+    onNewJob: (date, technicianId) =>
+      openNewJob({ date, technicianId: technicianId ?? undefined, from: 'from the Schedule' }),
+    onOpenDayView: view === 'day' ? undefined : openDayView,
+    onShowOnMap: canMap ? (date) => onChange({ map: true, anchor: date }) : undefined,
+  };
+  // The toolbar's New job: the day shown on the Day view, else today when it is on screen.
+  const newJobDay = view === 'day' || !days.includes(today) ? anchor : today;
 
   return (
     <>
@@ -209,6 +237,12 @@ export function ScheduleCalendar({
                 Map
               </Button>
             ) : null}
+            {canCreate ? (
+              <Button onClick={() => openNewJob({ date: newJobDay, from: 'from the Schedule' })} size="sm">
+                <PlusIcon />
+                New job
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -223,16 +257,26 @@ export function ScheduleCalendar({
             <DayView
               date={anchor}
               day={byDate.get(anchor)}
+              dayMenu={dayMenu}
               hidden={hidden}
               nameOf={nameOf}
               rows={shownOn(anchor)}
               today={today}
             />
           ) : view === 'week' ? (
-            <WeekView days={days} mapDay={mapDay} nameOf={nameOf} onOpenDay={openDay} shownOn={shownOn} today={today} />
+            <WeekView
+              dayMenu={dayMenu}
+              days={days}
+              mapDay={mapDay}
+              nameOf={nameOf}
+              onOpenDay={openDay}
+              shownOn={shownOn}
+              today={today}
+            />
           ) : (
             <MonthView
               anchor={anchor}
+              dayMenu={dayMenu}
               mapDay={mapDay}
               nameOf={nameOf}
               onOpenDay={openDay}
@@ -306,6 +350,58 @@ function VisitCount({ count }: { count: number }) {
   );
 }
 
+/** What the day menu can do, decided once by the calendar for every day it draws. */
+interface DayMenuActions {
+  /** May make jobs (`inspections:manage`). */
+  canCreate: boolean;
+  onNewJob: (date: string, technicianId?: string | null) => void;
+  /** Absent on the Day view, which is the day already. */
+  onOpenDayView?: (date: string) => void;
+  /** Absent for an account that may not see the map. */
+  onShowOnMap?: (date: string) => void;
+}
+
+/**
+ * A right click on a day (2026-11-20): a new job on it, or for the technician
+ * whose column it is, and the day itself. The keyboard's menu key opens it on
+ * anything focused in the day, and a long press on a tablet. The New job button
+ * in the toolbar does the same for anybody who never right-clicks.
+ */
+function DayMenu({
+  actions,
+  date,
+  technician,
+  children,
+}: {
+  actions: DayMenuActions;
+  date: string;
+  /** The Day view's column: whose day it is. Null id for Unassigned. */
+  technician?: { id: string | null; name: string };
+  children: ReactElement;
+}) {
+  const { canCreate, onNewJob, onOpenDayView, onShowOnMap } = actions;
+  if (!canCreate && !onOpenDayView && !onShowOnMap) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel>{formatDay(date, 'long')}</ContextMenuLabel>
+        {canCreate ? (
+          <ContextMenuItem onSelect={() => onNewJob(date, technician?.id)}>
+            <PlusIcon />
+            {technician?.id ? `New job for ${technician.name}` : 'New job on this day'}
+          </ContextMenuItem>
+        ) : null}
+        {canCreate && (onOpenDayView || onShowOnMap) ? <ContextMenuSeparator /> : null}
+        {onOpenDayView ? <ContextMenuItem onSelect={() => onOpenDayView(date)}>Open the day</ContextMenuItem> : null}
+        {onShowOnMap ? (
+          <ContextMenuItem onSelect={() => onShowOnMap(date)}>Show the day on the map</ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 /** A stack of Anytime visits, the first few showing and the rest a click away. */
 function VisitStack({
   date,
@@ -354,6 +450,7 @@ interface GridColumn {
 function TimeGrid({
   columns,
   mapDay = null,
+  menu,
   nameOf,
   onPickDay,
   template,
@@ -362,6 +459,8 @@ function TimeGrid({
   columns: GridColumn[];
   /** The Week view's: a click on a day's hours picks it for the map. */
   mapDay?: string | null;
+  /** Gives each column its day menu, as the view above it does. */
+  menu: (column: GridColumn, cell: ReactElement) => ReactElement;
   nameOf: NameOf;
   onPickDay?: (date: string) => void;
   template: string;
@@ -398,7 +497,8 @@ function TimeGrid({
           .map((row) => ({ row, start: visitStart(row) }))
           .filter((entry): entry is { row: JobberDayRow; start: string } => Boolean(entry.start))
           .sort((a, b) => a.start.localeCompare(b.start));
-        return (
+        return menu(
+          column,
           <div
             className={cn(
               'relative border-l',
@@ -441,7 +541,7 @@ function TimeGrid({
                 />
               );
             })}
-          </div>
+          </div>,
         );
       })}
     </div>
@@ -452,6 +552,7 @@ function TimeGrid({
 function DayView({
   date,
   day,
+  dayMenu,
   hidden,
   nameOf,
   rows,
@@ -459,6 +560,7 @@ function DayView({
 }: {
   date: string;
   day: JobberDayComparison | undefined;
+  dayMenu: DayMenuActions;
   hidden: CalendarFilters;
   nameOf: NameOf;
   rows: JobberDayRow[];
@@ -476,6 +578,20 @@ function DayView({
     name: column.name,
     technicianId: column.technicianId,
   }));
+  // A technician's column offers a new job for them; Unassigned, one for nobody yet.
+  const menu = (column: GridColumn, cell: ReactElement) => {
+    const person = grid.find((entry) => entry.key === column.key);
+    return (
+      <DayMenu
+        actions={dayMenu}
+        date={date}
+        key={column.key}
+        technician={person ? { id: person.technicianId, name: person.name } : undefined}
+      >
+        {cell}
+      </DayMenu>
+    );
+  };
 
   return (
     <div className="bg-card overflow-x-auto rounded-xl border">
@@ -486,33 +602,39 @@ function DayView({
         </p>
         <div className="grid border-b" style={{ gridTemplateColumns: template }}>
           <span />
-          {grid.map((column) => (
-            <div className="flex min-w-0 flex-col items-center gap-1 border-l px-2 py-2.5" key={column.key}>
-              <span className="flex max-w-full min-w-0 items-center gap-2">
-                <PersonDisc name={column.technicianId ? column.name : null} />
-                <span className={cn('truncate text-sm font-semibold', column.technicianId ? 'text-heading' : 'text-warning')}>
-                  {column.name}
+          {grid.map((column) =>
+            menu(
+              column,
+              <div className="flex min-w-0 flex-col items-center gap-1 border-l px-2 py-2.5">
+                <span className="flex max-w-full min-w-0 items-center gap-2">
+                  <PersonDisc name={column.technicianId ? column.name : null} />
+                  <span className={cn('truncate text-sm font-semibold', column.technicianId ? 'text-heading' : 'text-warning')}>
+                    {column.name}
+                  </span>
                 </span>
-              </span>
-              <VisitCount count={column.rows.filter(counts).length} />
-            </div>
-          ))}
+                <VisitCount count={column.rows.filter(counts).length} />
+              </div>,
+            ),
+          )}
         </div>
         <div className="grid" style={{ gridTemplateColumns: template }}>
           <span className="text-muted-foreground px-2 py-2 text-right text-[11px]">Anytime</span>
-          {grid.map((column) => (
-            <div className="min-w-0 border-l p-1.5" key={column.key}>
-              <VisitStack
-                date={date}
-                nameOf={nameOf}
-                rows={column.rows.filter((row) => !visitStart(row))}
-                showPerson={false}
-                shown={DAY_SHOWN}
-              />
-            </div>
-          ))}
+          {grid.map((column) =>
+            menu(
+              column,
+              <div className="min-w-0 border-l p-1.5">
+                <VisitStack
+                  date={date}
+                  nameOf={nameOf}
+                  rows={column.rows.filter((row) => !visitStart(row))}
+                  showPerson={false}
+                  shown={DAY_SHOWN}
+                />
+              </div>,
+            ),
+          )}
         </div>
-        <TimeGrid columns={grid} nameOf={nameOf} template={template} today={today} />
+        <TimeGrid columns={grid} menu={menu} nameOf={nameOf} template={template} today={today} />
       </div>
     </div>
   );
@@ -533,6 +655,7 @@ function pickOnGround(mapDay: string | null, date: string, onPick: (date: string
 
 /** Jobber's Week view: Sunday to Saturday, a column a day. */
 function WeekView({
+  dayMenu,
   days,
   mapDay,
   nameOf,
@@ -540,6 +663,7 @@ function WeekView({
   shownOn,
   today,
 }: {
+  dayMenu: DayMenuActions;
   days: string[];
   /** The day on the map beside the calendar; null while the map is off. */
   mapDay: string | null;
@@ -555,13 +679,18 @@ function WeekView({
     date,
     rows: sortVisits(shownOn(date), personFirst(nameOf)),
   }));
+  const menu = (column: GridColumn, cell: ReactElement) => (
+    <DayMenu actions={dayMenu} date={column.date} key={column.key}>
+      {cell}
+    </DayMenu>
+  );
 
   return (
     <div className="bg-card overflow-x-auto rounded-xl border">
       <div style={{ minWidth: `calc(3.5rem + ${days.length} * 9rem)` }}>
         <div className="grid border-b" style={{ gridTemplateColumns: template }}>
           <span />
-          {grid.map((column) => (
+          {grid.map((column) => menu(column,
             <div
               className={cn(
                 'flex flex-col items-center gap-1 border-l px-2 py-2.5',
@@ -591,12 +720,12 @@ function WeekView({
                 {dayOfMonth(column.date)} {weekdayOf(column.date)}
               </button>
               <VisitCount count={column.rows.filter(counts).length} />
-            </div>
+            </div>,
           ))}
         </div>
         <div className="grid" style={{ gridTemplateColumns: template }}>
           <span className="text-muted-foreground px-2 py-2 text-right text-[11px]">Anytime</span>
-          {grid.map((column) => (
+          {grid.map((column) => menu(column,
             <div
               className={cn(
                 'min-w-0 border-l p-1.5',
@@ -613,12 +742,13 @@ function WeekView({
                 showPerson
                 shown={WEEK_SHOWN}
               />
-            </div>
+            </div>,
           ))}
         </div>
         <TimeGrid
           columns={grid}
           mapDay={mapDay}
+          menu={menu}
           nameOf={nameOf}
           onPickDay={onOpenDay}
           template={template}
@@ -632,6 +762,7 @@ function WeekView({
 /** Jobber's Month view: whole weeks, the month's own days filled in. */
 function MonthView({
   anchor,
+  dayMenu,
   mapDay,
   nameOf,
   onOpenDay,
@@ -640,6 +771,7 @@ function MonthView({
   today,
 }: {
   anchor: string;
+  dayMenu: DayMenuActions;
   /** The day on the map beside the calendar; null while the map is off. */
   mapDay: string | null;
   nameOf: NameOf;
@@ -667,7 +799,7 @@ function MonthView({
             const own = inMonth.has(date);
             const rows = own ? sortVisits(shownOn(date), personFirst(nameOf)) : [];
             const working = rows.filter(counts).length;
-            return (
+            const cell = (
               <div
                 className={cn(
                   'flex min-h-32 min-w-0 flex-col gap-1 p-1.5',
@@ -718,6 +850,14 @@ function MonthView({
                   </button>
                 ) : null}
               </div>
+            );
+            // The month's own days take the day menu; the days of the weeks around it do not.
+            return own ? (
+              <DayMenu actions={dayMenu} date={date} key={date}>
+                {cell}
+              </DayMenu>
+            ) : (
+              <Fragment key={date}>{cell}</Fragment>
             );
           })}
         </div>
