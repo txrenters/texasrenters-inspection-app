@@ -12,6 +12,7 @@ import {
 import type { Prisma, TbpOrderSource } from '@prisma/client';
 import {
   MAX_CARRY_BACK_QUARTERS,
+  type AddToQuarterResult,
   type PriorRank,
   type Quarter,
   type RotationCandidate,
@@ -374,6 +375,112 @@ export class TbpPlanService {
       unverifiedEnrollmentCount: unverified,
       regenerated: Boolean(existing),
     };
+  }
+
+  /**
+   * Give a property in the package a visit in a quarter already built (the
+   * office, 2026-11-20, from the plan's Coverage tab): one whose lease began
+   * after the build, so the quarter has no stop for it. Each of its enrolled
+   * leases with no stop gets one, at the end of the queue and with no day: the
+   * office gives it a day in its window, and "Publish the rest" books it in
+   * Jobber.
+   *
+   * Only this property's stops are written. A rebuild (`generate`) would add it
+   * too, but it re-plans every visit not yet booked, which a button on one row
+   * must not do. A lease that already has a stop keeps it as it is -- excluded
+   * included, which is a decision -- so a second press adds nothing.
+   */
+  async addToQuarter(user: AuthenticatedUser, planId: string, buildingId: string): Promise<AddToQuarterResult> {
+    const organizationId = user.organizationId;
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { id: true, status: true, quarterYear: true, quarterNumber: true, officeDetailsRows: true },
+    });
+    if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
+    const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
+    // The plans a rebuild may touch: never one mid-publish, nor one called off.
+    if (
+      plan.status !== TbpPlanStatus.DRAFT &&
+      plan.status !== TbpPlanStatus.PUBLISHED &&
+      plan.status !== TbpPlanStatus.PUBLISH_FAILED
+    )
+      throw new ApplicationError(
+        409,
+        'PLAN_NOT_OPEN',
+        `The ${quarterLabel(quarter)} plan is ${plan.status.toLowerCase().replace('_', ' ')}, so nothing can be added to it.`,
+      );
+
+    const { enrolled } = await this.enrolledTenancies(organizationId);
+    const here = enrolled.filter((tenant) => tenant.propertywareBuildingId === buildingId);
+    if (!here.length)
+      throw new ApplicationError(
+        409,
+        'NOT_IN_PACKAGE',
+        'This property is not in the benefit package, so the quarter has no visit to give it.',
+      );
+
+    const existing = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { planId: plan.id, propertywareTenantId: { in: here.map((tenant) => tenant.id) } },
+      select: { id: true, propertywareTenantId: true },
+    });
+    const missing = here.filter((tenant) => !existing.some((stop) => stop.propertywareTenantId === tenant.id));
+    const kept = existing.map((stop) => stop.id);
+    if (!missing.length) return { planId: plan.id, added: [], kept };
+
+    // Where it stood in earlier quarters, as a rebuild would carry it; the end
+    // of the queue for its place in this one, which is already laid out.
+    const priorQuarters = await this.ordersForRotation(organizationId, quarter);
+    const ranked = new Map(carryForwardOrder(missing.map(rotationCandidate), priorQuarters).map((rank) => [rank.tenantExternalId, rank]));
+    const previousTechnician = previousTechnicians(priorQuarters);
+    const office = matchOfficeDetails(officeRowsFrom(plan.officeDetailsRows), here);
+    const last = await this.prisma.tbpQuarterPlanStop.aggregate({ where: { planId: plan.id }, _max: { sequence: true } });
+
+    let sequence = last._max.sequence ?? 0;
+    let blocked = 0;
+    for (const tenant of missing) {
+      sequence += 1;
+      const rank = ranked.get(tenant.externalId)!;
+      const isBlocked = await this.upsertStop(organizationId, plan.id, tenant, { ...rank, sequence }, quarter, {
+        officeDetails: office.byTenantId.get(tenant.id) ?? null,
+        previousTechnicianId: previousTechnician.get(tenant.externalId) ?? null,
+      });
+      if (isBlocked) blocked += 1;
+    }
+
+    const added = (
+      await this.prisma.tbpQuarterPlanStop.findMany({
+        where: { planId: plan.id, propertywareTenantId: { in: missing.map((tenant) => tenant.id) } },
+        select: { id: true },
+        orderBy: { sequence: 'asc' },
+      })
+    ).map((stop) => stop.id);
+    const stopCount = await this.prisma.tbpQuarterPlanStop.count({ where: { planId: plan.id } });
+    await this.prisma.tbpQuarterPlan.update({
+      where: { id: plan.id },
+      data: { stopCount, ...(blocked ? { blockedCount: { increment: blocked } } : {}) },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_PROPERTY_ADDED',
+        entityType: 'TbpQuarterPlan',
+        entityId: plan.id,
+        metadata: { quarter: quarterLabel(quarter), buildingId, stopIds: added, keptStopIds: kept },
+      },
+    });
+    this.logger.log({
+      event: 'tbp_plan_property_added',
+      organizationId,
+      planId: plan.id,
+      quarter: quarterLabel(quarter),
+      buildingId,
+      added: added.length,
+      kept: kept.length,
+      blocked,
+    });
+
+    return { planId: plan.id, added, kept };
   }
 
   /**

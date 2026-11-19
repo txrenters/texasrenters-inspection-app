@@ -224,6 +224,29 @@ export default function PlanningPage() {
    */
   const lateMoveOuts = usePlanLateMoveOuts(plan?.id, plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED');
   const canMoveVisits = canChange && has('inspections:manage');
+  /**
+   * A property in the package the quarter has no visit for, given one from the
+   * Coverage tab (the office, 2026-11-20). Its window opens at once, to give it
+   * a day; "Publish the rest" then books it in Jobber.
+   */
+  const addToQuarter = (buildingId: string) => {
+    if (!plan) return;
+    const label = `Q${plan.quarterNumber} ${plan.quarterYear}`;
+    mutations.addToQuarter.mutate(
+      { planId: plan.id, buildingId },
+      {
+        onSuccess: (result) => {
+          if (!result.added.length) {
+            toast.info(`It already has a visit in ${label}.`);
+            return;
+          }
+          toast.success(`Added to ${label}`, { description: 'Give it a day here, then publish the rest to book it in Jobber.' });
+          setOpenStopId(result.added[0]!);
+        },
+        onError: (error) => toast.error(`It could not be added to ${label}`, { description: error.message }),
+      },
+    );
+  };
   const moveToMonday = (conflict: { date: string; technician: { id: string } }, inspectionIds: string[]) => {
     if (!plan) return;
     mutations.moveToMonday.mutate(
@@ -940,7 +963,12 @@ export default function PlanningPage() {
               ) : coverage.isError ? (
                 <ErrorState error={coverage.error} retry={() => void coverage.refetch()} />
               ) : coverage.data ? (
-                <QuarterCoverageView coverage={coverage.data} onOpenStop={setOpenStopId} />
+                <QuarterCoverageView
+                  adding={mutations.addToQuarter.isPending ? (mutations.addToQuarter.variables?.buildingId ?? null) : null}
+                  coverage={coverage.data}
+                  onAdd={canPlace ? addToQuarter : undefined}
+                  onOpenStop={setOpenStopId}
+                />
               ) : null}
             </TabsContent>
           </Tabs>

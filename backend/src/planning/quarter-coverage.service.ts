@@ -119,6 +119,7 @@ export class QuarterCoverageService {
         select: {
           id: true,
           propertywareBuildingId: true,
+          propertywareTenantId: true,
           status: true,
           scheduledOn: true,
           inspectionType: true,
@@ -220,7 +221,7 @@ export class QuarterCoverageService {
       }),
       this.prisma.propertywareTenant.findMany({
         where: { organizationId, isActive: true, propertywareBuildingId: { in: inPackage } },
-        select: { propertywareBuildingId: true, tbpEnrollment: true, zone: true, firstSyncedAt: true },
+        select: { id: true, propertywareBuildingId: true, tbpEnrollment: true, zone: true, firstSyncedAt: true },
       }),
     ]);
     const buildingOf = new Map(buildings.map((building) => [building.id, building]));
@@ -228,13 +229,16 @@ export class QuarterCoverageService {
       const building = buildingOf.get(buildingId);
       return building?.addressLine1?.trim() || building?.name || 'Unknown property';
     };
-    const leasesOf = new Map<string, { count: number; zone: string | null; newest: Date | null }>();
+    // The leases the plan has a stop for, under any status: what adding a property would leave alone.
+    const planned = new Set(stops.map((stop) => stop.propertywareTenantId));
+    const leasesOf = new Map<string, { count: number; missing: number; zone: string | null; newest: Date | null }>();
     for (const tenancy of tenancies) {
       if (!isTbpEnrolled(tenancy.tbpEnrollment) || !isTbpZone(tenancy.zone)) continue;
       const buildingId = tenancy.propertywareBuildingId!;
-      const was = leasesOf.get(buildingId) ?? { count: 0, zone: null, newest: null };
+      const was = leasesOf.get(buildingId) ?? { count: 0, missing: 0, zone: null, newest: null };
       leasesOf.set(buildingId, {
         count: was.count + 1,
+        missing: was.missing + (planned.has(tenancy.id) ? 0 : 1),
         zone: was.zone ?? tenancy.zone?.trim() ?? null,
         newest: !was.newest || tenancy.firstSyncedAt > was.newest ? tenancy.firstSyncedAt : was.newest,
       });
@@ -256,6 +260,7 @@ export class QuarterCoverageService {
         visit: best?.visit ?? null,
         previousLeaseOpen: list.filter((candidate) => candidate !== best && candidate.visit.previousLease && isOpen(candidate))
           .length,
+        missingLeases: leases?.missing ?? 0,
       };
     });
 

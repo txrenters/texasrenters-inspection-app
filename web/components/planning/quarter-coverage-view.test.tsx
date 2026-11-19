@@ -41,6 +41,7 @@ const property = (buildingId: string, overrides: Partial<QuarterCoverageProperty
   detail: 'IN_REVIEW',
   visit: visit({ stopId: `stop-${buildingId}`, inspectionId: `insp-${buildingId}` }),
   previousLeaseOpen: 0,
+  missingLeases: 0,
   ...overrides,
 });
 
@@ -51,7 +52,8 @@ const COVERAGE: QuarterCoverage = {
   today: '2026-11-20',
   properties: [
     property('1', { visit: visit({ previousLease: true, inspectionId: 'insp-1' }) }),
-    property('2', { detail: 'FINISHED', visit: visit({ inspectionStatus: 'COMPLETED', inspectionId: 'insp-2' }) }),
+    // Visited for its old tenant; the new one has no visit.
+    property('2', { detail: 'FINISHED', missingLeases: 1, visit: visit({ inspectionStatus: 'COMPLETED', inspectionId: 'insp-2' }) }),
     property('3', {
       group: 'SCHEDULED',
       detail: 'PAST_DUE',
@@ -71,7 +73,7 @@ const COVERAGE: QuarterCoverage = {
       zone: '1',
       visit: visit({ stopId: 'stop-5', inspectionId: null, inspectionStatus: null, stopStatus: 'UNSCHEDULED', scheduledOn: null, technician: null }),
     }),
-    property('6', { group: 'NONE', detail: 'NOT_PLANNED', visit: null, firstOnReport: '2026-10-20T13:00:00.000Z', zone: '3' }),
+    property('6', { group: 'NONE', detail: 'NOT_PLANNED', visit: null, firstOnReport: '2026-10-20T13:00:00.000Z', zone: '3', missingLeases: 1 }),
     property('7', {
       group: 'NONE',
       detail: 'EXCLUDED',
@@ -127,8 +129,29 @@ describe('the quarter’s coverage tab', () => {
     expect(onOpenStop).toHaveBeenCalledWith('stop-5');
     expect(within(noDay!).queryByRole('link', { name: 'Open visit' })).toBeNull();
 
+    expect(within(joiner!).getByText('On the tenant report since Oct 20, 2026, after the quarter was built')).toBeTruthy();
+    // Nobody can add it here, so the Group maker is the way in.
     expect(within(joiner!).getByRole('link', { name: 'Find it a group' }).getAttribute('href')).toBe('/group-maker');
     expect(within(joiner!).getByRole('link', { name: '6 Oak St' }).getAttribute('href')).toBe('/properties/6');
+    expect(screen.queryByRole('button', { name: 'Add to Q4 2026' })).toBeNull();
+  });
+
+  it('adds a property with no visit to the quarter, and says when one with a visit has a lease without', () => {
+    const onAdd = vi.fn();
+    const { rerender } = render(<QuarterCoverageView coverage={COVERAGE} onAdd={onAdd} />);
+
+    const finished = rows()[1]!;
+    expect(within(finished).getByText('Its current lease has no visit this quarter')).toBeTruthy();
+    const joiner = rows()[5]!;
+    expect(within(joiner).queryByRole('link', { name: 'Find it a group' })).toBeNull();
+    fireEvent.click(within(joiner).getByRole('button', { name: 'Add to Q4 2026' }));
+    expect(onAdd).toHaveBeenCalledWith('6');
+    // Only where a lease has no stop: not the excluded one, whose lease has.
+    expect(screen.getAllByRole('button', { name: 'Add to Q4 2026' })).toHaveLength(2);
+
+    rerender(<QuarterCoverageView adding="6" coverage={COVERAGE} onAdd={onAdd} />);
+    const busy = within(rows()[5]!).getByRole('button', { name: 'Adding…' });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('warns of a property that left the package with its visit still booked', () => {
@@ -171,10 +194,8 @@ describe('the coverage words', () => {
   });
 
   it('names when a property not in the plan joined', () => {
-    expect(nextStep(COVERAGE.properties[5]!)).toBe(
-      'On the tenant report since Oct 20, 2026, after the quarter was built: find it a group',
-    );
-    expect(nextStep({ ...COVERAGE.properties[5]!, firstOnReport: null })).toBe('Not in this quarter’s plan: find it a group');
+    expect(nextStep(COVERAGE.properties[5]!)).toBe('On the tenant report since Oct 20, 2026, after the quarter was built');
+    expect(nextStep({ ...COVERAGE.properties[5]!, firstOnReport: null })).toBe('Not in this quarter’s plan');
   });
 
   it('counts the days to the quarter’s end, and none after it', () => {

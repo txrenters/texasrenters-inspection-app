@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -214,6 +214,7 @@ function mount({
   optimizeDays = idle as unknown,
   moveToDay = idle as unknown,
   unschedule = idle as unknown,
+  addToQuarter = idle as unknown,
   unschedulePreview = { isLoading: false, data: undefined } as unknown,
 } = {}) {
   hooks.usePlanUnschedulePreview.mockReturnValue(unschedulePreview);
@@ -252,6 +253,7 @@ function mount({
     optimizeDays,
     moveToDay,
     unschedule,
+    addToQuarter,
   });
   return render(<PlanningPage />);
 }
@@ -1615,6 +1617,7 @@ describe('where every property in the package stands this quarter', () => {
         detail: 'NOT_PLANNED',
         visit: null,
         previousLeaseOpen: 0,
+        missingLeases: 1,
       },
       {
         buildingId: 'building-u',
@@ -1639,6 +1642,7 @@ describe('where every property in the package stands this quarter', () => {
           note: null,
         },
         previousLeaseOpen: 0,
+        missingLeases: 0,
       },
     ],
     leftWithOpenVisit: [],
@@ -1659,6 +1663,23 @@ describe('where every property in the package stands this quarter', () => {
     expect(hooks.usePlanCoverage).toHaveBeenLastCalledWith('plan-1', true);
     expect(screen.getByRole('link', { name: '14 Joiner Way' }).getAttribute('href')).toBe('/properties/building-j');
     fireEvent.click(screen.getByRole('button', { name: 'Open in the plan' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('adds a property with no visit to the quarter, then opens its visit to give it a day', () => {
+    url.state = { quarter: '2026-4', tab: 'coverage', day: '', view: 'month', show: 'all' };
+    const addToQuarter = { mutate: vi.fn(), isPending: false, variables: undefined };
+    const success = vi.spyOn(toast, 'success');
+    mount({ coverage: COVERAGE, addToQuarter });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Q4 2026' }));
+
+    expect(addToQuarter.mutate).toHaveBeenCalledWith({ planId: 'plan-1', buildingId: 'building-j' }, expect.anything());
+    const { onSuccess } = addToQuarter.mutate.mock.calls[0]![1] as { onSuccess: (result: unknown) => void };
+    act(() => onSuccess({ planId: 'plan-1', added: ['s1'], kept: [] }));
+    expect(success).toHaveBeenCalledWith('Added to Q4 2026', {
+      description: 'Give it a day here, then publish the rest to book it in Jobber.',
+    });
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });

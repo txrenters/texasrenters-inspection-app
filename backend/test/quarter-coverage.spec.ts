@@ -33,12 +33,14 @@ const stop = (
     scheduledOn?: string | null;
     leaseActive?: boolean;
     tenantBuildingId?: string | null;
+    tenantId?: string;
     note?: string | null;
     type?: string;
   } = {},
 ) => ({
   id,
   propertywareBuildingId: buildingId,
+  propertywareTenantId: options.tenantId ?? `t-${buildingId ?? options.tenantBuildingId}`,
   status,
   scheduledOn: options.scheduledOn ? day(options.scheduledOn) : null,
   inspectionType: options.type ?? 'HVAC',
@@ -65,13 +67,14 @@ const STOPS = [
   stop('s-old', 'NEWLEASE', 'PUBLISHED', {
     inspection: inspection('i-old', 'REVIEW_REQUIRED', '2026-10-07'),
     leaseActive: false,
+    tenantId: 't-NEWLEASE-old',
     type: 'OCCUPIED',
   }),
   // Taken out of the plan, then booked again straight in Jobber.
   stop('s-rebooked', 'REBOOKED', 'EXCLUDED'),
   // Booked now, and an old lease's visit still on Jobber's Unscheduled list.
   stop('s-current', 'LEFTOVER', 'PUBLISHED', { inspection: inspection('i-current', 'SCHEDULED', '2026-11-25') }),
-  stop('s-leftover', 'LEFTOVER', 'UNSCHEDULED', { leaseActive: false }),
+  stop('s-leftover', 'LEFTOVER', 'UNSCHEDULED', { leaseActive: false, tenantId: 't-LEFTOVER-old' }),
   // Out of the package now, still booked.
   stop('s-gone', 'GONE', 'PUBLISHED', { inspection: inspection('i-gone', 'SCHEDULED', '2026-11-25') }),
   // Out of the package, its visit long done: nothing to act on.
@@ -91,7 +94,11 @@ const JOBBER_VISITS = [
   },
 ];
 
-const tenancy = (buildingId: string, options: { enrolled?: string; active?: boolean; zone?: string; firstSyncedAt?: string } = {}) => ({
+const tenancy = (
+  buildingId: string,
+  options: { id?: string; enrolled?: string; active?: boolean; zone?: string; firstSyncedAt?: string } = {},
+) => ({
+  id: options.id ?? `t-${buildingId}`,
   propertywareBuildingId: buildingId,
   isActive: options.active ?? true,
   tbpEnrollment: options.enrolled ?? 'Yes',
@@ -102,13 +109,13 @@ const tenancy = (buildingId: string, options: { enrolled?: string; active?: bool
 
 const TENANCIES = [
   ...['REVIEW', 'DONE', 'LATE', 'TODAY', 'NODAY', 'BLOCKED', 'CANCELLED', 'EXCLUDED', 'REBOOKED', 'LEFTOVER'].map((id) => tenancy(id)),
-  tenancy('NEWLEASE', { active: false }),
+  tenancy('NEWLEASE', { id: 't-NEWLEASE-old', active: false }),
   tenancy('NEWLEASE', { firstSyncedAt: '2026-11-14T08:00:00Z' }),
   // Joined after the quarter was built: in no plan.
   tenancy('JOINER', { zone: 'Zone 3', firstSyncedAt: '2026-10-20T08:00:00Z' }),
   // Two enrolled units.
-  tenancy('UNITS'),
-  tenancy('UNITS'),
+  tenancy('UNITS', { id: 't-UNITS-1' }),
+  tenancy('UNITS', { id: 't-UNITS-2' }),
   tenancy('GONE', { enrolled: 'No' }),
   tenancy('GONEDONE', { active: false }),
   // Zone 5 is not the package.
@@ -210,6 +217,7 @@ describe('a quarter’s coverage', () => {
       detail: 'NOT_PLANNED',
       visit: null,
       previousLeaseOpen: 0,
+      missingLeases: 1,
     });
     expect(await placeOf('EXCLUDED')).toMatchObject({
       group: 'NONE',
@@ -248,6 +256,13 @@ describe('a quarter’s coverage', () => {
         }),
       }),
     );
+  });
+
+  it('counts the enrolled leases the plan has no stop for -- an excluded stop is one it has', async () => {
+    const coverage = await build().service.coverage(ORG, Q4.id, NOW);
+    const missing = Object.fromEntries(coverage.properties.map((property) => [property.buildingId, property.missingLeases]));
+
+    expect(missing).toMatchObject({ JOINER: 1, UNITS: 2, NEWLEASE: 1, EXCLUDED: 0, REBOOKED: 0, BLOCKED: 0, LEFTOVER: 0 });
   });
 
   it('says when an ended lease’s visit is still waiting beside the current one', async () => {
