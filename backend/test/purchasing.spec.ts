@@ -2,8 +2,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { MACHINE_FORBIDDEN_PERMISSIONS, type RequisitionDecisionInput, type SavePurchasingSettingsInput, type SaveRequisitionInput } from '@texasrenters/shared';
 
-import { PurchasingController, RequisitionDecisionDto, SavePurchasingSettingsDto, SaveRequisitionDto } from '../src/admin/purchasing.controller';
+import { PurchasingController, RequisitionDecisionDto, SavePurchasingSettingsDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
 import { PurchasingService } from '../src/admin/purchasing.service';
+import { sniffRequisitionFile } from '../src/admin/requisition-files';
+import { RequisitionFilesService } from '../src/admin/requisition-files.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 /**
@@ -84,6 +86,8 @@ function database() {
   const quotes: Row[] = [];
   const audits: Row[] = [];
   const settings: Row[] = [];
+  /** Files attached (2026-11-20). */
+  const files: Row[] = [];
   let series = 0;
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
@@ -176,16 +180,47 @@ function database() {
         else settings.push({ ...create });
       }),
     },
+    purchaseRequisitionFile: {
+      findMany: jest.fn(async ({ where }: { where: Where }) =>
+        files.filter((row) => matches(row, where)).map((row) => ({ ...row, attachedBy: { displayName: PEOPLE.find((one) => one.id === row.attachedById)!.displayName } })),
+      ),
+      findFirst: jest.fn(async ({ where }: { where: Where }) => files.find((row) => matches(row, where)) ?? null),
+      count: jest.fn(async ({ where }: { where: Where }) => files.filter((row) => matches(row, where)).length),
+      create: jest.fn(async ({ data }: { data: Row }) => {
+        const row = { forVendor: false, attachedAt: new Date((clock += 1000)), ...data };
+        files.push(row);
+        return row;
+      }),
+      updateMany: jest.fn(async ({ where, data }: { where: Where; data: Row }) => {
+        const found = files.filter((row) => matches(row, where));
+        for (const row of found) Object.assign(row, data);
+        return { count: found.length };
+      }),
+      deleteMany: jest.fn(async ({ where }: { where: Where }) => {
+        const before = files.length;
+        for (let index = files.length - 1; index >= 0; index -= 1) if (matches(files[index]!, where)) files.splice(index, 1);
+        return { count: before - files.length };
+      }),
+    },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => audits.push({ createdAt: new Date((clock += 1000)), ...data })),
       findMany: jest.fn(async ({ where }: { where: Where }) => audits.filter((row) => matches(row, where)).reverse()),
     },
-    $queryRaw: jest.fn(async () => [{ taken: (series += 1) }]),
+    // Taking the next number answers it; the files' lock answers nothing.
+    $queryRaw: jest.fn(async (sql: TemplateStringsArray) => (sql.join('').includes('DocumentSeries') ? [{ taken: (series += 1) }] : [])),
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, requisitions, lines, quotes, audits, codes, service: new PurchasingService(db as never) };
+  const storage = {
+    put: jest.fn(async () => undefined),
+    get: jest.fn(async (key: string) => Buffer.from(`the bytes of ${key}`)),
+    delete: jest.fn(async () => undefined),
+    signedUrl: jest.fn(async (key: string, _seconds: number, disposition: string): Promise<string | null> => `https://files.example/${key}?disposition=${encodeURIComponent(disposition)}`),
+    durable: jest.fn(() => true),
+  };
+  const service = new PurchasingService(db as never);
+  return { db, requisitions, lines, quotes, audits, codes, files, storage, service, filesService: new RequisitionFilesService(db as never, storage as never, service) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -512,5 +547,165 @@ describe('who may do what', () => {
 
   it('never lets an API key ask for or approve a purchase', () => {
     expect(MACHINE_FORBIDDEN_PERMISSIONS).toEqual(expect.arrayContaining(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']));
+  });
+});
+
+describe('files on a requisition (2026-11-20, part 3)', () => {
+  const PDF = Buffer.from('%PDF-1.7\n% a quote\n');
+  const upload = (buffer: Buffer, originalname = 'Quote - Hill Country Supply.pdf') => ({ originalname, mimetype: 'application/octet-stream', size: buffer.length, buffer });
+  const zip = (part: string) => Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(`....[Content_Types].xml....${part}....`, 'latin1')]);
+  const ole = (stream: string) => Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.alloc(64), Buffer.from(stream, 'utf16le')]);
+
+  it('knows a file by its first bytes, never by its name', () => {
+    expect(sniffRequisitionFile(PDF)).toBe('application/pdf');
+    expect(sniffRequisitionFile(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]))).toBe('image/jpeg');
+    expect(sniffRequisitionFile(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]))).toBe('image/png');
+    expect(sniffRequisitionFile(Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic', 'latin1')]))).toBe('image/heic');
+    expect(sniffRequisitionFile(zip('word/document.xml'))).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(sniffRequisitionFile(zip('xl/workbook.xml'))).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(sniffRequisitionFile(ole('WordDocument'))).toBe('application/msword');
+    expect(sniffRequisitionFile(ole('Workbook'))).toBe('application/vnd.ms-excel');
+    // A web page or a program renamed ".pdf", or any other zip, is not one.
+    expect(sniffRequisitionFile(Buffer.from('<!doctype html><script>alert(1)</script>'))).toBeNull();
+    expect(sniffRequisitionFile(Buffer.from('MZ a program'))).toBeNull();
+    expect(sniffRequisitionFile(zip('photos/1.jpg'))).toBeNull();
+  });
+
+  it('attaches a file to a draft: stored once under the console’s own key, written down, and in the history', async () => {
+    const { service, filesService, storage, audits } = database();
+    const draft = await service.create(asker, small());
+    const detail = await filesService.attach(asker, draft.id, upload(PDF, 'Quote / Hill?.pdf'));
+
+    expect(storage.put).toHaveBeenCalledTimes(1);
+    const [key, bytes, type] = storage.put.mock.calls[0] as unknown as [string, Buffer, string];
+    expect(key).toMatch(new RegExp(`^purchasing-files/${ORG}/${draft.id}/[0-9a-f-]{36}$`));
+    expect(bytes).toBe(PDF);
+    expect(type).toBe('application/pdf');
+    expect(detail.files).toEqual([
+      {
+        id: expect.any(String),
+        fileName: 'Quote Hill.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: PDF.length,
+        attachedBy: { id: asker.id, name: 'Sample Requester', code: 'SREQUESTER' },
+        attachedAt: expect.any(String),
+        forVendor: false,
+        canRemove: true,
+      },
+    ]);
+    expect(detail.can.attach).toBe(true);
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_FILE_ATTACHED', entityId: draft.id, metadata: expect.objectContaining({ note: 'Quote Hill.pdf', sizeBytes: PDF.length }) });
+    expect(detail.history[0]).toMatchObject({ by: 'Sample Requester', what: 'attached a file: Quote Hill.pdf' });
+  });
+
+  it('refuses what is not a PDF, picture, Word or Excel file, or past 20 MB, before anything is stored', async () => {
+    const { service, filesService, storage } = database();
+    const draft = await service.create(asker, small());
+
+    await expect(filesService.attach(asker, draft.id, upload(Buffer.from('<html></html>'), 'quote.pdf'))).rejects.toMatchObject({ code: 'REQUISITION_FILE_INVALID', status: 422 });
+    await expect(filesService.attach(asker, draft.id, { ...upload(PDF), size: 20_000_001 })).rejects.toMatchObject({ code: 'REQUISITION_FILE_TOO_BIG', status: 422 });
+    await expect(filesService.attach(asker, draft.id, undefined)).rejects.toMatchObject({ code: 'REQUISITION_FILE_INVALID' });
+    expect(storage.put).not.toHaveBeenCalled();
+  });
+
+  it('is not there to somebody who cannot see the requisition, and is closed once it is finished with', async () => {
+    const { service, filesService, storage } = database();
+    const draft = await service.create(asker, small());
+    // A draft is its author's alone, even to an approver; another office's is not there at all.
+    await expect(filesService.attach(colleague, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND', status: 404 });
+    await expect(filesService.attach(manager, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+    await expect(filesService.attach(outsider, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+
+    await service.submit(asker, draft.id);
+    await service.decide(manager, draft.id, 'REJECTED', { note: 'Not this quarter.' });
+    await expect(filesService.attach(asker, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_FILES_CLOSED', status: 409 });
+    expect(storage.put).not.toHaveBeenCalled();
+    expect((await service.detail(asker, draft.id)).can.attach).toBe(false);
+  });
+
+  it('holds at most 20 files', async () => {
+    const { service, filesService, files } = database();
+    const draft = await service.create(asker, small());
+    for (let n = 0; n < 20; n += 1)
+      files.push({ id: id(700 + n), organizationId: ORG, requisitionId: draft.id, fileName: `${n}.pdf`, contentType: 'application/pdf', sizeBytes: 10, storageKey: `k${n}`, forVendor: false, attachedById: asker.id, attachedAt: new Date() });
+    await expect(filesService.attach(asker, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_FILES_FULL', message: 'A requisition holds at most 20 files. Take one off first.' });
+  });
+
+  it('takes the stored copy away again when the row cannot be written', async () => {
+    const { db, service, filesService, storage, files } = database();
+    const draft = await service.create(asker, small());
+    db.auditLog.create.mockRejectedValueOnce(new Error('the database went away'));
+
+    await expect(filesService.attach(asker, draft.id, upload(PDF))).rejects.toThrow('the database went away');
+    const [stored] = storage.put.mock.calls[0] as unknown as [string];
+    expect(storage.delete).toHaveBeenCalledWith(stored);
+    // The fake has no rollback, so the row it wrote stands here; the real transaction takes it back.
+    expect(files).toHaveLength(1);
+  });
+
+  it('lets an approver attach to a submitted one and tick a file for the vendor; a tick that changes nothing writes nothing', async () => {
+    const { service, filesService, audits } = database();
+    const draft = await service.create(asker, small());
+    await service.submit(asker, draft.id);
+    const attached = await filesService.attach(manager, draft.id, upload(PDF, 'Quote.pdf'));
+    const fileId = attached.files[0]!.id;
+    // Attached after it was sent, so it stays with it: nobody takes it off.
+    expect(attached.files[0]).toMatchObject({ attachedBy: { name: 'Sample Manager' }, canRemove: false });
+
+    const ticked = await filesService.setForVendor(manager, draft.id, fileId, true);
+    expect(ticked.files[0]!.forVendor).toBe(true);
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_FILE_FOR_VENDOR', metadata: { fileId, note: 'Quote.pdf' } });
+    const written = audits.length;
+    await filesService.setForVendor(asker, draft.id, fileId, true);
+    expect(audits).toHaveLength(written);
+
+    expect((await filesService.setForVendor(asker, draft.id, fileId, false)).files[0]!.forVendor).toBe(false);
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_FILE_NOT_FOR_VENDOR' });
+    await expect(filesService.setForVendor(asker, draft.id, id(999), true)).rejects.toMatchObject({ code: 'REQUISITION_FILE_NOT_FOUND', status: 404 });
+  });
+
+  it('is taken off only by whoever attached it, while the requisition is still being written', async () => {
+    const { service, filesService, storage, audits, files } = database();
+    const draft = await service.create(asker, small());
+    const fileId = (await filesService.attach(asker, draft.id, upload(PDF, 'Wrong quote.pdf'))).files[0]!.id;
+    const second = (await filesService.attach(asker, draft.id, upload(PDF, 'Right quote.pdf'))).files[1]!.id;
+
+    const removed = await filesService.remove(asker, draft.id, fileId);
+    expect(removed.files.map((file) => file.fileName)).toEqual(['Right quote.pdf']);
+    expect(storage.delete).toHaveBeenCalledTimes(1);
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_FILE_REMOVED', metadata: { fileId, note: 'Wrong quote.pdf' } });
+
+    await service.submit(asker, draft.id);
+    await expect(filesService.remove(manager, draft.id, second)).rejects.toMatchObject({ code: 'REQUISITION_FILE_NOT_YOURS', status: 403 });
+    await expect(filesService.remove(asker, draft.id, second)).rejects.toMatchObject({ code: 'REQUISITION_FILE_KEPT', status: 409 });
+    expect(files).toHaveLength(1);
+    expect((await service.detail(asker, draft.id)).files[0]!.canRemove).toBe(false);
+  });
+
+  it('opens a PDF in place and a spreadsheet as a download, through a five-minute link; without one, the bytes come from the API', async () => {
+    const { service, filesService, storage } = database();
+    const draft = await service.create(asker, small());
+    const pdf = (await filesService.attach(asker, draft.id, upload(PDF, 'Quote.pdf'))).files[0]!;
+    const sheet = (await filesService.attach(asker, draft.id, upload(zip('xl/workbook.xml'), 'December filter list.xlsx'))).files[1]!;
+    expect(sheet).toMatchObject({ fileName: 'December filter list.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+    expect((await filesService.link(asker, draft.id, pdf.id)).url).toContain(encodeURIComponent('inline; filename="Quote.pdf"'));
+    expect(storage.signedUrl).toHaveBeenLastCalledWith(expect.stringContaining(pdf.id), 300, expect.any(String));
+    expect((await filesService.link(asker, draft.id, sheet.id)).url).toContain(encodeURIComponent('attachment; filename="December filter list.xlsx"'));
+
+    storage.signedUrl.mockResolvedValueOnce(null);
+    expect(await filesService.link(asker, draft.id, pdf.id)).toEqual({ url: null });
+    const content = await filesService.content(asker, draft.id, pdf.id);
+    expect(content).toMatchObject({ contentType: 'application/pdf', disposition: expect.stringMatching(/^inline; filename="Quote.pdf"/) });
+    expect(content.bytes.toString()).toContain(pdf.id);
+    await expect(filesService.link(colleague, draft.id, pdf.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+  });
+
+  it('a tick names its one field, and it must be yes or no', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const check = (body: unknown) => pipe.transform(body, { type: 'body', metatype: SetRequisitionFileDto });
+    await expect(check({ forVendor: true })).resolves.toEqual({ forVendor: true });
+    await expect(check({ forVendor: 'yes' })).rejects.toBeDefined();
+    await expect(check({})).rejects.toBeDefined();
   });
 });

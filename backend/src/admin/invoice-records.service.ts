@@ -42,9 +42,9 @@ export function sniffInvoiceFile(bytes: Buffer): string | null {
   return null;
 }
 
-/** A name a file keeps: printable, short, with its extension. */
-export function cleanFileName(name: string, contentType: string) {
-  const extension = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[contentType] ?? 'bin';
+/** A name a file keeps: printable, short, with its extension (an invoice's by its type, unless the caller names one). */
+export function cleanFileName(name: string, contentType: string, ending?: string) {
+  const extension = ending ?? { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[contentType] ?? 'bin';
   const stem = name
     .replace(/\.[^.]*$/, '')
     .replace(/[^\w .,()#&'-]+/g, ' ')

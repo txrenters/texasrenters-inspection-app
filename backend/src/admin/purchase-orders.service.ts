@@ -4,6 +4,8 @@ import {
   DEFAULT_PURCHASE_ORDER_EMAIL_CEILING,
   MOST_ORDER_PDF_BYTES,
   OPEN_PURCHASE_ORDER_STATUSES,
+  VENDOR_FILES_MAX_BYTES,
+  formatFileSize,
   formatMoney,
   billProblems,
   formatTaxRate,
@@ -28,8 +30,10 @@ import { businessDayBounds } from '../common/business-day';
 import { ceilingFrom } from '../common/daily-allowance';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { PurchasingFileStorageService } from '../common/purchasing-file-storage.service';
 import { MailService } from '../mail/mail.service';
 import { nextDocumentNumber, readPurchasingSettings } from './purchasing.service';
+import { vendorFilesOf } from './requisition-files';
 
 /**
  * Purchase orders (2026-11-19, phase 3 of the inventory and purchasing plan).
@@ -181,6 +185,7 @@ export class PurchaseOrdersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(MailService) private readonly mail: MailService,
+    @Inject(PurchasingFileStorageService) private readonly files: PurchasingFileStorageService,
   ) {}
 
   /** Everybody's, for whoever makes, approves, receives or bills orders; for anybody else, the orders made from their own requisitions. */
@@ -251,7 +256,7 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId, AND: [this.visible(user)] }, select: ROW });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
-    const [companies, settings, office, deliveries, audits, receipts] = await Promise.all([
+    const [companies, settings, office, deliveries, audits, receipts, vendorFiles] = await Promise.all([
       this.companyNames(organizationId),
       readPurchasingSettings(this.prisma, organizationId),
       this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
@@ -278,6 +283,7 @@ export class PurchaseOrdersService {
         },
         orderBy: { createdAt: 'desc' },
       }),
+      vendorFilesOf(this.prisma, organizationId, order.requisition.id),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -339,6 +345,7 @@ export class PurchaseOrdersService {
       decisionNote: order.decisionNote,
       cancelReason: order.cancelReason,
       from,
+      vendorFiles: vendorFiles.map((file) => ({ id: file.id, fileName: file.fileName, sizeBytes: file.sizeBytes })),
       deliveries: deliveries.map((delivery) => ({
         id: delivery.id,
         recipient: delivery.recipient,
@@ -570,6 +577,26 @@ export class PurchaseOrdersService {
     const order = await this.found(this.prisma, user, orderId);
     if (!SENDABLE.includes(order.status)) throw new ApplicationError(409, 'PURCHASE_ORDER_NOT_SENDABLE', 'An order is sent to the vendor once it is approved.');
 
+    // The requisition's files ticked for the vendor go too (2026-11-20). Read
+    // before the email is claimed, so too many, or one that cannot be read,
+    // costs nothing and uses none of the day's emails. One storage read a file.
+    const ticked = await vendorFilesOf(this.prisma, organizationId, order.requisitionId);
+    const tickedBytes = ticked.reduce((sum, file) => sum + file.sizeBytes, 0);
+    if (tickedBytes > VENDOR_FILES_MAX_BYTES)
+      throw new ApplicationError(
+        422,
+        'PURCHASE_ORDER_FILES_TOO_BIG',
+        `The files ticked for the vendor come to ${formatFileSize(tickedBytes)}, and one email carries at most ${formatFileSize(VENDOR_FILES_MAX_BYTES)} beside the PDF. Untick some on the requisition, or send them on their own.`,
+      );
+    const extra = await Promise.all(
+      ticked.map(async (file) => {
+        const bytes = await this.files.get(file.storageKey).catch(() => {
+          throw new ApplicationError(502, 'PURCHASE_ORDER_FILE_UNREADABLE', `${file.fileName}, ticked for the vendor, could not be read just now. Try again, or untick it.`);
+        });
+        return { name: file.fileName, contentType: file.contentType, contentBase64: bytes.toString('base64') };
+      }),
+    );
+
     const deliveryId = await this.claimEmail(user, orderId, to, message, input.clientRequestId);
     // The same press, sent twice at once: the other request is sending it.
     if (!deliveryId) return this.detail(user, orderId);
@@ -581,12 +608,12 @@ export class PurchaseOrdersService {
       subject: `Purchase order ${order.number} from ${detail.from.name}`,
       title: `Purchase order ${order.number}`,
       html: [
-        `<p>${escape(detail.from.name)} has sent you purchase order <strong>${escape(order.number ?? '')}</strong>, attached as a PDF.</p>`,
+        `<p>${escape(detail.from.name)} has sent you purchase order <strong>${escape(order.number ?? '')}</strong>, attached as a PDF${extra.length ? `, with ${extra.length === 1 ? 'one more file' : `${extra.length} more files`}` : ''}.</p>`,
         `<p>Total ${escape(formatMoney(detail.totalCents))}${detail.taxBasisPoints ? `, including ${escape(formatTaxRate(detail.taxBasisPoints))} sales tax` : ''}.${detail.expectedOn ? ` Expected by ${escape(detail.expectedOn)}.` : ''}</p>`,
         message ? `<p>${escape(message).replace(/\n/g, '<br>')}</p>` : '',
       ].join(''),
       replyTo: detail.from.email,
-      attachments: [attachment],
+      attachments: [attachment, ...extra],
     });
     const sent = result.status === 'SENT';
     const failure = sent ? null : result.status === 'NOT_CONFIGURED' ? 'Email is not set up for the console yet.' : 'The mail provider did not take it.';
@@ -594,7 +621,7 @@ export class PurchaseOrdersService {
       await tx.purchaseOrderDelivery.update({ where: { id: deliveryId }, data: { status: sent ? 'SENT' : 'FAILED', failure, sentAt: sent ? new Date() : null } });
       // The first email that goes is what makes it Sent; one sent again stays as it is.
       if (sent) await tx.purchaseOrder.updateMany({ where: { id: orderId, organizationId, status: Status.APPROVED }, data: { status: Status.SENT, sentAt: new Date() } });
-      await this.audit(tx, user, sent ? 'PURCHASE_ORDER_SENT' : 'PURCHASE_ORDER_SEND_FAILED', ENTITY, orderId, { number: order.number, deliveryId, to });
+      await this.audit(tx, user, sent ? 'PURCHASE_ORDER_SENT' : 'PURCHASE_ORDER_SEND_FAILED', ENTITY, orderId, { number: order.number, deliveryId, to, files: ticked.map((file) => file.fileName) });
     });
     if (!sent) {
       this.logger.warn({ event: 'purchase_order_email_not_sent', orderId });

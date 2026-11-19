@@ -2,6 +2,8 @@
 
 import {
   MOST_TAX_BASIS_POINTS,
+  VENDOR_FILES_MAX_BYTES,
+  formatFileSize,
   formatMoney,
   formatTaxRate,
   orderSubmitProblem,
@@ -553,10 +555,13 @@ function SendDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
   // One key for this opening of the form: a second click or a retry is the same email.
   const [clientRequestId] = useState(() => crypto.randomUUID());
   const pending = making || send.isPending;
+  // The requisition's files ticked for the vendor ride along; past one email's room the server refuses, so the button does not ask.
+  const vendorBytes = data.vendorFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
+  const tooBig = vendorBytes > VENDOR_FILES_MAX_BYTES;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (pending || !to.trim()) return;
+    if (pending || !to.trim() || tooBig) return;
     setProblem(null);
     setMaking(true);
     let attachment: Awaited<ReturnType<typeof orderAttachment>>;
@@ -595,6 +600,24 @@ function SendDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
             <FieldLabel htmlFor="send-message">Message</FieldLabel>
             <Textarea id="send-message" maxLength={2000} onChange={(event) => setMessage(event.target.value)} rows={3} value={message} />
           </Field>
+          {data.vendorFiles.length ? (
+            <section aria-label="Files that go with it" className="grid gap-1.5 text-sm">
+              <p className="font-medium">With the PDF, from the requisition</p>
+              <ul className="text-muted-foreground grid gap-0.5 text-xs">
+                {data.vendorFiles.map((file) => (
+                  <li className="flex justify-between gap-3" key={file.id}>
+                    <span className="truncate">{file.fileName}</span>
+                    <span className="shrink-0 tabular-nums">{formatFileSize(file.sizeBytes)}</span>
+                  </li>
+                ))}
+              </ul>
+              {tooBig ? (
+                <p className="text-destructive text-xs font-medium" role="status">
+                  These come to {formatFileSize(vendorBytes)}, and one email carries at most {formatFileSize(VENDOR_FILES_MAX_BYTES)} beside the PDF. Untick some on the requisition, or send them on their own.
+                </p>
+              ) : null}
+            </section>
+          ) : null}
           {problem || send.error ? (
             <Alert variant="destructive">
               <AlertDescription>{problem ?? send.error?.message}</AlertDescription>
@@ -604,7 +627,7 @@ function SendDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
             <Button onClick={onClose} type="button" variant="outline">
               Cancel
             </Button>
-            <Button disabled={pending || !to.trim()} type="submit">
+            <Button disabled={pending || !to.trim() || tooBig} type="submit">
               {pending ? <Spinner /> : null}
               Send
             </Button>

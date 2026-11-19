@@ -223,6 +223,66 @@ export interface RequisitionActions {
   order: boolean;
   /** Why the caller cannot approve it, when they otherwise could decide requisitions; null when they can or it is not waiting. */
   approveBlocked: string | null;
+  /** Attach files and tick which go to the vendor: anybody who sees it, until it is finished with. */
+  attach: boolean;
+}
+
+// ── Files on a requisition (2026-11-20, part 3) ──────────────────────────────
+
+/** A file is at most 20 MB, as the office set it on the canvas (Purchasing Setup, part 5, will make it the admin's). */
+export const REQUISITION_FILE_MAX_BYTES = 20_000_000;
+/** At most this many files on one requisition. */
+export const REQUISITION_FILES_MAX = 20;
+/**
+ * What the files ticked for the vendor may come to, together, to go in one
+ * purchase order email beside its PDF: the mail provider takes about 4 MB in
+ * one message, and a file grows by a third on the way.
+ */
+export const VENDOR_FILES_MAX_BYTES = 2_500_000;
+
+/** What may be attached, by what its first bytes say it is, and the short name the page shows for each. */
+export const REQUISITION_FILE_TYPES = {
+  'application/pdf': 'PDF',
+  'image/jpeg': 'JPG',
+  'image/png': 'PNG',
+  'image/heic': 'HEIC',
+  'application/msword': 'DOC',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
+  'application/vnd.ms-excel': 'XLS',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
+} as const;
+export type RequisitionFileType = keyof typeof REQUISITION_FILE_TYPES;
+/** For a file picker: the same kinds, by their endings. */
+export const REQUISITION_FILE_ACCEPT = '.pdf,.jpg,.jpeg,.png,.heic,.doc,.docx,.xls,.xlsx';
+
+export interface RequisitionFile {
+  id: string;
+  fileName: string;
+  contentType: RequisitionFileType;
+  sizeBytes: number;
+  attachedBy: { id: string; name: string; code: string };
+  attachedAt: string;
+  /** Ticked to go to the vendor with the purchase order's email. */
+  forVendor: boolean;
+  /** Whoever attached it, while the requisition is still being written. */
+  canRemove: boolean;
+}
+
+/** Tick or untick a file for the vendor. */
+export interface SetRequisitionFileInput {
+  forVendor: boolean;
+}
+
+/** A short-lived link to open a file; null when the console keeps files on its own disk (a developer's machine) and the bytes come from the API instead. */
+export interface RequisitionFileLink {
+  url: string | null;
+}
+
+/** "182 KB", "2.4 MB": a file's size as the page writes it. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1).replace(/\.0$/, '')} MB`;
 }
 
 export interface RequisitionDetail extends RequisitionRow {
@@ -241,6 +301,8 @@ export interface RequisitionDetail extends RequisitionRow {
   history: RequisitionHistoryEntry[];
   /** The order made from it, once there is one. */
   order: { id: string; number: string | null } | null;
+  /** What is attached to it, oldest first. */
+  files: RequisitionFile[];
   can: RequisitionActions;
   settings: PurchasingSettings;
 }

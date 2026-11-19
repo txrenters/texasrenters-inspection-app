@@ -13,6 +13,7 @@ import type {
   RequisitionChoices,
   RequisitionDecisionInput,
   RequisitionDetail,
+  RequisitionFileLink,
   RequisitionList,
   ReceiveGoodsInput,
   ReverseReceiptInput,
@@ -21,9 +22,10 @@ import type {
   SaveRequisitionInput,
   SaveVendorBillInput,
   SendPurchaseOrderInput,
+  SetRequisitionFileInput,
 } from '@texasrenters/shared';
 
-import { api } from './api';
+import { api, apiBlob, apiUpload } from './api';
 
 /**
  * Purchasing (2026-11-19, phase 2): read when a page opens, kept a minute, and
@@ -175,4 +177,67 @@ export function usePurchasingEdits() {
       onSuccess: () => client.invalidateQueries({ queryKey: purchasingKeys.all }),
     }),
   };
+}
+
+/**
+ * Files on a requisition (2026-11-20, part 3). Each answers with the
+ * requisition as it now is, kept as it came; an order made from it is read
+ * again when next looked at, since a tick changes what goes to the vendor.
+ * Attaching is one storage write a file; nothing here is billed.
+ */
+export function useRequisitionFiles(requisitionId: string) {
+  const client = useQueryClient();
+  const saved = (detail: RequisitionDetail) => {
+    const key = purchasingKeys.detail(detail.id);
+    client.setQueryData(key, detail);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] === 'order' });
+  };
+  const files = `${BASE}/requisitions/${encodeURIComponent(requisitionId)}/files`;
+  return {
+    attach: useMutation({
+      mutationFn: ({ file, onProgress }: { file: File; onProgress?: (fraction: number) => void }) => {
+        const form = new FormData();
+        form.append('file', file);
+        return apiUpload<RequisitionDetail>(files, form, { onProgress });
+      },
+      onSuccess: saved,
+    }),
+    setForVendor: useMutation({
+      mutationFn: ({ fileId, forVendor }: { fileId: string; forVendor: boolean }) =>
+        api<RequisitionDetail>(`${files}/${encodeURIComponent(fileId)}`, { method: 'PATCH', body: JSON.stringify({ forVendor } satisfies SetRequisitionFileInput) }),
+      onSuccess: saved,
+    }),
+    remove: useMutation({
+      mutationFn: (fileId: string) => api<RequisitionDetail>(`${files}/${encodeURIComponent(fileId)}`, { method: 'DELETE' }),
+      onSuccess: saved,
+    }),
+  };
+}
+
+/**
+ * Opens one file in a new tab. The tab is opened on the click, before the link
+ * is asked for, so the browser does not take it for a pop-up; it is closed
+ * again if nothing comes back. Where the console keeps files on its own disk
+ * (a developer's machine) there is no link, and the bytes come from the API.
+ */
+export async function openRequisitionFile(requisitionId: string, fileId: string): Promise<'opened' | 'blocked'> {
+  const tab = window.open('', '_blank');
+  const file = `${BASE}/requisitions/${encodeURIComponent(requisitionId)}/files/${encodeURIComponent(fileId)}`;
+  try {
+    const link = await api<RequisitionFileLink>(`${file}/link`);
+    if (!tab) return 'blocked';
+    tab.opener = null;
+    if (link.url) {
+      tab.location.href = link.url;
+    } else {
+      const shown = URL.createObjectURL(await apiBlob(`${file}/content`));
+      tab.location.href = shown;
+      // Long enough for the tab to read it.
+      window.setTimeout(() => URL.revokeObjectURL(shown), 60_000);
+    }
+    return 'opened';
+  } catch (error) {
+    tab?.close();
+    throw error;
+  }
 }

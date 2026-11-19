@@ -42,6 +42,7 @@ const ORDER = {
   decisionNote: null,
   cancelReason: null,
   from: { name: 'Example Company', addressLine1: '1 Example Plaza', addressLine2: null, phone: '555-0100', email: null },
+  vendorFiles: [],
   deliveries: [],
   receipts: [],
   bill: null,

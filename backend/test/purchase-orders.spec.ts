@@ -76,6 +76,8 @@ function database() {
   const lines: Row[] = [];
   const deliveries: Row[] = [];
   const audits: Row[] = [];
+  /** Files on the requisitions (2026-11-20); none unless a test attaches some. */
+  const requisitionFiles: Row[] = [];
   let series = 0;
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
@@ -171,6 +173,7 @@ function database() {
     },
     // Nothing has arrived for any of these: receiving has its own spec.
     goodsReceipt: { findMany: jest.fn(async () => []) },
+    purchaseRequisitionFile: { findMany: jest.fn(async ({ where }: { where: Where }) => requisitionFiles.filter((row) => matches(row, where))) },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => audits.push({ createdAt: new Date((clock += 1000)), ...data })),
@@ -182,7 +185,8 @@ function database() {
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
   const mail = { sendPurchaseOrder: jest.fn<Promise<{ status: string; message: string }>, [Row]>(async () => ({ status: 'SENT', message: 'Email sent successfully.' })) };
-  return { db, mail, orders, lines, requisitions, requisitionLines, quotes, vendors, deliveries, audits, service: new PurchaseOrdersService(db as never, mail as never) };
+  const storage = { get: jest.fn(async (key: string) => Buffer.from(`the bytes of ${key}`)) };
+  return { db, mail, storage, orders, lines, requisitions, requisitionLines, quotes, vendors, deliveries, audits, requisitionFiles, service: new PurchaseOrdersService(db as never, mail as never, storage as never) };
 }
 
 const line = (itemId: string, quantity: number, unitPriceCents: number) => ({ itemId, quantity, unitPriceCents });
@@ -345,6 +349,58 @@ describe('sending an order to the vendor', () => {
     expect(sent.sentAt).not.toBeNull();
     expect(deliveries).toHaveLength(1);
     expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_ORDER_SENT', actorUserId: buyer.id, metadata: expect.objectContaining({ to: 'orders@hill.example' }) });
+  });
+
+  /** A file on the order's requisition, as the requisition's own files service writes it. */
+  const ticked = (n: number, fileName: string, sizeBytes: number, forVendor = true) => ({
+    id: id(800 + n),
+    organizationId: ORG,
+    requisitionId: REQUISITION,
+    fileName,
+    contentType: 'application/pdf',
+    sizeBytes,
+    storageKey: `purchasing-files/${ORG}/${REQUISITION}/${id(800 + n)}`,
+    forVendor,
+  });
+
+  it('carries the files ticked for the vendor beside the PDF, each read from storage once', async () => {
+    const { service, orderId, mail, storage, audits, requisitionFiles } = await order('approved');
+    requisitionFiles.push(ticked(1, 'Quote - Hill Country Supply.pdf', 182_000), ticked(2, 'Storeroom shelf.pdf', 900_000, false));
+
+    expect((await service.detail(buyer, orderId)).vendorFiles).toEqual([{ id: id(801), fileName: 'Quote - Hill Country Supply.pdf', sizeBytes: 182_000 }]);
+    await service.send(buyer, orderId, email());
+
+    const mailed = mail.sendPurchaseOrder.mock.calls[0]![0] as { attachments: Row[]; html: string };
+    expect(mailed.attachments).toEqual([
+      { name: 'PO-0001.pdf', contentType: 'application/pdf', contentBase64: PDF },
+      { name: 'Quote - Hill Country Supply.pdf', contentType: 'application/pdf', contentBase64: Buffer.from(`the bytes of purchasing-files/${ORG}/${REQUISITION}/${id(801)}`).toString('base64') },
+    ]);
+    expect(mailed.html).toContain('attached as a PDF, with one more file.');
+    expect(storage.get).toHaveBeenCalledTimes(1);
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_ORDER_SENT', metadata: expect.objectContaining({ files: ['Quote - Hill Country Supply.pdf'] }) });
+  });
+
+  it('refuses files ticked past what one email carries, before the email is claimed or a file read', async () => {
+    const { service, orderId, mail, storage, deliveries, requisitionFiles } = await order('approved');
+    requisitionFiles.push(ticked(1, 'Quote.pdf', 1_500_000), ticked(2, 'Spec sheet.pdf', 1_500_000));
+
+    await expect(service.send(buyer, orderId, email())).rejects.toMatchObject({
+      code: 'PURCHASE_ORDER_FILES_TOO_BIG',
+      message: 'The files ticked for the vendor come to 3 MB, and one email carries at most 2.5 MB beside the PDF. Untick some on the requisition, or send them on their own.',
+    });
+    expect(storage.get).not.toHaveBeenCalled();
+    expect(mail.sendPurchaseOrder).not.toHaveBeenCalled();
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it('stops before the email is claimed when a ticked file cannot be read', async () => {
+    const { service, orderId, mail, storage, deliveries, requisitionFiles } = await order('approved');
+    requisitionFiles.push(ticked(1, 'Quote.pdf', 182_000));
+    storage.get.mockRejectedValueOnce(new Error('gone'));
+
+    await expect(service.send(buyer, orderId, email())).rejects.toMatchObject({ code: 'PURCHASE_ORDER_FILE_UNREADABLE', status: 502 });
+    expect(mail.sendPurchaseOrder).not.toHaveBeenCalled();
+    expect(deliveries).toHaveLength(0);
   });
 
   it('sent twice with the same key sends once; sent again on purpose sends again', async () => {

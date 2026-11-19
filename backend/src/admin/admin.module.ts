@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
 import { InvoiceFileStorageService } from '../common/invoice-file-storage.service';
+import { PurchasingFileStorageService } from '../common/purchasing-file-storage.service';
 import { MailModule } from '../mail/mail.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TechnicianModule } from '../technician/technician.module';
@@ -59,6 +60,7 @@ import { StockSlipsController } from './stock-slips.controller';
 import { StockSlipsService } from './stock-slips.service';
 import { PurchasingController } from './purchasing.controller';
 import { PurchasingService } from './purchasing.service';
+import { RequisitionFilesService } from './requisition-files.service';
 import { PurchaseOrdersController } from './purchase-orders.controller';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { PurchaseReceivingController } from './purchase-receiving.controller';
@@ -190,6 +192,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryMonitoringService,
     VendorBillsXeroService,
     PurchasingService,
+    PurchasingFileStorageService,
+    RequisitionFilesService,
     PurchaseOrdersService,
     PurchaseReceivingService,
     ActualVsBudgetGateway,

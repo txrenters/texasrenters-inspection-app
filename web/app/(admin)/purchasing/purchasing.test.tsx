@@ -21,6 +21,9 @@ const hooks = vi.hoisted(() => ({
   usePurchaseOrder: vi.fn(),
   usePurchaseOrderEdits: vi.fn(),
   usePurchaseReceivingEdits: vi.fn(),
+  // The Attachments FactBox has its own tests (attachments-factbox.test.tsx): here it only draws.
+  useRequisitionFiles: vi.fn(),
+  openRequisitionFile: vi.fn(),
 }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 // The bill's Xero card and the bills panel have their own tests (bill-in-xero.test.tsx): here they read nothing.
@@ -73,11 +76,12 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   decidedBy: null,
   decidedAt: null,
   order: null,
+  files: [],
   history: [
     { at: '2026-11-17T15:12:00.000Z', by: 'Sample Requester', what: 'submitted it' },
     { at: '2026-11-17T14:58:00.000Z', by: 'Sample Requester', what: 'started it' },
   ],
-  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, order: false, approveBlocked: null },
+  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, order: false, approveBlocked: null, attach: true },
   settings: SETTINGS,
   ...over,
 });
@@ -118,6 +122,7 @@ beforeEach(() => {
   account.permissions = new Set(['purchasing:request']);
   edits = { create: mutation(), update: mutation(), step: mutation(), saveSettings: mutation() };
   hooks.usePurchasingEdits.mockReturnValue(edits);
+  hooks.useRequisitionFiles.mockReturnValue({ attach: mutation(), setForVendor: { ...mutation(), mutate: vi.fn() }, remove: { ...mutation(), mutate: vi.fn() } });
   hooks.useRequisitionChoices.mockReturnValue({ isLoading: false, isError: false, data: CHOICES });
 });
 
@@ -353,7 +358,7 @@ describe('filling a requisition in', () => {
   });
 
   it('opens a sent-back requisition with what it asked for', () => {
-    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null } }));
+    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true } }));
 
     expect((screen.getByLabelText('Why it is needed') as HTMLTextAreaElement).value).toContain('14 inspections');
     expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('24');
@@ -389,7 +394,7 @@ describe('one requisition', () => {
   });
 
   it('says why somebody cannot approve it, and offers no Approve', () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.' } }));
+    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.', attach: true } }));
 
     expect(screen.getByText(/above the \$500\.00 approval limit/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
@@ -397,7 +402,7 @@ describe('one requisition', () => {
   });
 
   it('shows its author a submitted requisition as it stands, with only Cancel to press', async () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null } }));
+    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true } }));
 
     expect(screen.queryByRole('heading', { name: 'Your decision' })).toBeNull();
     expect(screen.queryByLabelText('Why it is needed')).toBeNull();
@@ -412,7 +417,7 @@ describe('one requisition', () => {
         status: 'SENT_BACK',
         decidedBy: 'Sample Manager',
         decisionNote: 'Fewer batteries.',
-        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null },
+        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true },
       }),
     );
 
@@ -427,7 +432,7 @@ describe('a requisition and its order', () => {
     hooks.useRequisition.mockReturnValue({ isLoading: false, isError: false, data });
     return render(<RequisitionPage />);
   };
-  const approved = { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, approveBlocked: null };
+  const approved = { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, approveBlocked: null, attach: true };
 
   it('offers a purchaser the order to make, and opens it once made', async () => {
     orderEdits.create!.mutateAsync.mockResolvedValue({ id: 'order-9' } as never);
@@ -480,6 +485,7 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   decisionNote: null,
   cancelReason: null,
   from: { name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: 'office@example.test' },
+  vendorFiles: [],
   deliveries: [],
   receipts: [],
   bill: null,
@@ -552,6 +558,24 @@ describe('one order', () => {
       orderId: 'order-9',
       input: { to: 'orders@hill.example', message: 'Please confirm the day.', attachment: { fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' }, clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/) },
     });
+  });
+
+  it('lists the requisition’s files ticked for the vendor under the PDF', () => {
+    mount(orderDetail({ status: 'APPROVED', vendorFiles: [{ id: 'f1', fileName: 'Quote - Hill Country Supply.pdf', sizeBytes: 182_000 }], can: { ...NOTHING, send: true } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send to the vendor' }));
+    const files = within(screen.getByRole('dialog', { name: 'Send to the vendor' })).getByRole('region', { name: 'Files that go with it' });
+
+    expect(within(files).getByText('Quote - Hill Country Supply.pdf')).toBeTruthy();
+    expect(within(files).getByText('182 KB')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('does not offer to send files ticked past what one email carries', () => {
+    mount(orderDetail({ status: 'APPROVED', vendorFiles: [{ id: 'f1', fileName: 'Quote.pdf', sizeBytes: 1_500_000 }, { id: 'f2', fileName: 'Shelf.jpg', sizeBytes: 1_600_000 }], can: { ...NOTHING, send: true } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send to the vendor' }));
+
+    expect(screen.getByText(/These come to 3.1 MB, and one email carries at most 2.5 MB beside the PDF/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('cancels only with a reason, and warns that a sent order is not withdrawn from the vendor', async () => {

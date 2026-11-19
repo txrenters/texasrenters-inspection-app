@@ -198,6 +198,11 @@ export interface PurchaseOrderDetail extends PurchaseOrderRow {
   decisionNote: string | null;
   cancelReason: string | null;
   from: PurchaseOrderFrom;
+  /**
+   * The requisition's files ticked "Send to the vendor with the PO": they go in
+   * the email beside the PDF, when together they fit (VENDOR_FILES_MAX_BYTES).
+   */
+  vendorFiles: { id: string; fileName: string; sizeBytes: number }[];
   deliveries: PurchaseOrderDeliveryRow[];
   /** Each arrival of goods, newest first. */
   receipts: GoodsReceiptRow[];

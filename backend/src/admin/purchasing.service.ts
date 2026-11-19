@@ -27,6 +27,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { ATTACHABLE, requisitionFiles } from './requisition-files';
 
 /**
  * Purchase requisitions (2026-11-19, phase 2 of the inventory and purchasing
@@ -151,7 +152,16 @@ const STEP: Record<string, string> = {
   PURCHASE_REQUISITION_SENT_BACK: 'sent it back',
   PURCHASE_REQUISITION_REJECTED: 'rejected it',
   PURCHASE_REQUISITION_CANCELLED: 'cancelled it',
+  PURCHASE_REQUISITION_FILE_ATTACHED: 'attached a file',
+  PURCHASE_REQUISITION_FILE_REMOVED: 'took a file off',
+  PURCHASE_REQUISITION_FILE_FOR_VENDOR: 'ticked a file to go to the vendor',
+  PURCHASE_REQUISITION_FILE_NOT_FOR_VENDOR: 'unticked a file for the vendor',
 };
+
+/** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
+export function visibleRequisitions(user: AuthenticatedUser): Prisma.PurchaseRequisitionWhereInput {
+  return may(user, APPROVE) || may(user, ORDER) ? { OR: [{ requestedById: user.id }, { status: { not: Status.DRAFT } }] } : { requestedById: user.id };
+}
 
 @Injectable()
 export class PurchasingService {
@@ -169,9 +179,8 @@ export class PurchasingService {
     };
   }
 
-  /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
   private visible(user: AuthenticatedUser): Prisma.PurchaseRequisitionWhereInput {
-    return may(user, APPROVE) || may(user, ORDER) ? { OR: [{ requestedById: user.id }, { status: { not: Status.DRAFT } }] } : { requestedById: user.id };
+    return visibleRequisitions(user);
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
@@ -194,6 +203,8 @@ export class PurchasingService {
       reject: waiting && !mine,
       order: requisition.status === Status.APPROVED && may(user, ORDER),
       approveBlocked,
+      // Whoever sees it: their own, or one they decide or order from.
+      attach: ATTACHABLE.includes(requisition.status),
     };
   }
 
@@ -221,7 +232,7 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, settings, levels, audits, order] = await Promise.all([
+    const [companies, settings, levels, audits, order, files] = await Promise.all([
       this.companies(organizationId),
       this.settings(this.prisma, organizationId),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
@@ -232,6 +243,7 @@ export class PurchasingService {
       }),
       // The order made from it, if one stands: a cancelled order frees the requisition for another.
       this.prisma.purchaseOrder.findFirst({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } }, select: { id: true, number: true } }),
+      requisitionFiles(this.prisma, user, requisition),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -270,6 +282,7 @@ export class PurchasingService {
       decidedAt: requisition.decidedAt?.toISOString() ?? null,
       history,
       order,
+      files,
       can: this.actions(user, requisition, summary.estimatedTotalCents, settings),
       settings,
     };
