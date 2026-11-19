@@ -33,7 +33,7 @@ import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { STREAM_ENCODING_FAILED } from '../media/inspection-video.service';
 import { VIDEO_NEVER_ARRIVED } from '../technician/media-processing.service';
-import { isAiFiled } from '../technician/ai-filed-frames';
+import { isAiFiled, isAiRoomPhoto } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import {
   REANALYSIS_COMPLETED_EVENT,
@@ -970,7 +970,7 @@ export class AreaEvidenceService {
       sha256: photo.sha256,
       capturedByName: photo.capturedBy.displayName,
       findingId: photo.findingId,
-      filedByAi: isAiFiled(photo.metadata),
+      filedByAi: isAiFiled(photo.metadata) || isAiRoomPhoto(photo.metadata),
       contentPath: `/api/v1/admin/photos/${photo.id}/content`,
     });
     if (overview.length)

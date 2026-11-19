@@ -19,12 +19,40 @@ export function aiFiledMetadata(atMs: number) {
 
 /** Whether a photograph's metadata says the AI filed it. */
 export function isAiFiled(metadata: Prisma.JsonValue | null | undefined) {
-  return (
-    typeof metadata === 'object' &&
-    metadata !== null &&
-    !Array.isArray(metadata) &&
-    (metadata as Record<string, unknown>).filedBy === AI_FILED
-  );
+  return filedBy(metadata) === AI_FILED;
+}
+
+/**
+ * A wide frame the AI chose from a move-in's walkthrough as a photograph of
+ * the room, or of one checklist item in it (the office, 2026-11-20: a move-in
+ * report shows each area as the tenant receives it, in wide shots, each under
+ * the item it shows). Under no finding, so marked apart from `AI_FILED`: the
+ * clean-up of frames left without their finding must not take these, and the
+ * console must not hide them.
+ */
+export const AI_ROOM_PHOTO = 'AI_ROOM_PHOTO';
+
+/** What every AI room photo's idempotency key holds, and nothing else's does. */
+export const AI_ROOM_PHOTO_KEY_MARK = '-ai-room-';
+
+/** The idempotency key of an AI room photo, per recording and moment. */
+export function aiRoomPhotoKey(mediaId: string, atMs: number) {
+  return `${mediaId}${AI_ROOM_PHOTO_KEY_MARK}${atMs}`;
+}
+
+export function aiRoomPhotoMetadata(atMs: number) {
+  return { videoTimestampMs: atMs, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: AI_ROOM_PHOTO };
+}
+
+/** Whether a photograph's metadata says the AI chose it as a photograph of the room. */
+export function isAiRoomPhoto(metadata: Prisma.JsonValue | null | undefined) {
+  return filedBy(metadata) === AI_ROOM_PHOTO;
+}
+
+function filedBy(metadata: Prisma.JsonValue | null | undefined) {
+  return typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>).filedBy
+    : undefined;
 }
 
 type Client = {
