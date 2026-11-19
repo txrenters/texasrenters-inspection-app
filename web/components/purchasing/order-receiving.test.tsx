@@ -1,8 +1,8 @@
 import type { PurchaseOrderDetail, VendorBillView } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BillSection, ReceivingSection } from './order-receiving';
+import { BillSection, ReceivingSection, aheadOfTexas } from './order-receiving';
 
 /** Receiving and the vendor's bill, phase 4 (2026-11-19). Every item, person, vendor and price invented. */
 
@@ -70,6 +70,13 @@ const bill = (over: Partial<VendorBillView> = {}): VendorBillView => ({
 });
 
 let edits: Record<string, ReturnType<typeof mutation>>;
+// The days typed below are late November: the forms refuse a day that has not come yet in Texas, so the clock is put after them.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-30T18:00:00.000Z'));
+});
+afterEach(() => vi.useRealTimers());
+
 beforeEach(() => {
   edits = Object.fromEntries(['receive', 'reverseReceipt', 'closeShort', 'saveBill', 'approveBill', 'approveBillAnyway', 'payBill'].map((name) => [name, mutation()]));
   hooks.usePurchaseReceivingEdits.mockReturnValue(edits);
@@ -214,5 +221,16 @@ describe('the vendor\'s bill', () => {
     expect(screen.getByText(/check$/)).toBeTruthy();
     expect(screen.queryByRole('list', { name: 'Why the bill is held' })).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('a day that has not come yet in Texas (2026-11-19)', () => {
+  it('is refused with the Texas day named, and today or before is not', () => {
+    // 00:55 on December 1 in Manila is still November 30 in Texas.
+    vi.setSystemTime(new Date('2026-11-30T16:55:00.000Z'));
+    expect(aheadOfTexas('2026-12-01')).toMatch(/^That day has not come yet in Texas\. It is .*30.* there\.$/);
+    expect(aheadOfTexas('2026-11-30')).toBeNull();
+    expect(aheadOfTexas('2026-11-02')).toBeNull();
+    expect(aheadOfTexas('')).toBeNull();
   });
 });

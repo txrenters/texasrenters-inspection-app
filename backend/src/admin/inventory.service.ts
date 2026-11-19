@@ -26,7 +26,7 @@ import {
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
-import { businessDate } from '../common/business-day';
+import { businessDate, dayWords } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
@@ -458,7 +458,7 @@ export class InventoryService {
     const organizationId = user.organizationId;
     const today = businessDate();
     const day = input.day ?? today;
-    if (day > today) throw new ApplicationError(400, 'STOCK_DAY_AHEAD', 'An opening balance cannot be dated after today.');
+    if (day > today) throw new ApplicationError(400, 'STOCK_DAY_AHEAD', `An opening balance cannot be dated after today. It is ${dayWords(today)} in Texas.`);
     const write = () =>
       this.prisma.$transaction(async (tx) => {
         const already = await tx.stockMovement.findFirst({ where: { organizationId, requestKey: input.requestKey }, select: { itemId: true } });
@@ -475,7 +475,8 @@ export class InventoryService {
         if (!place) throw new ApplicationError(404, 'STOCK_PLACE_NOT_FOUND', 'That place is not on the list.');
         if (!item.active || !place.active) throw new ApplicationError(409, 'STOCK_SWITCHED_OFF', 'Stock cannot be entered for an item or a place that is switched off.');
         // Two people entering the same item and place at once: the second waits here, then sees the first.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`stock-opening:${itemId}:${input.placeId}`}))`;
+        // Cast to text: the lock answers `void`, which Prisma cannot read back, and every entry failed with a 500 (2026-11-19).
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`stock-opening:${itemId}:${input.placeId}`}, 0))::text AS locked`;
         const standing = await tx.stockMovement.findFirst({
           where: { organizationId, itemId, placeId: input.placeId, kind: StockMovementKind.OPENING_BALANCE, reversedBy: null },
           select: { id: true },
