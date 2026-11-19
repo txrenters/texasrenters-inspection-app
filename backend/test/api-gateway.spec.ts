@@ -675,17 +675,30 @@ describe('the third-party gateway surface', () => {
       ).toBe(true);
   });
 
-  it('is read-only, so nothing outside this system can write through it', () => {
-    // The property worth defending as this surface grows: a key can be granted
-    // write permissions and still reach nothing that writes here, because the
-    // gateway offers nothing that does. A POST added without thinking would
-    // fail this rather than quietly becoming a public contract.
-    for (const name of handlers)
-      expect({
-        route: name,
-        // RequestMethod.GET is 0.
-        method: Reflect.getMetadata('method', prototype[name] as object),
-      }).toEqual({ route: name, method: 0 });
+  it('writes only through the one route opened for it; everything else stays read-only', () => {
+    // The property worth defending as this surface grows: a key granted write
+    // permissions reaches exactly the writes listed here, each behind its own
+    // grant, and nothing else. A POST added without thinking fails this rather
+    // than quietly becoming a public contract.
+    const writes: Record<string, { method: number; permission: string }> = {
+      // RequestMethod.POST is 1. The maintenance app's work orders (2026-11-12).
+      receiveWorkOrder: { method: 1, permission: 'work-orders:manage' },
+    };
+    for (const name of handlers) {
+      const method = Reflect.getMetadata('method', prototype[name] as object) as number;
+      const permissions =
+        (Reflect.getMetadata('permissions', prototype[name] as object) as string[] | undefined) ?? [];
+      if (name in writes) {
+        expect({ route: name, method, permissions }).toEqual({
+          route: name,
+          method: writes[name].method,
+          permissions: [writes[name].permission],
+        });
+        continue;
+      }
+      // RequestMethod.GET is 0.
+      expect({ route: name, method }).toEqual({ route: name, method: 0 });
+    }
   });
 
   it('keeps tracking behind its own grant, not the directory grant', () => {

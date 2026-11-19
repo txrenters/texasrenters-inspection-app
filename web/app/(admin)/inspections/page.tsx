@@ -81,6 +81,14 @@ const DESCRIPTIONS: Record<string, { title: string; description: string }> = {
     title: 'AC filter delivery',
     description: 'Filters delivered to every area that has a unit.',
   },
+  MAINTENANCE: {
+    title: 'Maintenance work orders',
+    description: 'Repair work orders handed over by the maintenance app for the in-house crews.',
+  },
+  PEST_CONTROL: {
+    title: 'Pest control work orders',
+    description: 'Crystal Creek Pest Control’s work orders, handed over by the maintenance app.',
+  },
 };
 
 /**

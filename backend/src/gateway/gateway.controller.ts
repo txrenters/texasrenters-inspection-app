@@ -1,7 +1,7 @@
 /* DTO classes and guards are runtime imports required by Nest metadata. */
 /* eslint-disable @typescript-eslint/consistent-type-imports */
-import { Controller, Get, Inject, Param, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiBody, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 import { PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import {
@@ -14,6 +14,7 @@ import { AdminService } from '../admin/admin.service';
 import { PropertyGeocodingService } from '../admin/property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { API_KEY_SECURITY_SCHEME } from '../openapi/openapi.document';
+import { WorkOrderIntakeService } from '../work-orders/work-order-intake.service';
 import { GatewayAuthGuard } from './gateway-auth.guard';
 import { MachineAccessible } from './machine-accessible.decorator';
 import { ApiRateLimitGuard } from './rate-limit.guard';
@@ -47,6 +48,7 @@ export class GatewayController {
     @Inject(AdminService) private readonly service: AdminService,
     @Inject(TechnicianLocationService) private readonly locations: TechnicianLocationService,
     @Inject(PropertyGeocodingService) private readonly propertyGeocoding: PropertyGeocodingService,
+    @Inject(WorkOrderIntakeService) private readonly workOrders: WorkOrderIntakeService,
   ) {}
 
   /** Properties in the calling client's organization. */
@@ -139,5 +141,30 @@ export class GatewayController {
   @RequirePermissions('inspections:read')
   inspection(@Req() request: AuthenticatedRequest, @Param('inspectionId') inspectionId: string) {
     return this.service.inspection(request.user, inspectionId);
+  }
+
+  /**
+   * A work order for the in-house crews, handed over by the maintenance app.
+   *
+   * The first write on this surface, and deliberately the only one: a signed
+   * POST (the guard refuses an unsigned write) behind `work-orders:manage`, a
+   * grant of its own that reaches nothing else. Idempotent on the work order's
+   * key — the same envelope again updates the visit it already made, a closed
+   * work order cancels it — so a retrying sender is the normal case it was
+   * built for. Answers 201 with the visit's id, or a 4xx whose `code` the
+   * maintenance app shows its staff. See
+   * docs/integrations/TX_MAINTENANCE_WORK_ORDERS.md for the envelope.
+   */
+  @Post('work-orders')
+  @HttpCode(201)
+  @MachineAccessible()
+  @RequirePermissions('work-orders:manage')
+  @ApiBody({
+    description:
+      'The work order as the maintenance app keys it: idempotency_key, work_order, property, tenants, vendors. The full shape is in docs/integrations/TX_MAINTENANCE_WORK_ORDERS.md.',
+    schema: { type: 'object', additionalProperties: true },
+  })
+  receiveWorkOrder(@Req() request: AuthenticatedRequest, @Body() body: unknown) {
+    return this.workOrders.receive(request.user, body);
   }
 }

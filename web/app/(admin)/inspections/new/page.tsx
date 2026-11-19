@@ -129,6 +129,10 @@ function inspectionTypeGuidance(type: InspectionType) {
       'Collecting the lockbox. Choose the area it is coming off.',
     [InspectionType.AC_FILTER_DELIVERY]:
       'Covers every area that has an air conditioner, the same scope as an HVAC visit.',
+    [InspectionType.MAINTENANCE]:
+      'A repair work order for the in-house crews. Normally handed over by the maintenance app; walks no rooms and scores no checklist.',
+    [InspectionType.PEST_CONTROL]:
+      'A pest control work order for Crystal Creek Pest. Normally handed over by the maintenance app; walks no rooms and scores no checklist.',
   }[type];
 }
 

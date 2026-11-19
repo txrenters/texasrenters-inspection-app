@@ -20,6 +20,7 @@ export const PERMISSION_KEYS = [
   'inspections:assign',
   'inspections:finalize',
   'inspections:delete',
+  'work-orders:manage',
   'technicians:read',
   'technicians:locate',
   'technicians:manage',
@@ -168,6 +169,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         label: 'Delete inspections',
         description:
           'Permanently erase an inspection and every recording, photo, finding and charge attached to it, including the video files themselves. Irreversible, and works even on finalized inspections — grant it only to accounts that are meant to clear test data.',
+      },
+      {
+        key: 'work-orders:manage',
+        label: 'Receive work orders',
+        description:
+          'Hand repair work orders for the in-house crews to this app as maintenance visits, and update or cancel them as the work order changes. Meant for the maintenance app’s API client; it reaches nothing else.',
       },
     ],
   },
