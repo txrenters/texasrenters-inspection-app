@@ -128,10 +128,21 @@ Then an `Inspection` with `source = WORK_ORDER`:
   rooms, scores a checklist or compares to a move-in; the technician's photos
   are the evidence.
 - `scheduledAt` is the day the tenant allowed entry when the work order
-  carries one that is still ahead, else the day it arrived. The column cannot
-  be empty. The office moves it when it schedules the crew.
-- The same-day duplicate rule does not apply: two repairs at one property on
-  one day are two work orders, and the key says which is which.
+  carries one that is still ahead, else the day it arrived, counted as the
+  Texas day. The column cannot be empty. The office moves it when it
+  schedules the crew.
+- The same-day duplicate rule does not apply, in code or in the database
+  (the booking index leaves `source = WORK_ORDER` out): two repairs at one
+  property on one day are two work orders, and the key says which is which.
+- A repeat of the same key updates the visit: priority, number, Jobber job
+  and the work order's part of the notes. What the office added to the notes
+  in the console stays; the last send's text is what gets replaced. A work
+  order that was closed and is open again schedules its cancelled visit again
+  (audited as `WORK_ORDER_REOPENED`, answered `updated`). A closed work order
+  cancels a visit only while it is still `SCHEDULED`; one a technician has
+  started is left alone and answered `unchanged`.
+- Two first sends at once (a retry overtaking the original) both answer with
+  the one visit; the loser updates it rather than being refused.
 - `allowTechnicianAreaCapture` is on, so a property nobody has surveyed is not
   a reason to refuse the visit. No standard layout is seeded for a repair.
 - `jobberJobId` is the work order's existing Jobber job, created by the
@@ -149,6 +160,13 @@ Then an `Inspection` with `source = WORK_ORDER`:
 - No visit for an outside customer (Crystal Creek Air at a non-Propertyware
   home); refused with `WORK_ORDER_OUTSIDE_PROPERTY` until there is a record to
   hang it on.
-- No console screen for `WorkOrderImport` yet. The table is queryable and the
-  audit log carries `WORK_ORDER_RECEIVED` / `WORK_ORDER_UPDATED` /
-  `WORK_ORDER_CANCELLED`.
+- No console screen for `WorkOrderImport` yet. The table is queryable (under
+  the same tenant isolation policy as every other table) and the audit log
+  carries `WORK_ORDER_RECEIVED` / `WORK_ORDER_UPDATED` / `WORK_ORDER_REOPENED`
+  / `WORK_ORDER_CANCELLED`, each with the estimate and the approval rule,
+  recorded approver and AI confidence the envelope carried.
+- No approval of anything. When the sender's rule was the AI's reading of the
+  owner's messages, the visit notes say so and that nobody has confirmed it;
+  the office confirms work over the threshold. No invoice is drafted for a
+  work order's visit by the console's automatic drafts: the maintenance app
+  bills it on the Jobber job it already has.

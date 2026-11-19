@@ -7,7 +7,7 @@ import {
   type InvoiceAutoDraftsView,
   type SaveInvoiceAutoDraftsInput,
 } from '@texasrenters/shared';
-import { Prisma, type InspectionStatus } from '@prisma/client';
+import { InspectionSource, Prisma, type InspectionStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
@@ -134,6 +134,9 @@ export class InvoiceAutoDraftsService {
         organizationId,
         status: { in: [...FINISHED_INSPECTION_STATUSES] as InspectionStatus[] },
         propertywareBuildingId: { not: null },
+        // A work order's visit is the maintenance app's to bill, on the Jobber job it already has. Left in, one with
+        // no billing rule here is passed over every run and keeps a place in the window that a real visit needs.
+        source: { not: InspectionSource.WORK_ORDER },
         scheduledAt: { gte: earliest },
         // Finished since the switch went on: ended by the technician, or completed by the office or in Jobber. A visit
         // brought in from an old report or Propertyware's documents carries its own old day, and is not.
