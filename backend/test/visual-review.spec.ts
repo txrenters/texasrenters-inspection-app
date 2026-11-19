@@ -1,9 +1,11 @@
 import { AiProvider } from '@prisma/client';
 
 import {
+  MAX_ROOM_PHOTOS_PER_RECORDING,
   VisualReviewService,
   normalizeBox,
   photoMatchesFinding,
+  roomPhotoMoments,
   scanTimes,
 } from '../src/technician/visual-review.service';
 
@@ -102,6 +104,8 @@ function harness(
     toFile?: Array<{ id: string; findingId: string; atMs: number }>;
     /** A photograph already filed at the same moment of the recording. */
     filedAlready?: { id: string; findingId: string | null } | null;
+    /** Room photos an earlier run of this recording chose (a move-in's). */
+    earlierRoomPhotos?: Array<{ id: string; storageKey: string; idempotencyKey: string }>;
   } = {},
 ) {
   const media =
@@ -178,15 +182,19 @@ function harness(
     inspectionPhoto: {
       // The room's own photos are asked for by area; the move-in's by its room;
       // the AI's own loose frames by who filed them.
-      findMany: jest.fn(async (args: { where: { inspectionAreaId?: string; metadata?: unknown } }) =>
-        args.where.metadata
-          ? (opts.orphans ?? [])
-          : args.where.inspectionAreaId
-            ? (opts.roomPhotos ?? [])
-            : (opts.baselinePhotos ?? DEFAULT_BASELINE_PHOTOS),
+      findMany: jest.fn(
+        async (args: { where: { inspectionAreaId?: string; metadata?: unknown; idempotencyKey?: unknown } }) =>
+          args.where.metadata
+            ? (opts.orphans ?? [])
+            : args.where.idempotencyKey
+              ? (opts.earlierRoomPhotos ?? [])
+              : args.where.inspectionAreaId
+                ? (opts.roomPhotos ?? [])
+                : (opts.baselinePhotos ?? DEFAULT_BASELINE_PHOTOS),
       ),
       findUnique: jest.fn().mockResolvedValue(opts.filedAlready ?? null),
       create: jest.fn().mockResolvedValue({ id: 'ai-photo-1' }),
+      update: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     findingFrameSuggestion: {
@@ -653,6 +661,161 @@ describe('the frames the AI files itself', () => {
 
     const [[{ data: spotted }]] = tx.inspectionFinding.createMany.mock.calls;
     expect(spotted[0].recommendedReview).toBe('');
+  });
+});
+
+/**
+ * A move-in's photographs (the office, 2026-11-20): wide shots of each room and
+ * of each checklist item in it, as the office's own move-in reports show them,
+ * not the AI's close-ups of problems nobody has confirmed.
+ */
+describe('a move-in room’s photographs, chosen by the scan', () => {
+  const ITEMS = [
+    { id: 'item-doors', label: 'Doors and locks' },
+    { id: 'item-walls', label: 'Walls and ceilings' },
+  ];
+  const moveIn = (items = ITEMS) => ({
+    id: 'media-1',
+    inspectionId: 'move-in-2',
+    streamUid: 'uid-1',
+    readyAt: new Date(),
+    durationSeconds: 12,
+    technicianId: 'technician-1',
+    recordedAt: new Date('2026-11-18T23:33:00.000Z'),
+    inspectionAreaId: 'inspection-area-1',
+    inspectionArea: {
+      propertyArea: { id: 'pa-living', name: 'Living room', checklistItems: items },
+      inspection: { inspectionType: 'MOVE_IN', finalizedAt: null },
+    },
+  });
+  const scanChoosing = (photos: unknown[]) => ({
+    findings: [{ ref: 'F1', visible: 'VISIBLE', frames: ['T004'], observation: 'Two holes.' }],
+    additional: [],
+    photos,
+  });
+  const roomPhotoCreates = (create: jest.Mock) =>
+    create.mock.calls.map(([args]) => args.data).filter((data) => data.captureType === 'AREA_OVERVIEW');
+
+  it('are asked for in the same scan, item by item, on a move-in only', async () => {
+    const moveInRun = harness({ media: moveIn() });
+    await moveInRun.service.review('media-1', ORGANIZATION_ID);
+    const asked = moveInRun.sent(0)[0].text!;
+    expect(asked).toContain('Task C. photos');
+    expect(asked).toContain('c1: Doors and locks');
+    expect(asked).toContain('c2: Walls and ceilings');
+    // No call of their own: the scan and the close look, as before.
+    expect(moveInRun.calls()).toHaveLength(2);
+
+    const moveOutRun = harness();
+    await moveOutRun.service.review('media-1', ORGANIZATION_ID);
+    expect(moveOutRun.sent(0)[0].text).not.toContain('Task C');
+  });
+
+  it('are filed as wide frames of the room and of each item, in the checklist’s order, marked as the AI’s', async () => {
+    const { service, prisma, storage } = harness({
+      media: moveIn(),
+      scan: scanChoosing([
+        { item: 'c2', frames: ['T007', 'T010'] },
+        { item: null, frames: ['T001'] },
+        // An item the room does not have, and a frame the scan was never shown.
+        { item: 'c9', frames: ['T004'] },
+        { item: 'c1', frames: ['T999'] },
+      ]),
+    });
+
+    const result = await service.review('media-1', ORGANIZATION_ID);
+
+    const filed = roomPhotoCreates(prisma.inspectionPhoto.create);
+    expect(filed.map((data) => [data.idempotencyKey, data.checklistItemId, data.label, data.sequenceNumber])).toEqual([
+      // The room as a whole first, then its walls; each the sharpest of three neighbours.
+      ['media-1-ai-room-500', null, 'Room overview', -999],
+      ['media-1-ai-room-6500', 'item-walls', null, -995],
+      ['media-1-ai-room-9500', 'item-walls', null, -994],
+    ]);
+    expect(filed[0]).toMatchObject({
+      inspectionId: 'move-in-2',
+      inspectionAreaId: 'inspection-area-1',
+      capturedById: 'technician-1',
+      captureTimeSource: 'VIDEO_OFFSET',
+      metadata: { videoTimestampMs: 500, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI_ROOM_PHOTO' },
+    });
+    expect(filed.every((data) => data.findingId === undefined)).toBe(true);
+    expect(storage.putBytes).toHaveBeenCalledWith(
+      `organizations/${ORGANIZATION_ID}/inspections/move-in-2/photos/media-1-ai-room-500.jpg`,
+      expect.any(Buffer),
+      'image/jpeg',
+    );
+    expect(result?.roomPhotos).toBe(3);
+  });
+
+  it('replace what an earlier run chose, keeping a moment chosen again under its new item', async () => {
+    const { service, prisma, storage } = harness({
+      media: moveIn(),
+      scan: scanChoosing([{ item: 'c1', frames: ['T001'] }]),
+      earlierRoomPhotos: [
+        { id: 'old-photo', storageKey: 'organizations/x/old.jpg', idempotencyKey: 'media-1-ai-room-9500' },
+        { id: 'kept-photo', storageKey: 'organizations/x/kept.jpg', idempotencyKey: 'media-1-ai-room-500' },
+      ],
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(prisma.inspectionPhoto.findMany).toHaveBeenCalledWith({
+      where: { inspectionAreaId: 'inspection-area-1', idempotencyKey: { startsWith: 'media-1-ai-room-' } },
+      select: { id: true, storageKey: true, idempotencyKey: true },
+    });
+    expect(prisma.inspectionPhoto.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['old-photo'] } } });
+    expect(storage.delete).toHaveBeenCalledWith('organizations/x/old.jpg');
+    expect(prisma.inspectionPhoto.update).toHaveBeenCalledWith({
+      where: { idempotencyKey: 'media-1-ai-room-500' },
+      data: { checklistItemId: 'item-doors', sequenceNumber: -997 },
+    });
+    expect(roomPhotoCreates(prisma.inspectionPhoto.create)).toHaveLength(0);
+  });
+
+  it('leave a room’s earlier photographs when the scan chooses none', async () => {
+    const { service, prisma } = harness({
+      media: moveIn(),
+      scan: scanChoosing([]),
+      earlierRoomPhotos: [{ id: 'kept-photo', storageKey: 'k', idempotencyKey: 'media-1-ai-room-500' }],
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(prisma.inspectionPhoto.deleteMany).not.toHaveBeenCalledWith({ where: { id: { in: ['kept-photo'] } } });
+    expect(roomPhotoCreates(prisma.inspectionPhoto.create)).toHaveLength(0);
+  });
+
+  it('are never filed on a move-out, whatever the model answers', async () => {
+    const { service, prisma } = harness({ scan: scanChoosing([{ item: null, frames: ['T001'] }]) });
+
+    const result = await service.review('media-1', ORGANIZATION_ID);
+
+    expect(roomPhotoCreates(prisma.inspectionPhoto.create)).toHaveLength(0);
+    expect(result?.roomPhotos).toBe(0);
+  });
+
+  it('are at most two an entry and twelve a recording, each moment once', () => {
+    const second = (label: string) => (/^T\d{3}$/.test(label) ? Number(label.slice(1)) : undefined);
+    const items = Array.from({ length: 10 }, (_, index) => ({ id: `item-${index + 1}` }));
+    const moments = roomPhotoMoments(
+      [
+        { item: null, frames: ['T001', 'T004', 'T007'] },
+        ...items.map((_, index) => ({ item: `c${index + 1}`, frames: [`T${String(10 + index * 3).padStart(3, '0')}`, 'T001'] })),
+      ],
+      second,
+      items,
+    );
+    expect(moments.slice(0, 2)).toEqual([
+      { second: 1, itemId: null, order: 1 },
+      { second: 4, itemId: null, order: 2 },
+    ]);
+    // T001 was the room's already: each item keeps only its own frame.
+    expect(moments.slice(2, 4).map((moment) => [moment.second, moment.itemId])).toEqual([
+      [10, 'item-1'],
+      [13, 'item-2'],
+    ]);
+    expect(moments).toHaveLength(MAX_ROOM_PHOTOS_PER_RECORDING);
   });
 });
 

@@ -31,7 +31,7 @@ import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreas } from '../common/inspected-areas';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
-import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
+import { printsOnMoveIn, REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 import { ComparisonReportService } from './comparison-report.service';
@@ -680,6 +680,10 @@ export class ReportShareService {
                 // evidences, so the table states the verdict and the
                 // photographs beneath prove it item by item.
                 checklistItem: { select: { label: true } },
+                // For which of them a move-in prints (`printsOnMoveIn`); never sent.
+                captureType: true,
+                findingId: true,
+                finding: { select: { reviewStatus: true } },
               },
             },
             /**
@@ -898,7 +902,11 @@ export class ReportShareService {
         title: note.title,
       })),
       photos: [
-        ...areas.flatMap((area) => area.photos.map((photo) => photoView(photo, area.id))),
+        ...areas.flatMap((area) =>
+          area.photos
+            .filter((photo) => inspection.inspectionType !== InspectionType.MOVE_IN || printsOnMoveIn(photo))
+            .map((photo) => photoView(photo, area.id)),
+        ),
         ...(filters ? filters.photos.map((photo) => photoView(photo, filters.room.id)) : []),
       ],
       generatedAt: new Date(),
