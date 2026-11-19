@@ -94,6 +94,8 @@ export function CalendarVisit({
   const person = named !== undefined ? named : personOf(row);
   const differs = row.state !== 'MATCHES';
   const warning = jobberDayTone(row.state);
+  // The other kinds of work in its job, drawn on this one card (2026-11-20).
+  const more = row.job ? row.job.kinds.length - 1 : 0;
 
   return (
     <Popover>
@@ -118,6 +120,14 @@ export function CalendarVisit({
           <span className={cn('text-heading min-w-0 truncate font-medium', group === 'cancelled' && 'line-through')}>
             {row.property}
           </span>
+          {more > 0 ? (
+            <span
+              aria-label={`and ${more} more ${more === 1 ? 'kind' : 'kinds'} of work in the job`}
+              className="text-muted-foreground shrink-0 text-[10.5px] font-semibold"
+            >
+              +{more}
+            </span>
+          ) : null}
           {differs ? (
             <span
               aria-label={JOBBER_DAY_LABEL[row.state]}
@@ -133,11 +143,18 @@ export function CalendarVisit({
       <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] p-0">
         <div className={cn('border-l-4 px-4 pt-3 pb-3', tone.bar)}>
           <p className="text-muted-foreground text-xs">
-            {typeTitle(row.inspectionType)} · {STATUS_WORDS[group] ?? humanize(row.status)}
+            {row.job ? `Job ${row.job.number}` : typeTitle(row.inspectionType)} · {STATUS_WORDS[group] ?? humanize(row.status)}
           </p>
           <p className="text-heading mt-0.5 font-semibold">{row.property}</p>
+          {row.job ? <p className="text-muted-foreground mt-0.5 text-xs">{row.job.title}</p> : null}
         </div>
         <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 border-t px-4 py-3 text-sm">
+          {row.job ? (
+            <>
+              <dt className="text-muted-foreground">Work</dt>
+              <dd>{row.job.kinds.map((kind) => typeTitle(kind)).join(', ')}</dd>
+            </>
+          ) : null}
           <dt className="text-muted-foreground">Team</dt>
           <dd className="flex min-w-0 items-center gap-2">
             <PersonDisc name={person} />

@@ -195,6 +195,15 @@ describe('the New job panel', () => {
     expect((screen.getByRole('button', { name: 'Save job' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('leaves the job with nobody when the technician handed over is not an active one', async () => {
+    const { onClose } = open({ inspectionTypes: ['MOVE_OUT'], technicianId: 'gone' });
+    expect(screen.getByRole('combobox', { name: 'Technician' }).textContent).toBe('Nobody yet');
+    fireEvent.click(screen.getByRole('button', { name: 'Save job' }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved()[0]!.technicianId).toBeUndefined();
+  });
+
   it('says under the number when another job has it', () => {
     state.createError = new ApiError(409, 'JOB_NUMBER_TAKEN', 'J-00007 is already the number of "Move-out".');
     open({ inspectionTypes: ['OCCUPIED'] });

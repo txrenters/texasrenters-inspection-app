@@ -43,6 +43,9 @@ vi.mock('@/lib/queries', () => ({
   },
 }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+// The New job panel is the shell's; here only whether it is asked to open, and with what.
+const openNewJob = vi.hoisted(() => vi.fn());
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => openNewJob }));
 vi.mock('./schedule-map', () => ({ ScheduleMap: ({ date }: { date: string }) => <div>map of {date}</div> }));
 
 function row(over: Partial<JobberDayRow> = {}): JobberDayRow {
@@ -308,5 +311,67 @@ describe('who and when', () => {
     // On the grid, which starts at 8 AM: the top of the first hour, plus its inset.
     expect(visit.style.top).toBe('2px');
     expect(screen.getByText('8 AM')).toBeTruthy();
+  });
+});
+
+describe('making a job from the Schedule (2026-11-20)', () => {
+  beforeEach(() => openNewJob.mockClear());
+
+  it('opens the New job panel on the day shown from the toolbar', async () => {
+    mount({ view: 'day' });
+    await screen.findByText('12 Elm Ct');
+    fireEvent.click(screen.getByRole('button', { name: 'New job' }));
+
+    expect(openNewJob).toHaveBeenCalledWith({ date: '2026-11-04', from: 'from the Schedule' });
+  });
+
+  it('offers a new job for the technician whose column is right-clicked on the Day view', async () => {
+    mount({ view: 'day' });
+    fireEvent.contextMenu(await screen.findByText('Ada Lane', { selector: 'span.truncate' }));
+
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Wednesday, November 4')).toBeTruthy();
+    // The Day view is the day already, so it does not offer to open it.
+    expect(within(menu).queryByRole('menuitem', { name: 'Open the day' })).toBeNull();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'New job for Ada Lane' }));
+    expect(openNewJob).toHaveBeenCalledWith({ date: '2026-11-04', technicianId: 'tech-a', from: 'from the Schedule' });
+  });
+
+  it('offers a new job on a day of the month, and the day itself', async () => {
+    mount({ view: 'month' });
+    fireEvent.contextMenu(await screen.findByRole('button', { name: 'Open Wed 4 as a day' }));
+
+    const menu = await screen.findByRole('menu');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'New job on this day' }));
+    expect(openNewJob).toHaveBeenCalledWith({ date: '2026-11-04', from: 'from the Schedule' });
+  });
+
+  it('opens the day, or shows it on the map, from the week', async () => {
+    mount({ view: 'week' });
+    fireEvent.contextMenu(await screen.findByRole('button', { name: 'Open Wed 4 as a day' }));
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Open the day' }));
+    expect(onChange).toHaveBeenCalledWith({ view: 'day', anchor: '2026-11-04' });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open Thu 5 as a day' }));
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Show the day on the map' }));
+    expect(onChange).toHaveBeenCalledWith({ map: true, anchor: '2026-11-05' });
+  });
+
+  it("draws a job's inspections as one card, with the other kinds counted and named", async () => {
+    const job = { id: 'job-1', number: 'J-00042', title: 'Occupied + HVAC', kinds: ['HVAC', 'OCCUPIED'] };
+    asked.days['2026-11-04'] = day('2026-11-04', [
+      row({ inspectionId: 'insp-occ', inspectionType: 'OCCUPIED', property: '12 Elm Ct', job }),
+      row({ inspectionId: 'insp-hvac', inspectionType: 'HVAC', property: '12 Elm Ct', job }),
+    ]);
+    mount({ view: 'day' });
+
+    const cards = await screen.findAllByRole('button', { name: /12 Elm Ct/ });
+    expect(cards).toHaveLength(1);
+    expect(within(cards[0]!).getByText('+1')).toBeTruthy();
+    fireEvent.click(cards[0]!);
+    expect(await screen.findByText('Job J-00042 · To do')).toBeTruthy();
+    expect(screen.getByText('HVAC, Occupied')).toBeTruthy();
+    // The lead's inspection opens.
+    expect(screen.getByRole('link', { name: 'Open inspection' }).getAttribute('href')).toBe('/inspections/insp-hvac');
   });
 });

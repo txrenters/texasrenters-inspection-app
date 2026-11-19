@@ -64,6 +64,21 @@ export interface JobberDayRow {
   waitingToSend: boolean;
   /** Why a Jobber-only visit did not become an inspection, in the sync's words. */
   importNote: string | null;
+  /**
+   * The job the inspection was booked in (2026-11-20), so the Schedule draws
+   * one card a job. Absent or null for a visit booked before jobs, or one only
+   * Jobber has.
+   */
+  job?: JobberDayJob | null;
+}
+
+/** A row's job: its number, its title, and every kind of work in it, the lead first. */
+export interface JobberDayJob {
+  id: string;
+  number: string;
+  title: string;
+  /** Inspection types still live in the job, the lead first: ["HVAC", "OCCUPIED"]. */
+  kinds: string[];
 }
 
 export interface JobberDayTechnician {

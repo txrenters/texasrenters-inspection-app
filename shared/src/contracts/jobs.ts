@@ -70,6 +70,18 @@ export function jobLeadType(types: readonly JobInspectionType[]): JobInspectionT
   return LEAD_ORDER.find((type) => types.includes(type)) ?? null;
 }
 
+/**
+ * A job's kinds of work as the Schedule lists them: the lead first, then the
+ * office order, each once. A kind a job cannot be made with (a work order that
+ * joined it) comes last, as it is.
+ */
+export function jobKindsInOrder(types: readonly string[]): string[] {
+  const known = JOB_INSPECTION_TYPES.filter((type) => types.includes(type));
+  const lead = jobLeadType(known);
+  const rest = [...new Set(types.filter((type) => !isJobInspectionType(type)))];
+  return [...(lead ? [lead] : []), ...known.filter((type) => type !== lead), ...rest];
+}
+
 /** Whether the lead can carry services: only the kinds whose Details this system writes. */
 export function jobCanCarryServices(types: readonly JobInspectionType[]): boolean {
   return isBookableInspectionType(jobLeadType(types));

@@ -1,5 +1,6 @@
 import type {
   JobberDayComparison,
+  JobberDayJob,
   JobberDayOtherWork,
   JobberDayRow,
   JobberDayState,
@@ -29,6 +30,8 @@ export interface DayInspection {
   technician: { id: string; displayName: string; email: string | null } | null;
   /** Outbound kinds of ours still PENDING or FAILED. */
   waitingKinds: string[];
+  /** The job it was booked in, for one card a job on the Schedule. */
+  job?: JobberDayJob | null;
 }
 
 export interface StoredJobberVisit {
@@ -231,6 +234,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       differences: states.map(([, words]) => words),
       waitingToSend: inspection.waitingKinds.length > 0,
       importNote: null,
+      job: inspection.job ?? null,
     });
   }
 

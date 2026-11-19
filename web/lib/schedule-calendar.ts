@@ -187,3 +187,24 @@ export function sortVisits(rows: readonly JobberDayRow[], nameOf: (row: JobberDa
     return nameOf(a).localeCompare(nameOf(b)) || a.property.localeCompare(b.property);
   });
 }
+
+/**
+ * One card a job (2026-11-20): a job's inspections on the same day and with
+ * the same technician are one visit to the office, drawn once, by the job's
+ * lead -- its first kind -- or else the first of them. Rows with no job, or
+ * with one alone on the day, pass through as they are. The order is kept.
+ */
+export function oneCardPerJob(rows: readonly JobberDayRow[]): JobberDayRow[] {
+  const chosen = new Map<string, JobberDayRow>();
+  const keyOf = (row: JobberDayRow) => (row.job ? `${row.job.id}|${technicianKey(row.technicianId)}` : null);
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!key) continue;
+    const held = chosen.get(key);
+    if (!held || (held.inspectionType !== row.job!.kinds[0] && row.inspectionType === row.job!.kinds[0])) chosen.set(key, row);
+  }
+  return rows.filter((row) => {
+    const key = keyOf(row);
+    return !key || chosen.get(key) === row;
+  });
+}

@@ -21,6 +21,8 @@ vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
 // The calendar's map is its own test's business.
 vi.mock('@/components/schedule/schedule-map', () => ({ ScheduleMap: () => null }));
+// The New job panel is the shell's; the calendar only asks it to open.
+vi.mock('@/components/jobs/new-job-context', () => ({ useNewJob: () => () => undefined }));
 
 const held = vi.hoisted(() => ({ comparison: null as unknown }));
 vi.mock('@/lib/queries', () => ({
