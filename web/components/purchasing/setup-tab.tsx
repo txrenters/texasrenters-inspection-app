@@ -279,10 +279,15 @@ function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
           </Button>
         </div>
         <div className="grid gap-x-8 gap-y-2 md:grid-cols-2">
-          <SwitchRow checked disabled label="Nobody approves their own requisition (always on)" />
+          <SwitchRow
+            checked
+            disabled
+            hint="Nobody sends back or rejects their own: they take it back with Cancel Approval Request."
+            label="An approver may approve their own, within their limit (always on)"
+          />
           <SwitchRow
             checked={switches.approverOwnCompaniesOnly}
-            hint="The companies each approver acts for are set under Roles and who holds them."
+            hint="The companies each approver acts for are set under Roles and who holds them. Their departments, ticked there too, always apply."
             label="An approver approves only for their own companies"
             onChange={(on) => toggle('approverOwnCompaniesOnly', on)}
           />
@@ -294,7 +299,10 @@ function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
             onChange={(on) => toggle('reapproveChangedOrders', on)}
           />
         </div>
-        <p className="text-muted-foreground text-xs">A reminder emails the approvers once, if the requisition still waits after its step&rsquo;s days.</p>
+        <p className="text-muted-foreground text-xs">
+          The steps hold for both: an approver of its department approves a requisition, and a purchasing manager approves its purchase order. A reminder emails the approvers once, if the
+          requisition still waits after its step&rsquo;s days.
+        </p>
         <SaveStatus error={save.error} pending={save.isPending} problem={parsed.problem} />
       </div>
     </FastTab>

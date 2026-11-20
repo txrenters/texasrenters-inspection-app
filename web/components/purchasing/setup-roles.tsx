@@ -54,7 +54,7 @@ export function RolesSection({ enabled }: { enabled: boolean }) {
       ) : (
         <div className="grid gap-3">
           <p className="text-sm">
-            Each purchasing role is a set of permissions on the console&rsquo;s Roles page. Tick to give a person a role; a person can be limited to some companies.
+            Each purchasing role is a set of permissions on the console&rsquo;s Roles page. Tick to give a person a role; a person can be limited to some companies, and an approver to some departments. A purchasing manager approves the purchase orders.
           </p>
           <div className="overflow-x-auto">
             <Table>

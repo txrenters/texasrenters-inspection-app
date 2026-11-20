@@ -2,10 +2,12 @@
 
 import { formatMoney, type PurchaseOrderRow } from '@texasrenters/shared';
 import { PackageIcon } from 'lucide-react';
+import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PurchaseOrderStatusBadge } from '@/components/purchasing/requisition-parts';
 import { EmptyState, ErrorState } from '@/components/states';
+import { buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -77,12 +79,18 @@ export function OrdersTab({ state, setState }: { state: { show: string; q: strin
             list.data.orders.length
               ? 'No order matches the search.'
               : show === 'open'
-                ? 'An order is made from an approved requisition: open the requisition and choose Make purchase order.'
+                ? 'An order is made from an approved requisition, Pending Processing: open it and choose Make Purchase Order.'
                 : 'No order has been cancelled.'
           }
           icon={PackageIcon}
           title={list.data.orders.length ? 'Nothing to show' : show === 'open' ? 'No open orders' : 'None'}
-        />
+        >
+          {!list.data.orders.length && show === 'open' ? (
+            <Link className={buttonVariants({ variant: 'outline', size: 'sm' })} href="/purchasing?tab=requisitions&status=PENDING_PROCESSING">
+              Requisitions Pending Processing
+            </Link>
+          ) : null}
+        </EmptyState>
       )}
     </div>
   );

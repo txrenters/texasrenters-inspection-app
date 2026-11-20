@@ -80,6 +80,8 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
 
 export default function PurchasingPage() {
   const { has, hasAny } = usePermissions();
+  // Requisitions and orders are read with Make purchase requisitions; without it they are refused (audit, 2026-11-21).
+  const canRequest = has('purchasing:request');
   // The code lists a requisition picks from (2026-11-20). Read by anybody in purchasing (Purchasing Setup, 2026-11-21); each list is changed by its keeper.
   const canCode = hasAny('purchasing:request', ...KEEPER_PERMISSIONS);
   // Purchasing Setup (2026-11-20): a system admin or a Purchasing admin.
@@ -92,7 +94,7 @@ export default function PurchasingPage() {
   const seesSetup = canSetup || canCode;
   const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
   const show = state.show === 'closed' ? 'closed' : 'open';
-  const list = useRequisitions(show);
+  const list = useRequisitions(show, canRequest);
   const data = list.data;
 
   const words = state.q.trim().toLowerCase();
@@ -103,17 +105,38 @@ export default function PurchasingPage() {
   );
   const count = (stage: RequisitionStage) => data?.requisitions.filter((row) => row.stage === stage).length ?? 0;
   const stages = REQUISITION_STAGES.filter((stage) => data?.requisitions.some((row) => row.stage === stage));
-  const tab = state.tab === 'orders' ? 'orders' : state.tab === 'approvals' && canApprove ? 'approvals' : (state.tab === 'setup' || state.tab === 'codes') && seesSetup ? 'setup' : 'requisitions';
+  const tab = !canRequest
+    ? 'setup'
+    : state.tab === 'orders'
+      ? 'orders'
+      : state.tab === 'approvals' && canApprove
+        ? 'approvals'
+        : (state.tab === 'setup' || state.tab === 'codes') && seesSetup
+          ? 'setup'
+          : 'requisitions';
+
+  // Opened by its address with no purchasing permission at all (the live audit, 2026-11-21): said plainly, as other pages say it.
+  if (!canRequest && !seesSetup)
+    return (
+      <>
+        <PageHeader description="Purchase requisitions, and the orders made from them." title="Purchasing" />
+        <EmptyState
+          description="Ask a Purchasing admin for a purchasing role (Purchasing, Setup, Roles and who holds them) if you need it."
+          icon={ClipboardListIcon}
+          title="You do not have access to purchasing"
+        />
+      </>
+    );
 
   return (
     <>
       <PageHeader
         actions={
-          <>
+          canRequest ? (
             <Link className={buttonVariants()} href="/purchasing/requisitions/new">
               New requisition
             </Link>
-          </>
+          ) : null
         }
         description={data?.seesAll ? "Everyone's purchase requisitions and orders, and yours." : 'Your purchase requisitions, and the orders made from them.'}
         info={
@@ -131,8 +154,8 @@ export default function PurchasingPage() {
       <Tabs onValueChange={(next) => setState({ tab: next, show: 'open', status: ALL, q: '' })} value={tab}>
         <TabsList>
           {/* NAV's names (the office, 2026-11-21). */}
-          <TabsTrigger value="requisitions">Purchase Requisitions</TabsTrigger>
-          <TabsTrigger value="orders">Purchase Orders</TabsTrigger>
+          {canRequest ? <TabsTrigger value="requisitions">Purchase Requisitions</TabsTrigger> : null}
+          {canRequest ? <TabsTrigger value="orders">Purchase Orders</TabsTrigger> : null}
           {canApprove ? <TabsTrigger value="approvals">Requests to Approve</TabsTrigger> : null}
           {seesSetup ? <TabsTrigger value="setup">Setup</TabsTrigger> : null}
         </TabsList>
