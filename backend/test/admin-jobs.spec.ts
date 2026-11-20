@@ -1,5 +1,5 @@
 import { ValidationPipe } from '@nestjs/common';
-import { UserRole, parseVisitDetails, type CreateJobInput, type JobberBookingInput } from '@texasrenters/shared';
+import { UserRole, parseVisitDetails, type AddJobWorkInput, type CreateJobInput, type JobberBookingInput } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { CreateAdminJobDto } from '../src/admin/admin.dto';
@@ -427,5 +427,124 @@ describe('the job request as the API takes it', () => {
     const rest: Partial<CreateJobInput> = { ...everything };
     delete rest.requestKey;
     await expect(validate(rest)).rejects.toBeDefined();
+  });
+});
+
+describe('adding work to a job (the job page, 2026-11-20)', () => {
+  const lead = {
+    id: 'occupied-lead',
+    inspectionType: 'OCCUPIED',
+    status: 'SCHEDULED',
+    scheduledAt: new Date('2026-11-23'),
+    scheduledStartAt: null,
+    scheduledEndAt: null,
+    propertywareUnitId: null,
+    propertywareLeaseId: null,
+    priority: 'STANDARD',
+    internalNotes: 'Dog in the yard.',
+    jobberVisitId: 'visit-1',
+    jobberVisitTitle: '100 Main Street - Zone 3 - Occupied Inspection',
+    jobberVisitDetails: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection\nGate Code: 4321',
+    assignments: [{ technicianId: TECHNICIAN }],
+  };
+  const jobWith = (inspections: unknown[]) => ({ id: 'job-1', number: 'J-00042', propertywareBuildingId: property.id, inspections });
+
+  it("makes each one on the lead's day for its technician, following the job's Jobber visit, and alerts once", async () => {
+    const { service, tx, prisma, events } = build();
+    prisma.job.findFirst.mockResolvedValueOnce(jobWith([lead]));
+    await service.addJobWork(user, 'job-1', { inspectionTypes: ['HVAC', 'MOVE_OUT'] } as never);
+
+    const rows = created(tx);
+    expect(rows.map((row) => row.inspectionType)).toEqual(['MOVE_OUT', 'HVAC']);
+    for (const row of rows) {
+      expect(row).toMatchObject({ jobId: 'job-1', jobberCompanionOfId: 'occupied-lead', jobberVisitTitle: lead.jobberVisitTitle });
+      expect(String(row.scheduledAt)).toBe(String(lead.scheduledAt));
+      // The services stay on the lead: answered once.
+      expect(String(row.jobberVisitDetails)).not.toContain('Pest Control');
+    }
+    expect(tx.inspectionAssignment.create).toHaveBeenCalledTimes(2);
+    expect(events.publish.mock.calls.map((call) => call[4])).toEqual([{ push: true }, { push: false }]);
+    const audit = tx.auditLog.create.mock.calls.map(([{ data }]) => data).find((data) => data.action === 'JOB_WORK_ADDED');
+    expect(audit).toMatchObject({ entityType: 'Job', entityId: 'job-1', metadata: { inspectionTypes: ['MOVE_OUT', 'HVAC'] } });
+  });
+
+  it('refuses a kind the job already has, and writes nothing', async () => {
+    const { service, prisma } = build();
+    prisma.job.findFirst.mockResolvedValueOnce(jobWith([lead]));
+    await expect(service.addJobWork(user, 'job-1', { inspectionTypes: ['OCCUPIED'] } as never)).rejects.toMatchObject({
+      status: 409,
+      code: 'JOB_KIND_ALREADY_IN',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a job whose visit is done: more work is a new job', async () => {
+    const { service, prisma } = build();
+    prisma.job.findFirst.mockResolvedValueOnce(jobWith([{ ...lead, status: 'TECHNICIAN_SUBMITTED' }]));
+    await expect(service.addJobWork(user, 'job-1', { inspectionTypes: ['HVAC'] } as never)).rejects.toMatchObject({
+      code: 'JOB_NOT_UPCOMING',
+    });
+  });
+
+  it("is not found in another office's", async () => {
+    const { service, prisma } = build();
+    prisma.job.findFirst.mockResolvedValueOnce(null);
+    await expect(service.addJobWork(user, 'job-1', { inspectionTypes: ['HVAC'] } as never)).rejects.toMatchObject({ status: 404 });
+    expect(prisma.job.findFirst.mock.calls.at(-1)[0].where).toEqual({ id: 'job-1', organizationId: user.organizationId });
+  });
+});
+
+describe('taking work off a job (the job page, 2026-11-20)', () => {
+  const inspections = [
+    { id: 'occupied-lead', inspectionType: 'OCCUPIED', status: 'SCHEDULED', startedAt: null, jobberVisitId: 'visit-1', jobberVisitDetails: null },
+    { id: 'hvac-1', inspectionType: 'HVAC', status: 'SCHEDULED', startedAt: null, jobberVisitId: null, jobberVisitDetails: null },
+  ];
+  const setUp = (rows = inspections) => {
+    const built = build();
+    built.prisma.job.findFirst.mockResolvedValueOnce({ id: 'job-1', number: 'J-00042', inspections: rows });
+    (built.prisma as unknown as { auditLog: unknown }).auditLog = { create: jest.fn().mockResolvedValue({}) };
+    const update = jest.spyOn(built.service, 'updateInspection').mockResolvedValue({} as never);
+    return { ...built, update };
+  };
+
+  it('cancels it, naming the job, and audits the job', async () => {
+    const { service, update, prisma } = setUp();
+    await service.takeOffJobWork(user, 'job-1', 'hvac-1');
+
+    expect(update).toHaveBeenCalledWith(user, 'hvac-1', { status: 'CANCELLED', cancellationReason: 'Taken off job J-00042' });
+    const audit = (prisma as unknown as { auditLog: { create: jest.Mock } }).auditLog.create.mock.calls[0][0].data;
+    expect(audit).toMatchObject({ action: 'JOB_WORK_TAKEN_OFF', entityType: 'Job', entityId: 'job-1' });
+  });
+
+  it('keeps the lead while others remain, started work, and the last work on the job', async () => {
+    const lead = setUp();
+    await expect(lead.service.takeOffJobWork(user, 'job-1', 'occupied-lead')).rejects.toMatchObject({ code: 'JOB_WORK_CANNOT_COME_OFF' });
+
+    const started = setUp([inspections[0]!, { ...inspections[1]!, status: 'IN_PROGRESS' }]);
+    await expect(started.service.takeOffJobWork(user, 'job-1', 'hvac-1')).rejects.toMatchObject({
+      message: expect.stringContaining('started'),
+    });
+
+    const last = setUp([{ ...inspections[0]!, status: 'CANCELLED' }, inspections[1]!]);
+    await expect(last.service.takeOffJobWork(user, 'job-1', 'hvac-1')).rejects.toMatchObject({
+      message: expect.stringContaining('last work'),
+    });
+    for (const attempt of [lead, started, last]) expect(attempt.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an inspection that is not in the job', async () => {
+    const { service } = setUp();
+    await expect(service.takeOffJobWork(user, 'job-1', 'elsewhere')).rejects.toMatchObject({ status: 404, code: 'JOB_WORK_NOT_FOUND' });
+  });
+});
+
+describe('the add-work request as the API takes it', () => {
+  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+  it('takes the kinds to add, and refuses none or a kind a job cannot hold', async () => {
+    const { AddJobWorkDto } = await import('../src/admin/admin.dto');
+    const body: Required<AddJobWorkInput> = { inspectionTypes: ['HVAC'] };
+    await expect(pipe.transform(body, { type: 'body', metatype: AddJobWorkDto })).resolves.toBeInstanceOf(AddJobWorkDto);
+    await expect(pipe.transform({ inspectionTypes: [] }, { type: 'body', metatype: AddJobWorkDto })).rejects.toBeDefined();
+    await expect(pipe.transform({ inspectionTypes: ['MAINTENANCE'] }, { type: 'body', metatype: AddJobWorkDto })).rejects.toBeDefined();
   });
 });

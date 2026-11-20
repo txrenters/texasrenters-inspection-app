@@ -1,5 +1,6 @@
 import { jobWorkLine, type AdminInspection } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
+import Link from 'next/link';
 import { Fragment } from 'react';
 
 /**
@@ -20,7 +21,8 @@ export function jobFacts(item: AdminInspection): string[] {
     item.occupancy === 'OCCUPIED' ? 'Occupied' : item.occupancy === 'VACANT' ? 'Vacant' : null,
     item.tbpVisit && item.quarter ? item.quarter : null,
     item.zone ? `Zone ${item.zone}` : null,
-    item.jobberJobNumber ? `Job #${item.jobberJobNumber}` : null,
+    // Jobber's number; beside the console's own job (2026-11-20) it is said as Jobber's.
+    item.jobberJobNumber ? `${item.job ? 'Jobber' : 'Job'} #${item.jobberJobNumber}` : null,
     item.propertywareUnit?.name ?? null,
   ].filter((fact): fact is string => Boolean(fact));
 }
@@ -44,6 +46,15 @@ export function JobHeadline({ item }: { item: AdminInspection }) {
   return (
     <div className="grid gap-0.5">
       <p className="flex flex-wrap items-center gap-x-1.5" data-testid="job-facts">
+        {/* The job it was booked in, first: its page holds the rest of the visit's work. */}
+        {item.job ? (
+          <>
+            <Link className="text-foreground font-medium underline-offset-4 hover:underline" href={`/jobs/${item.job.id}`}>
+              Job {item.job.number}
+            </Link>
+            {facts.length ? <span aria-hidden>·</span> : null}
+          </>
+        ) : null}
         {facts.map((fact, index) => (
           <Fragment key={fact}>
             {index ? <span aria-hidden>·</span> : null}

@@ -67,9 +67,13 @@ const job = (over: Partial<AdminJob> = {}): AdminJob => ({
   property: { id: 'p1', name: '2210 Example Bend', addressLine1: '2210 Example Bend' },
   unit: null,
   createdAt: '2026-11-20T15:00:00.000Z',
+  state: 'SCHEDULED',
+  technician: null,
+  services: [],
+  canAddWork: true,
   inspections: [
-    { id: 'hvac-1', inspectionType: 'HVAC', status: 'SCHEDULED', lead: true, technician: null },
-    { id: 'occupied-1', inspectionType: 'OCCUPIED', status: 'SCHEDULED', lead: false, technician: null },
+    { id: 'hvac-1', inspectionType: 'HVAC', status: 'SCHEDULED', state: 'SCHEDULED', lead: true, technician: null, canTakeOff: false },
+    { id: 'occupied-1', inspectionType: 'OCCUPIED', status: 'SCHEDULED', state: 'SCHEDULED', lead: false, technician: null, canTakeOff: true },
   ],
   ...over,
 });
@@ -154,11 +158,11 @@ describe('the New job panel', () => {
     expect(saved()[1]!.requestKey).toBe(saved()[0]!.requestKey);
   });
 
-  it('opens the lead inspection after "Save and open"', async () => {
+  it('opens the job page after "Save and open"', async () => {
     open({ inspectionTypes: ['OCCUPIED', 'HVAC'] });
     fireEvent.click(screen.getByRole('button', { name: 'Save and open' }));
 
-    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/inspections/hvac-1'));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/jobs/job-1'));
   });
 
   it('will not save a job with no inspection, and says services alone come later', () => {

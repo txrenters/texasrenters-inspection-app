@@ -373,5 +373,6 @@ describe('making a job from the Schedule (2026-11-20)', () => {
     expect(screen.getByText('HVAC, Occupied')).toBeTruthy();
     // The lead's inspection opens.
     expect(screen.getByRole('link', { name: 'Open inspection' }).getAttribute('href')).toBe('/inspections/insp-hvac');
+    expect(screen.getByRole('link', { name: 'Open job' }).getAttribute('href')).toBe('/jobs/job-1');
   });
 });

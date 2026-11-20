@@ -177,6 +177,11 @@ export function CalendarVisit({
           </dd>
         </dl>
         <div className="flex justify-end gap-2 border-t px-4 py-3">
+          {row.job ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/jobs/${row.job.id}`}>Open job</Link>
+            </Button>
+          ) : null}
           {row.inspectionId ? (
             <Button asChild size="sm">
               <Link href={`/inspections/${row.inspectionId}`}>Open inspection</Link>

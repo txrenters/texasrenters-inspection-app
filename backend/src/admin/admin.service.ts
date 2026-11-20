@@ -42,11 +42,13 @@ import {
   visitZone,
   zoneNumberOf,
   type AdminDashboardOutlook,
+  JOB_INSPECTION_LABEL,
   JOB_INSPECTION_TYPES,
   formatJobNumber,
-  isJobInspectionType,
+  jobStateOf,
   jobLeadType,
   jobTitleFor,
+  visitStateOf,
   jobWorkLines,
   normalizeJobNumber,
   withoutVisitServices,
@@ -125,6 +127,7 @@ import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
 import { baselineWhere } from './comparison.service';
+import { canTakeOffJobWork, jobLeadInspection, jobServicesOf } from './jobs';
 import { nextDocumentNumber } from './purchasing.service';
 import type {
   AdminFindingsQueryDto,
@@ -132,6 +135,7 @@ import type {
   AssignmentListQueryDto,
   AuditListQueryDto,
   CreateAdminInspectionDto,
+  AddJobWorkDto,
   CreateAdminJobDto,
   CreateEvidenceRequestDto,
   CompleteInspectionDto,
@@ -1982,6 +1986,8 @@ export class AdminService {
         jobberVisitTitle: true,
         jobberJobNumber: true,
         jobberVisitDetails: true,
+        // The job it was booked in (2026-11-20): the header links to the job page.
+        job: { select: { id: true, number: true, title: true } },
         // What the technician reported about those services at submission.
         servicesReport: true,
         servicesReportedAt: true,
@@ -2561,7 +2567,11 @@ export class AdminService {
     return this.job(user, created.jobId);
   }
 
-  /** A job as the console reads it: its number and title, and each inspection in it, the lead first. */
+  /**
+   * A job as the console reads it (the job page, 2026-11-20): its number and
+   * title, each inspection with where it stands, the lead first, the services on
+   * the lead with their answers, and the job's own state from all of them.
+   */
   async job(user: AuthenticatedUser, jobId: string): Promise<AdminJob> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, organizationId: user.organizationId },
@@ -2579,6 +2589,13 @@ export class AdminService {
             inspectionType: true,
             status: true,
             scheduledAt: true,
+            startedAt: true,
+            completionBlockedReason: true,
+            jobberVisitId: true,
+            jobberVisitDetails: true,
+            servicesReport: true,
+            // With the reschedule requests and companions: what a submitted one still owes.
+            ...OPEN_WORK_SELECT,
             assignments: {
               where: { isCurrent: true },
               take: 1,
@@ -2589,15 +2606,27 @@ export class AdminService {
       },
     });
     if (!job) throw new ApplicationError(404, 'JOB_NOT_FOUND', 'Job not found.');
-    const kinds = job.inspections.map((inspection) => inspection.inspectionType).filter(isJobInspectionType);
-    const lead = job.inspections.find((inspection) => inspection.inspectionType === jobLeadType(kinds));
-    const order = (type: string) => {
-      const at = (JOB_INSPECTION_TYPES as readonly string[]).indexOf(type);
-      return at < 0 ? JOB_INSPECTION_TYPES.length : at;
+    const lead = jobLeadInspection(job.inspections);
+    const live = job.inspections.filter((inspection) => inspection.status !== InspectionStatus.CANCELLED);
+    const order = (inspection: { inspectionType: string; status: string }) => {
+      const at = (JOB_INSPECTION_TYPES as readonly string[]).indexOf(inspection.inspectionType);
+      // Taken off last: they are history, not work.
+      return (inspection.status === InspectionStatus.CANCELLED ? 100 : 0) + (at < 0 ? JOB_INSPECTION_TYPES.length : at);
     };
-    const inspections = [...job.inspections].sort((a, b) =>
-      a === lead ? -1 : b === lead ? 1 : order(a.inspectionType) - order(b.inspectionType),
-    );
+    const inspections = [...job.inspections].sort((a, b) => (a === lead ? -1 : b === lead ? 1 : order(a) - order(b)));
+    const stateOf = (inspection: (typeof job.inspections)[number]) =>
+      visitStateOf({
+        status: inspection.status,
+        completionBlockedReason: inspection.completionBlockedReason,
+        openWork: visitOpenWork({
+          status: inspection.status,
+          rescheduleRequests: inspection.rescheduleRequests ?? [],
+          jobberCompanionOf: inspection.jobberCompanionOf ?? null,
+          jobberCompanions: inspection.jobberCompanions ?? [],
+        }),
+      });
+    const states = new Map(job.inspections.map((inspection) => [inspection.id, stateOf(inspection)]));
+    const technician = lead?.assignments[0]?.technician ?? null;
     return {
       id: job.id,
       number: job.number,
@@ -2607,14 +2636,189 @@ export class AdminService {
       property: job.propertywareBuilding,
       unit: job.propertywareUnit,
       createdAt: job.createdAt.toISOString(),
+      state: jobStateOf([...states.values()]),
+      technician,
+      services: lead ? jobServicesOf(lead) : [],
+      canAddWork: Boolean(lead) && UPCOMING_INSPECTION_STATUSES.includes(lead!.status) && lead!.status !== InspectionStatus.CANCELLED,
       inspections: inspections.map((inspection) => ({
         id: inspection.id,
         inspectionType: inspection.inspectionType,
         status: inspection.status,
+        state: states.get(inspection.id)!,
         lead: inspection === lead,
         technician: inspection.assignments[0]?.technician ?? null,
+        canTakeOff: canTakeOffJobWork(inspection, lead, live.length),
       })),
     };
+  }
+
+  /**
+   * More inspections on a job (2026-11-20, the job page's Add work): on the
+   * lead's day, unit and lease, for the lead's technician, each made exactly as
+   * the job's first ones were. A job booked in Jobber keeps its one visit: the
+   * new ones follow the lead, as companions do. Services stay on the lead.
+   *
+   * Billed calls: none; one push and one email for the work added, not one each.
+   */
+  async addJobWork(user: AuthenticatedUser, jobId: string, input: AddJobWorkDto): Promise<AdminJob> {
+    const organizationId = user.organizationId;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, organizationId },
+      select: {
+        id: true,
+        number: true,
+        propertywareBuildingId: true,
+        inspections: {
+          select: {
+            id: true,
+            inspectionType: true,
+            status: true,
+            scheduledAt: true,
+            scheduledStartAt: true,
+            scheduledEndAt: true,
+            propertywareUnitId: true,
+            propertywareLeaseId: true,
+            priority: true,
+            internalNotes: true,
+            jobberVisitId: true,
+            jobberVisitTitle: true,
+            jobberVisitDetails: true,
+            assignments: { where: { isCurrent: true }, take: 1, select: { technicianId: true } },
+          },
+        },
+      },
+    });
+    if (!job) throw new ApplicationError(404, 'JOB_NOT_FOUND', 'Job not found.');
+    const lead = jobLeadInspection(job.inspections);
+    if (!lead || !UPCOMING_INSPECTION_STATUSES.includes(lead.status))
+      throw new ApplicationError(
+        409,
+        'JOB_NOT_UPCOMING',
+        'This job has been done or cancelled. Make a new job for more work.',
+      );
+    const liveKinds = new Set(
+      job.inspections.filter((row) => row.status !== InspectionStatus.CANCELLED).map((row) => row.inspectionType),
+    );
+    const types = JOB_INSPECTION_TYPES.filter((type) => input.inspectionTypes.includes(type));
+    const already = types.filter((type) => liveKinds.has(type));
+    if (already.length)
+      throw new ApplicationError(
+        409,
+        'JOB_KIND_ALREADY_IN',
+        `This job already has ${already.map((type) => JOB_INSPECTION_LABEL[type]).join(' and ')}.`,
+      );
+    const technicianId = lead.assignments[0]?.technicianId ?? null;
+
+    const addedIds = await this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const inspectionType of types) {
+        const plan = await resolveInspectionPlan(tx, {
+          organizationId,
+          buildingId: job.propertywareBuildingId,
+          unitId: lead.propertywareUnitId ?? undefined,
+          leaseId: lead.propertywareLeaseId ?? undefined,
+          inspectionType,
+          scheduledAt: lead.scheduledAt,
+          scheduledStartAt: lead.scheduledStartAt ?? undefined,
+          scheduledEndAt: lead.scheduledEndAt ?? undefined,
+        });
+        const inspection = await insertInspection(tx, plan, {
+          priority: lead.priority,
+          internalNotes: lead.internalNotes ?? undefined,
+          createdById: user.id,
+          jobId: job.id,
+          // The job's Jobber visit, followed as its other companions follow it.
+          ...(lead.jobberVisitId
+            ? {
+                jobberCompanionOfId: lead.id,
+                jobberVisitTitle: lead.jobberVisitTitle,
+                jobberVisitDetails: withoutVisitServices(lead.jobberVisitDetails),
+              }
+            : {}),
+        });
+        ids.push(inspection.id);
+        await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
+          priority: lead.priority,
+          inspectionType,
+          baselineInspectionId: plan.baselineInspectionId,
+          areasInspected: plan.scopedAreas.length,
+          jobId: job.id,
+          jobNumber: job.number,
+          lead: false,
+        });
+        if (technicianId) {
+          await this.createAssignment(tx, user, inspection.id, technicianId);
+          await this.audit(tx, user, 'INSPECTION_ASSIGNED', inspection.id, {
+            technicianId,
+            source: 'JOB_WORK_ADDED',
+            jobId: job.id,
+          });
+        }
+      }
+      await this.audit(tx, user, 'JOB_WORK_ADDED', job.id, { number: job.number, inspectionTypes: types, inspectionIds: ids }, 'Job');
+      return ids;
+    }, ADMIN_TRANSACTION_OPTIONS);
+
+    if (technicianId) {
+      for (const [index, inspectionId] of addedIds.entries())
+        this.technicianEvents?.publish(technicianId, inspectionId, 'ASSIGNED', undefined, { push: index === 0 });
+      this.notifyJobAssignmentByEmail(organizationId, job.id, technicianId, jobWorkLines(types));
+    }
+    await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId });
+    return this.job(user, job.id);
+  }
+
+  /**
+   * Takes an inspection nobody has started off its job (2026-11-20): it is
+   * cancelled, with the job named as the reason, so its record stays and the
+   * technician hears it is off their list. The lead stays while others remain,
+   * and a job keeps its last piece of work: cancel that inspection instead.
+   */
+  async takeOffJobWork(user: AuthenticatedUser, jobId: string, inspectionId: string): Promise<AdminJob> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        number: true,
+        inspections: {
+          select: {
+            id: true,
+            inspectionType: true,
+            status: true,
+            startedAt: true,
+            jobberVisitId: true,
+            jobberVisitDetails: true,
+          },
+        },
+      },
+    });
+    if (!job) throw new ApplicationError(404, 'JOB_NOT_FOUND', 'Job not found.');
+    const row = job.inspections.find((inspection) => inspection.id === inspectionId);
+    if (!row) throw new ApplicationError(404, 'JOB_WORK_NOT_FOUND', 'That inspection is not in this job.');
+    const live = job.inspections.filter((inspection) => inspection.status !== InspectionStatus.CANCELLED);
+    if (!canTakeOffJobWork(row, jobLeadInspection(job.inspections), live.length))
+      throw new ApplicationError(
+        409,
+        'JOB_WORK_CANNOT_COME_OFF',
+        row.status !== InspectionStatus.SCHEDULED || row.startedAt
+          ? 'It has been started, so it stays on the job. The phone marks work not done.'
+          : live.length <= 1
+            ? 'It is the last work on the job. Cancel the inspection itself instead.'
+            : 'It leads the job: the services and the Jobber visit are on it. Take the others off first.',
+      );
+    await this.updateInspection(user, inspectionId, {
+      status: InspectionStatus.CANCELLED,
+      cancellationReason: `Taken off job ${job.number}`,
+    } as UpdateAdminInspectionDto);
+    await this.audit(
+      this.prisma,
+      user,
+      'JOB_WORK_TAKEN_OFF',
+      job.id,
+      { number: job.number, inspectionId, inspectionType: row.inspectionType },
+      'Job',
+    );
+    return this.job(user, job.id);
   }
 
   /**

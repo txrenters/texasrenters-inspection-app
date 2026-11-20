@@ -85,6 +85,7 @@ import type {
   ProviderReadiness,
   JobberBookingContext,
   AdminJob,
+  AddJobWorkInput,
   CreateJobInput,
   JobNextNumber,
   JobberConnection,
@@ -401,6 +402,41 @@ export function useCreateJob() {
       ]);
     },
   });
+}
+/** One job, for its page (2026-11-20): its inspections, their states, the lead's services. */
+export const useJob = (id: string) =>
+  useQuery({
+    queryKey: keys.job(id),
+    queryFn: ({ signal }) => api<AdminJob>(`/api/v1/admin/jobs/${id}`, { signal }),
+    enabled: Boolean(id),
+  });
+/**
+ * Add work to a job, and take work nobody started off it. Each answers with
+ * the job as it now is, and every list the inspections appear in is read again.
+ */
+export function useJobWork(jobId: string) {
+  const client = useQueryClient();
+  const settle = (job: AdminJob) => {
+    client.setQueryData(keys.job(job.id), job);
+    void verifyAffectedQueries(client, [
+      keys.inspectionsRoot,
+      keys.assignmentsRoot,
+      keys.dashboard,
+      ['admin', 'jobber', 'day'],
+    ]);
+  };
+  return {
+    add: useMutation({
+      mutationFn: (input: AddJobWorkInput) =>
+        api<AdminJob>(`/api/v1/admin/jobs/${jobId}/work`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: settle,
+    }),
+    takeOff: useMutation({
+      mutationFn: (inspectionId: string) =>
+        api<AdminJob>(`/api/v1/admin/jobs/${jobId}/work/${inspectionId}/take-off`, { method: 'POST' }),
+      onSuccess: settle,
+    }),
+  };
 }
 export const useInspections = (
   query: Record<string, string | number | boolean | undefined>,
