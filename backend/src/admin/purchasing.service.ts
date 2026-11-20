@@ -460,7 +460,8 @@ export class PurchasingService {
    */
   private async checked(db: Db, user: AuthenticatedUser, input: SaveRequisitionInput) {
     const organizationId = user.organizationId;
-    const refused = companyRefusal(await readStanding(db, user), input.xeroTenantId ?? null, 'ask for stock');
+    // A draft may wait for its company (2026-11-21: New makes and numbers it at once, every field blank); it is sent only for one of the person's own.
+    const refused = input.xeroTenantId ? companyRefusal(await readStanding(db, user), input.xeroTenantId, 'ask for stock') : null;
     if (refused) throw new ApplicationError(403, 'REQUISITION_COMPANY_NOT_YOURS', refused);
     if (input.xeroTenantId && !(await db.xeroOrganisation.findFirst({ where: { organizationId, xeroTenantId: input.xeroTenantId, status: 'CONNECTED' }, select: { id: true } })))
       throw new ApplicationError(400, 'REQUISITION_COMPANY_NOT_FOUND', 'That company is not connected to this office.');
@@ -506,8 +507,8 @@ export class PurchasingService {
       deliverToPlaceId: input.deliverToPlaceId ?? null,
       requestCodeId: input.requestCodeId ?? null,
       costCenterId: input.costCenterId ?? null,
-      // The day on the paper: today in Texas unless another was given.
-      documentDate: dateOf(input.documentDate ?? businessDate()),
+      // The day on the paper, as given: blank stays blank (2026-11-21), and the office may require it in Purchasing Setup.
+      documentDate: input.documentDate ? dateOf(input.documentDate) : null,
       reason: input.reason.trim(),
     };
   }
@@ -618,6 +619,9 @@ export class PurchasingService {
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has already been submitted.');
       const problem = requisitionSubmitProblem({ ...requisition, documentDate: dayOf(requisition.documentDate), neededBy: dayOf(requisition.neededBy) }, await this.settings(tx, organizationId));
       if (problem) throw new ApplicationError(409, 'REQUISITION_NOT_READY', problem);
+      // Saved as a draft without a company, it is sent only for one of the person's own.
+      const refused = companyRefusal(await readStanding(tx, user), requisition.xeroTenantId, 'ask for stock');
+      if (refused) throw new ApplicationError(403, 'REQUISITION_COMPANY_NOT_YOURS', refused);
       const number = requisition.number ?? (await nextDocumentCode(tx, organizationId, 'PR'));
       await this.move(tx, organizationId, requisitionId, EDITABLE, {
         status: Status.SUBMITTED,

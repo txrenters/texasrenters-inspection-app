@@ -22,6 +22,8 @@ export interface SheetColumn {
   width?: string;
   /** Filled in on every line before it is sent (Purchasing Setup, 2026-11-21). */
   required?: boolean;
+  /** Said to a screen reader only: a column of buttons. */
+  labelHidden?: boolean;
 }
 
 /** A cell that holds an editor: the editor fills it. */
@@ -55,7 +57,7 @@ export function SheetHead({ columns }: { columns: readonly SheetColumn[] }) {
             key={column.key}
             scope="col"
           >
-            {column.label}
+            {column.labelHidden ? <span className="sr-only">{column.label}</span> : column.label}
             {column.required ? <RequiredMark /> : null}
           </th>
         ))}

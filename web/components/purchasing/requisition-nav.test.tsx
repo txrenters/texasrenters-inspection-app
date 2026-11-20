@@ -65,14 +65,19 @@ beforeEach(() => {
 });
 
 describe('the Lines, as a spreadsheet', () => {
-  it('starts with one blank line, opens the next as the last is filled, and moves down a column with ↓', () => {
+  it('starts with one blank line, adds one only by Add New Line, and moves down a column with ↓', () => {
     mount();
     expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
 
+    // Filling the last line, Enter and ↓ add none (2026-11-21).
     pick(1, 'FLT-20251');
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
+    fireEvent.keyDown(screen.getByLabelText('Quantity of Filter 20x25x1'), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByLabelText('Quantity of Filter 20x25x1'), { key: 'ArrowDown' });
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
     pick(2, 'BAT-9V');
-    // Each line filled opens the next, ready to type in.
-    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(3);
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(2);
 
     const first = screen.getByLabelText('Quantity of Filter 20x25x1');
     first.focus();
@@ -82,17 +87,44 @@ describe('the Lines, as a spreadsheet', () => {
     expect(document.activeElement).toBe(first);
   });
 
+  it('deletes a line from its own row, leaving one blank line when none is left (2026-11-21)', () => {
+    mount();
+    expect((screen.getByRole('button', { name: 'Delete line 1' }) as HTMLButtonElement).disabled).toBe(true);
+    pick(1, 'FLT-20251');
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    pick(2, 'BAT-9V');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete line 1' }));
+    expect(screen.queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
+    expect(screen.getByLabelText('Quantity of Battery, 9 V')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete line 1' }));
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
+    expect((screen.getByLabelText('Item on line 1') as HTMLInputElement).value).toBe('');
+  });
+
+  it('takes a Line Amount typed, as the unit cost over the quantity', () => {
+    mount();
+    pick(1, 'BAT-9V');
+    expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('24');
+    const amount = screen.getByLabelText('Line amount of Battery, 9 V') as HTMLInputElement;
+    fireEvent.change(amount, { target: { value: '60.00' } });
+    expect((screen.getByLabelText('Direct unit cost of Battery, 9 V') as HTMLInputElement).value).toBe('2.50');
+    // One that does not divide is kept to the cent once it is left.
+    fireEvent.change(amount, { target: { value: '10' } });
+    fireEvent.blur(amount);
+    expect((screen.getByLabelText('Direct unit cost of Battery, 9 V') as HTMLInputElement).value).toBe('0.42');
+    expect(amount.value).toBe('10.08');
+  });
+
   it('finds lines by what they say, counting only the lines filled in', () => {
     mount();
     pick(1, 'FLT-20251');
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
     pick(2, 'BAT-9V');
 
     fireEvent.click(screen.getByRole('button', { name: 'Find' }));
     fireEvent.change(screen.getByLabelText('Find in the lines'), { target: { value: 'battery' } });
     expect(screen.getByText(/Showing 1 of 2 lines/)).toBeTruthy();
     expect(screen.queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
-    // The blank next row stays, to type in.
-    expect(screen.getByLabelText('Item on line 3')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show them all' }));
     expect(screen.getByLabelText('Quantity of Filter 20x25x1')).toBeTruthy();
