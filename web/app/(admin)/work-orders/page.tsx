@@ -2,7 +2,7 @@
 
 import { isUpcomingVisit, visitStateOf } from '@texasrenters/shared';
 import { HammerIcon } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { ListToolbar } from '@/components/list-toolbar';
@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { WorkOrderDialog } from '@/components/work-order-dialog';
 import { EMPTY, formatScheduledDate, humanize } from '@/lib/format';
 import { useInspections } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
@@ -96,6 +97,7 @@ const columns: Array<Column<WorkOrderRow>> = [
 
 export default function WorkOrdersPage() {
   const [state, setState] = useUrlState({ page: 1, q: '' });
+  const [openId, setOpenId] = useState<string | null>(null);
   const debouncedSearch = useDebouncedValue(state.q);
   const isSearchPending = state.q.trim() !== debouncedSearch.trim();
 
@@ -150,7 +152,7 @@ export default function WorkOrdersPage() {
           <DataTable
             columns={columns}
             label="Work orders"
-            rowHref={(row) => `/inspections/${row.id}`}
+            rowOpen={(row) => () => setOpenId(row.id)}
             rowKey={(row) => row.id}
             rows={rows}
           />
@@ -162,6 +164,8 @@ export default function WorkOrdersPage() {
           />
         </>
       )}
+
+      {openId ? <WorkOrderDialog inspectionId={openId} onClose={() => setOpenId(null)} /> : null}
     </div>
   );
 }

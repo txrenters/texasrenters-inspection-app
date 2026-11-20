@@ -162,6 +162,7 @@ export function DataTable<Row>({
   rows,
   rowKey,
   rowHref,
+  rowOpen,
   label,
   actions,
   selection,
@@ -185,6 +186,13 @@ export function DataTable<Row>({
    * `RowActions` does this for you.
    */
   rowHref?: (row: Row) => string | undefined;
+  /**
+   * Opens a row with no `rowHref` in place -- a dialog -- through the same
+   * stretched control on the primary cell, as a button. A work order the
+   * maintenance app handed over opens as a work order, not on the inspection
+   * page (the office, 2026-11-21).
+   */
+  rowOpen?: (row: Row) => (() => void) | undefined;
   label?: string;
   /** Trailing per-row controls, rendered in a final unlabelled column. */
   actions?: (row: Row) => ReactNode;
@@ -232,7 +240,7 @@ export function DataTable<Row>({
               <TableHead scope="col" className="w-0">
                 <span className="sr-only">Actions</span>
               </TableHead>
-            ) : rowHref ? (
+            ) : rowHref || rowOpen ? (
               <TableHead aria-hidden className="w-0" />
             ) : null}
           </TableRow>
@@ -240,6 +248,7 @@ export function DataTable<Row>({
         <TableBody>
           {rows.map((row) => {
             const href = rowHref?.(row);
+            const open = href ? undefined : rowOpen?.(row);
             const id = rowKey(row);
             const checked = Boolean(selection?.selected.has(id));
             return (
@@ -248,7 +257,7 @@ export function DataTable<Row>({
                 // The selected tint comes from TableRow's `data-[state=selected]`
                 // rather than a second class here, so selection looks identical
                 // in every table in the console.
-                className={cn('group/row relative', href && 'focus-within:bg-accent')}
+                className={cn('group/row relative', (href || open) && 'focus-within:bg-accent')}
                 data-state={checked ? 'selected' : undefined}
               >
                 {selection ? (
@@ -272,6 +281,14 @@ export function DataTable<Row>({
                       >
                         {column.cell(row)}
                       </Link>
+                    ) : open && column.primary ? (
+                      <button
+                        type="button"
+                        onClick={open}
+                        className="after:absolute after:inset-0 after:content-[''] cursor-pointer text-left font-medium outline-none hover:underline"
+                      >
+                        {column.cell(row)}
+                      </button>
                     ) : (
                       column.cell(row)
                     )}
@@ -283,7 +300,7 @@ export function DataTable<Row>({
                       {actions(row)}
                     </div>
                   </TableCell>
-                ) : href ? (
+                ) : href || open ? (
                   // Says the row opens, only on the row being pointed at
                   // (console-development). The row's real link is the stretched
                   // one on the primary cell, so this is decoration to a screen

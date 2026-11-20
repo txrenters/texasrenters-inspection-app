@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkOrdersPage from './page';
@@ -12,6 +12,8 @@ import WorkOrdersPage from './page';
 
 const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
+  useInspection: vi.fn(),
+  useInspectionWorkOrder: vi.fn(),
 }));
 vi.mock('@/lib/queries', () => hooks);
 const url = vi.hoisted(() => ({
@@ -82,7 +84,6 @@ describe('each row', () => {
     expect(screen.getByText('123 Demo St.')).toBeInTheDocument();
     expect(screen.getByText('Maintenance')).toBeInTheDocument();
     expect(screen.getByText('Moses Rodriguez')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /44781/ })).toHaveAttribute('href', '/inspections/inspection-1');
   });
 
   it('says Pest control for the pest crew, and Unassigned while nobody is on it', () => {
@@ -105,5 +106,97 @@ describe('when nothing has arrived', () => {
     mount({ q: 'nothing' }, []);
 
     expect(screen.getByText('No work orders match')).toBeInTheDocument();
+  });
+});
+
+describe('opening a work order', () => {
+  const visit = { isLoading: false, isError: false, data: { ...row(), internalNotes: 'Work order #44781\n\nKitchen sink drips' } };
+  const workOrder = {
+    number: 44781,
+    propertywareId: '98765',
+    url: null,
+    status: 'Open',
+    serviceStatus: 'Vendor Assigned',
+    priority: 'High',
+    isEmergency: false,
+    category: 'Plumbing',
+    type: 'Repair',
+    source: 'Tenant Portal',
+    description: 'Kitchen sink drips under the cabinet',
+    specificLocation: 'Kitchen',
+    authorizedToEnter: 'Yes',
+    zone: '1',
+    occupied: true,
+    costEstimate: 180,
+    createdDate: '2026-11-19',
+    approvedDate: null,
+    dateToEnter: null,
+    scheduledEndDate: null,
+    address: '123 Demo Street, Houston, TX 77001',
+    tenants: [{ name: 'Jane Tenant', phone: '555-0100', email: null }],
+    vendors: [{ name: 'THMP', inHouse: true }],
+    approval: {
+      rule: 'under_threshold',
+      threshold: 300,
+      estimate: 180,
+      recordedBy: null,
+      recordedAt: null,
+      aiConfidence: null,
+      summary: null,
+      problems: [],
+    },
+    notes: [{ subject: 'Call', body: 'Tenant asked for an afternoon visit.', author: 'Rikki', date: '2026-11-19T15:00:00Z', isPrivate: false }],
+    messagesSummary: { summary: 'Tenant is home after 3 pm; owner approved the sink.', messagesRead: 4, readAt: '2026-11-20T09:00:00Z' },
+    receivedAt: '2026-11-20T18:00:00.000Z',
+  };
+
+  it('opens it in a dialog laid out as the maintenance app’s work order modal, not on the inspection page', () => {
+    hooks.useInspection.mockReturnValue(visit);
+    hooks.useInspectionWorkOrder.mockReturnValue({ isLoading: false, isError: false, data: workOrder });
+    mount();
+
+    expect(screen.queryByRole('link', { name: /44781/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /44781/ }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(hooks.useInspectionWorkOrder).toHaveBeenLastCalledWith('inspection-1');
+    expect(within(dialog).getByText('#44781')).toBeInTheDocument();
+    expect(within(dialog).getByText('Priority: High')).toBeInTheDocument();
+    expect(within(dialog).getByText('Status: Open')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Non-emergency')).toHaveLength(2);
+    expect(within(dialog).queryByText('Approved')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Plumbing')).toBeInTheDocument();
+    expect(within(dialog).getByText('THMP (in-house)')).toBeInTheDocument();
+    expect(within(dialog).getByText('Kitchen sink drips under the cabinet')).toBeInTheDocument();
+    expect(within(dialog).getByRole('tab', { name: 'Crew visit' })).toBeInTheDocument();
+    // The header answers cost, approval and who is going before any tab is opened.
+    expect(within(dialog).getByText('No approval needed')).toBeInTheDocument();
+    expect(within(dialog).getByText('Moses Rodriguez')).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Estimate' }), { button: 0 });
+    // In the header's facts and on the meter against the approval line.
+    expect(within(dialog).getAllByText('$180.00')).toHaveLength(2);
+    expect(within(dialog).getByText('$120.00 under the $300.00 line')).toBeInTheDocument();
+    expect(within(dialog).getByText('At or under the approval line — the owner is not asked')).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Notes (1)' }), { button: 0 });
+    expect(within(dialog).getByText('Tenant asked for an afternoon visit.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Rikki/)).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Messages' }), { button: 0 });
+    expect(within(dialog).getByText('Tenant is home after 3 pm; owner approved the sink.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/AI summary of 4 messages/)).toBeInTheDocument();
+  });
+
+  it('reads the visit’s notes when the maintenance app’s copy cannot be read', () => {
+    hooks.useInspection.mockReturnValue(visit);
+    hooks.useInspectionWorkOrder.mockReturnValue({ isLoading: false, isError: true, data: undefined });
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: /44781/ }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('#44781')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Kitchen sink drips/)).toBeInTheDocument();
   });
 });

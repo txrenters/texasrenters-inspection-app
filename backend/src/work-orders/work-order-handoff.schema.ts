@@ -139,6 +139,19 @@ export const workOrderHandoffSchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * The maintenance app's AI summary of the work order's tenant, owner and
+   * vendor messages, for the work order dialog (the office, 2026-11-21).
+   * Optional: a sender that predates it, or has none yet, leaves it out.
+   */
+  messages_summary: z
+    .object({
+      summary: z.string().trim().min(1).max(2000),
+      messages_read: z.number().int().nonnegative(),
+      read_at: isoDate,
+    })
+    .nullable()
+    .optional(),
 });
 
 export type WorkOrderHandoff = z.infer<typeof workOrderHandoffSchema>;

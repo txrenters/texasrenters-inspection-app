@@ -834,6 +834,11 @@ export class AdminController {
   ) {
     return this.service.inspectionAudit(request.user, id, query);
   }
+  @Get('inspections/:inspectionId/work-order')
+  @RequirePermissions('inspections:read')
+  inspectionWorkOrder(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.service.inspectionWorkOrder(request.user, id);
+  }
   @Patch('inspections/:inspectionId')
   @RequirePermissions('inspections:manage')
   updateInspection(
