@@ -562,7 +562,8 @@ export function RequisitionForm({
   // Why it cannot be sent yet: in Requisition Statistics, or above the FactBoxes when the office hides that one.
   const sendNotes = (
     <>
-      {editing ? <p className="text-muted-foreground text-xs">You asked for it, so you cannot approve it yourself.</p> : null}
+      {/* An approver approves their own, within their limit (2026-11-21). */}
+      {editing ? <p className="text-muted-foreground text-xs">{permissions?.includes('purchasing:approve') ? 'Once it is sent, you may approve it yourself, within your limit.' : 'Once it is sent, an approver decides it.'}</p> : null}
       {editing && problem ? (
         <p className="text-warning mt-2 text-xs font-medium" role="status">
           {problem}

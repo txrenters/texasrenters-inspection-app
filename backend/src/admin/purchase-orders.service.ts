@@ -49,9 +49,10 @@ import { vendorFilesOf } from './requisition-files';
  * - a holder of `purchasing:order` makes an order from an approved
  *   requisition, changes it while it is a draft, submits it, sends it to the
  *   vendor once approved, and cancels it;
- * - a holder of `purchasing:approve` approves it or sends it back -- never
- *   one they made, and above the office's limit only with
- *   `purchasing:approve-any`. The database refuses the maker's approval too;
+ * - a holder of `purchasing:approve` approves it or sends it back, within
+ *   their limit and the office's approval steps. An approver may approve one
+ *   they made (the office, 2026-11-21), audited as their own; they send back
+ *   only somebody else's;
  * - whoever asked for the requisition may look at the order made from it.
  *
  * Every step is one guarded status change and is audited; the audit log is
@@ -154,15 +155,6 @@ function row(order: Order, companies: Companies): PurchaseOrderRow {
 }
 
 /** The history's words for each audited step. */
-/**
- * Who changed an approved order, while that change waits for approval: the
- * newest of its approvals and changes, read newest first, if it is a change.
- */
-function changedBy(audits: readonly { action: string; actorUserId: string | null; metadata: unknown }[]): string | null {
-  const last = audits.find((audit) => audit.action === 'PURCHASE_ORDER_APPROVED' || audit.action === 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL');
-  return last?.action === 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL' && (last.metadata as { again?: boolean } | null)?.again ? last.actorUserId : null;
-}
-
 const STEP: Record<string, string> = {
   PURCHASE_ORDER_CREATED: 'made it from the requisition',
   PURCHASE_ORDER_CHANGED: 'changed it',
@@ -229,7 +221,6 @@ export class PurchaseOrdersService {
     totalCents: number,
     rules: OrderRules,
     bill: { status: string; enteredById: string } | null = null,
-    changedById: string | null = null,
   ): PurchaseOrderActions {
     // Only for the companies Setup gives the caller (Purchasing Setup, 2026-11-21): ordering, receiving, bills.
     const acts = actsForCompany(rules.standing, order.xeroTenantId);
@@ -237,13 +228,8 @@ export class PurchaseOrdersService {
     const purchaser = may(user, ORDER) && acts;
     const mine = order.createdById === user.id;
     const waiting = order.status === Status.AWAITING_APPROVAL && may(user, APPROVE);
-    const approveBlocked = !waiting
-      ? null
-      : mine
-        ? 'You made this order, so somebody else approves it.'
-        : changedById === user.id
-          ? 'You changed this order after it was approved, so somebody else approves the change.'
-          : approvalRefusal(rules.standing, rules.steps, totalCents, order.xeroTenantId, rules.ownCompaniesOnly);
+    // An approver approves one they made or changed as anybody else's (the office, 2026-11-21): within their limit, the step and their companies.
+    const approveBlocked = !waiting ? null : approvalRefusal(rules.standing, rules.steps, totalCents, order.xeroTenantId, rules.ownCompaniesOnly);
     return {
       edit: purchaser && order.status === Status.DRAFT,
       // An approved order nothing has arrived for, and no bill is entered against (Purchasing Setup, 2026-11-20).
@@ -257,8 +243,8 @@ export class PurchaseOrdersService {
       reverseReceipt: may(user, RECEIVE) && acts && (order.status === Status.PARTLY_RECEIVED || order.status === Status.RECEIVED) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
       bill: may(user, BILLS) && acts && BILLABLE.includes(order.status) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
       approveBill: may(user, BILLS) && acts && bill?.status === 'MATCHED',
-      // Never whoever entered it: a second person looks at a bill that does not match.
-      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && acts && bill?.status === 'HELD' && bill.enteredById !== user.id,
+      // Somebody who may approve any amount, whoever entered it (the office, 2026-11-21): audited as their own when it is.
+      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && acts && bill?.status === 'HELD',
       pay: may(user, BILLS) && acts && bill?.status === 'APPROVED',
       closeShort: purchaser && order.status === Status.PARTLY_RECEIVED,
       approveBlocked,
@@ -402,7 +388,7 @@ export class PurchaseOrdersService {
         const note = (audit.metadata as { note?: string | null } | null)?.note;
         return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${STEP[audit.action] ?? 'changed it'}${note ? `: ${note}` : ''}` };
       }),
-      can: this.actions(user, order, totals.totalCents, { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing }, order.bill, changedBy(audits)),
+      can: this.actions(user, order, totals.totalCents, { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing }, order.bill),
       approvalSteps: setup.settings.steps,
       reapproveChangedOrders: setup.approvals.reapproveChangedOrders,
     };
@@ -639,15 +625,19 @@ export class PurchaseOrdersService {
 
   // ── Deciding ────────────────────────────────────────────────────────────
 
-  /** Approve an order that is waiting, or send it back to its purchaser with a note. Never one the caller made. */
+  /** Approve an order that is waiting, or send it back to its purchaser with a note, by an approver. One they made is only approved (2026-11-21). */
   async decide(user: AuthenticatedUser, orderId: string, decision: 'APPROVED' | 'SENT_BACK', input: PurchaseOrderDecisionInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
     const note = text(input.note);
+    // The route asks for it too; here it does not rest on the route, now that an approver's own is theirs to approve.
+    if (!may(user, APPROVE)) throw new ApplicationError(403, 'PURCHASE_ORDER_NOT_APPROVER', 'Only an approver decides an order.');
     if (decision === 'SENT_BACK' && !note) throw new ApplicationError(400, 'PURCHASE_ORDER_NOTE_NEEDED', 'Say what to change, so the purchaser knows.');
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
       if (order.status !== Status.AWAITING_APPROVAL) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order is no longer waiting for a decision.');
-      if (order.createdById === user.id) throw new ApplicationError(403, 'PURCHASE_ORDER_OWN', 'You made this order, so somebody else decides it.');
+      const own = order.createdById === user.id;
+      // One they made is approved, or changed as a draft once somebody else sends it back: never sent back by them.
+      if (own && decision !== 'APPROVED') throw new ApplicationError(403, 'PURCHASE_ORDER_OWN', 'You made this order, so somebody else sends it back.');
       const totalCents = orderTotals(order.lines, order.taxBasisPoints).totalCents;
       const [setup, standing] = await Promise.all([readPurchasingSetup(tx, organizationId), readStanding(tx, user)]);
       if (setup.approvals.approverOwnCompaniesOnly) {
@@ -655,22 +645,14 @@ export class PurchaseOrdersService {
         if (refused) throw new ApplicationError(403, 'PURCHASE_ORDER_COMPANY_NOT_YOURS', refused);
       }
       if (decision === 'APPROVED') {
-        const [audits] = await Promise.all([
-          tx.auditLog.findMany({
-            where: { organizationId, entityType: ENTITY, entityId: orderId, action: { in: ['PURCHASE_ORDER_APPROVED', 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL'] } },
-            select: { action: true, actorUserId: true, metadata: true },
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-          }),
-        ]);
         const rules = { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing };
-        const { approveBlocked } = this.actions(user, order, totalCents, rules, null, changedBy(audits));
+        const { approveBlocked } = this.actions(user, order, totalCents, rules, null);
         if (approveBlocked) throw new ApplicationError(403, 'PURCHASE_ORDER_OVER_LIMIT', approveBlocked);
         await this.move(tx, organizationId, orderId, [Status.AWAITING_APPROVAL], { status: Status.APPROVED, approvedById: user.id, approvedAt: new Date(), decisionNote: note });
       } else {
         await this.move(tx, organizationId, orderId, [Status.AWAITING_APPROVAL], { status: Status.DRAFT, decisionNote: note });
       }
-      await this.audit(tx, user, `PURCHASE_ORDER_${decision}`, ENTITY, orderId, { number: order.number, totalCents, note });
+      await this.audit(tx, user, `PURCHASE_ORDER_${decision}`, ENTITY, orderId, { number: order.number, totalCents, note, ownOrder: own });
     });
     return this.detail(user, orderId);
   }

@@ -107,9 +107,9 @@ export default function PurchasingPage() {
         description={data?.seesAll ? "Everyone's purchase requisitions and orders, and yours." : 'Your purchase requisitions, and the orders made from them.'}
         info={
           <>
-            <p>A requisition asks for stock to be bought and says why. Somebody else approves it, sends it back with a note, or rejects it.</p>
-            <p>It gets its number when it is submitted. Nobody approves their own.</p>
-            <p>A purchaser makes the order from an approved requisition, somebody else approves the order, and it goes to the vendor as a PDF.</p>
+            <p>A requisition asks for stock to be bought and says why. An approver approves it, sends it back with a note, or rejects it.</p>
+            <p>It gets its number when it is made. An approver may approve their own, within their limit.</p>
+            <p>A purchaser makes the order from an approved requisition, an approver approves the order, and it goes to the vendor as a PDF.</p>
           </>
         }
         infoLabel="About purchase requisitions"

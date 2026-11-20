@@ -41,9 +41,11 @@ import { requisitionNotesAndLinks } from './requisition-notes';
  * Who may do what is decided here, not by the page:
  * - whoever asked changes, submits and cancels their own, and nobody else's;
  * - a holder of `purchasing:approve` sees everyone's once submitted (a draft
- *   is its author's alone) and approves, sends back or rejects -- never their
- *   own, and above the office's limit only with `purchasing:approve-any`.
- * The database refuses a decision by the requester too (a check).
+ *   is its author's alone) and approves, sends back or rejects, within their
+ *   limit and the office's approval steps. An approver may approve their own
+ *   (the office, 2026-11-21), and it is audited as their own; they send back
+ *   or reject only somebody else's, and take their own back instead.
+ * The database refuses the requester sending back or rejecting their own too (a check).
  *
  * Every step is one guarded status change, so two people deciding at once
  * cannot both succeed, and every step is audited: the audit log is the
@@ -239,11 +241,8 @@ export class PurchasingService {
     const waiting = requisition.status === Status.SUBMITTED && may(user, APPROVE);
     // An approver limited to some companies decides only theirs, when the office says so (Purchasing Setup, 2026-11-21).
     const decides = !rules.ownCompaniesOnly || actsForCompany(rules.standing, requisition.xeroTenantId);
-    const approveBlocked = !waiting
-      ? null
-      : mine
-        ? 'You asked for this, so somebody else approves it.'
-        : approvalRefusal(rules.standing, rules.settings.steps, totalCents, requisition.xeroTenantId, rules.ownCompaniesOnly);
+    // An approver approves their own as anybody else's (the office, 2026-11-21): within their limit, the step and their companies.
+    const approveBlocked = !waiting ? null : approvalRefusal(rules.standing, rules.settings.steps, totalCents, requisition.xeroTenantId, rules.ownCompaniesOnly);
     return {
       edit: mine && EDITABLE.includes(requisition.status),
       submit: mine && EDITABLE.includes(requisition.status),
@@ -693,14 +692,16 @@ export class PurchasingService {
   // ── Deciding ────────────────────────────────────────────────────────────
 
   /**
-   * Approve, send back or reject a requisition that is waiting. Never the
-   * caller's own; approving above the office's limit needs
+   * Approve, send back or reject a requisition that is waiting, by an approver.
+   * Their own is only approved (2026-11-21); approving above the office's limit needs
    * `purchasing:approve-any`; sending back and rejecting need a note, which
    * the requester reads.
    */
   async decide(user: AuthenticatedUser, requisitionId: string, decision: 'APPROVED' | 'SENT_BACK' | 'REJECTED', input: RequisitionDecisionInput): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
     const note = text(input.note);
+    // The route asks for it too; here it does not rest on the route, now that an approver's own is theirs to approve.
+    if (!may(user, APPROVE)) throw new ApplicationError(403, 'REQUISITION_NOT_APPROVER', 'Only an approver decides a requisition.');
     if (decision !== 'APPROVED' && !note) throw new ApplicationError(400, 'REQUISITION_NOTE_NEEDED', 'Say why, so whoever asked knows what to do next.');
     await this.prisma.$transaction(async (tx) => {
       const requisition = await tx.purchaseRequisition.findFirst({
@@ -709,7 +710,9 @@ export class PurchasingService {
       });
       if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
       if (requisition.status !== Status.SUBMITTED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition is no longer waiting for a decision.');
-      if (requisition.requestedById === user.id) throw new ApplicationError(403, 'REQUISITION_OWN', 'You asked for this, so somebody else decides it.');
+      const own = requisition.requestedById === user.id;
+      // Their own is approved, or taken back with Cancel Approval Request: never sent back or rejected by them.
+      if (own && decision !== 'APPROVED') throw new ApplicationError(403, 'REQUISITION_OWN', 'You asked for this: take it back with Cancel Approval Request instead.');
       const totalCents = requisitionTotalCents(requisition.lines);
       const rules = await this.rules(tx, user);
       if (rules.ownCompaniesOnly) {
@@ -721,7 +724,7 @@ export class PurchasingService {
         if (approveBlocked) throw new ApplicationError(403, 'REQUISITION_OVER_LIMIT', approveBlocked);
       }
       await this.move(tx, organizationId, requisitionId, [Status.SUBMITTED], { status: decision, decidedById: user.id, decidedAt: new Date(), decisionNote: note });
-      await this.audit(tx, user, `PURCHASE_REQUISITION_${decision}`, requisitionId, { number: requisition.number, totalCents, note });
+      await this.audit(tx, user, `PURCHASE_REQUISITION_${decision}`, requisitionId, { number: requisition.number, totalCents, note, ownRequest: own });
     });
     return this.detail(user, requisitionId);
   }
