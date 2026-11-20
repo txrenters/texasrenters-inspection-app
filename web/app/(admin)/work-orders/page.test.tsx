@@ -135,7 +135,18 @@ describe('opening a work order', () => {
     address: '123 Demo Street, Houston, TX 77001',
     tenants: [{ name: 'Jane Tenant', phone: '555-0100', email: null }],
     vendors: [{ name: 'THMP', inHouse: true }],
-    approval: null,
+    approval: {
+      rule: 'under_threshold',
+      threshold: 300,
+      estimate: 180,
+      recordedBy: null,
+      recordedAt: null,
+      aiConfidence: null,
+      summary: null,
+      problems: [],
+    },
+    notes: [{ subject: 'Call', body: 'Tenant asked for an afternoon visit.', author: 'Rikki', date: '2026-11-19T15:00:00Z', isPrivate: false }],
+    messagesSummary: { summary: 'Tenant is home after 3 pm; owner approved the sink.', messagesRead: 4, readAt: '2026-11-20T09:00:00Z' },
     receivedAt: '2026-11-20T18:00:00.000Z',
   };
 
@@ -156,9 +167,20 @@ describe('opening a work order', () => {
     expect(within(dialog).queryByText('Approved')).not.toBeInTheDocument();
     expect(within(dialog).getByText('Plumbing')).toBeInTheDocument();
     expect(within(dialog).getByText('THMP (in-house)')).toBeInTheDocument();
-    expect(within(dialog).getByText('$180.00')).toBeInTheDocument();
     expect(within(dialog).getByText('Kitchen sink drips under the cabinet')).toBeInTheDocument();
     expect(within(dialog).getByRole('tab', { name: 'Crew visit' })).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Estimate' }), { button: 0 });
+    expect(within(dialog).getByText('$180.00')).toBeInTheDocument();
+    expect(within(dialog).getByText('At or under the approval line — the owner is not asked')).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Notes (1)' }), { button: 0 });
+    expect(within(dialog).getByText('Tenant asked for an afternoon visit.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Rikki/)).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Messages' }), { button: 0 });
+    expect(within(dialog).getByText('Tenant is home after 3 pm; owner approved the sink.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/AI summary of 4 messages/)).toBeInTheDocument();
   });
 
   it('reads the visit’s notes when the maintenance app’s copy cannot be read', () => {

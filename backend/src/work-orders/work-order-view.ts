@@ -46,7 +46,34 @@ export function workOrderView(payload: unknown, receivedAt: Date): AdminWorkOrde
     })),
     vendors: vendors.map((vendor) => ({ name: vendor.name ?? null, inHouse: vendor.in_house })),
     approval: approval
-      ? { rule: approval.rule ?? null, recordedBy: approval.recorded_by ?? null, summary: approval.summary ?? null }
+      ? {
+          rule: approval.rule ?? null,
+          threshold: approval.threshold,
+          estimate: approval.estimate,
+          recordedBy: approval.recorded_by ?? null,
+          recordedAt: approval.recorded_at ?? null,
+          aiConfidence: approval.ai_confidence,
+          summary: approval.summary ?? null,
+          problems: approval.problems.map((problem) => ({
+            item: problem.item,
+            decision: problem.decision,
+            evidence: problem.evidence ?? null,
+          })),
+        }
+      : null,
+    notes: (parsed.data.notes ?? []).map((note) => ({
+      subject: note.subject ?? null,
+      body: note.body,
+      author: note.author ?? null,
+      date: note.date ?? null,
+      isPrivate: note.is_private,
+    })),
+    messagesSummary: parsed.data.messages_summary
+      ? {
+          summary: parsed.data.messages_summary.summary,
+          messagesRead: parsed.data.messages_summary.messages_read,
+          readAt: parsed.data.messages_summary.read_at ?? null,
+        }
       : null,
     receivedAt: receivedAt.toISOString(),
   };

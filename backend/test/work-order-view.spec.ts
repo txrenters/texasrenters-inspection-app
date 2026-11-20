@@ -121,7 +121,41 @@ describe('workOrderView', () => {
 
     expect(view?.costEstimate).toBe(450);
     expect(view?.approvedDate).not.toBeNull();
-    expect(view?.approval).toEqual({ rule: 'owner_approved_recorded', recordedBy: 'J. Owner', summary: null });
+    expect(view?.approval).toEqual({
+      rule: 'owner_approved_recorded',
+      threshold: 300,
+      estimate: 450,
+      recordedBy: 'J. Owner',
+      recordedAt: null,
+      aiConfidence: null,
+      summary: null,
+      problems: [],
+    });
+  });
+
+  it('carries the notes and the messages summary, and no summary when the sender sent none', () => {
+    const view = workOrderView(
+      envelope(
+        {},
+        {
+          notes: [
+            { subject: 'Call', body: 'Tenant asked for an afternoon visit.', author: 'Rikki', date: '2026-11-19T15:00:00+00:00', is_private: false },
+          ],
+          messages_summary: { summary: 'Tenant is home after 3 pm; owner approved.', messages_read: 4, read_at: '2026-11-20T09:00:00+00:00' },
+        },
+      ),
+      received,
+    );
+
+    expect(view?.notes).toEqual([
+      { subject: 'Call', body: 'Tenant asked for an afternoon visit.', author: 'Rikki', date: '2026-11-19T15:00:00+00:00', isPrivate: false },
+    ]);
+    expect(view?.messagesSummary).toEqual({
+      summary: 'Tenant is home after 3 pm; owner approved.',
+      messagesRead: 4,
+      readAt: '2026-11-20T09:00:00+00:00',
+    });
+    expect(workOrderView(envelope(), received)?.messagesSummary).toBeNull();
   });
 
   it('is null for a payload that no longer parses', () => {

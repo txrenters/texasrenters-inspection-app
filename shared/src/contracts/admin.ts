@@ -1714,6 +1714,19 @@ export interface AdminWorkOrder {
   address: string | null;
   tenants: Array<{ name: string | null; phone: string | null; email: string | null }>;
   vendors: Array<{ name: string | null; inHouse: boolean }>;
-  approval: { rule: string | null; recordedBy: string | null; summary: string | null } | null;
+  approval: {
+    rule: string | null;
+    threshold: number;
+    estimate: number | null;
+    recordedBy: string | null;
+    recordedAt: string | null;
+    aiConfidence: number | null;
+    summary: string | null;
+    problems: Array<{ item: string; decision: 'approved' | 'declined' | 'not_mentioned'; evidence: string | null }>;
+  } | null;
+  /** The work order's Notes tab in the maintenance app, oldest first. */
+  notes: Array<{ subject: string | null; body: string; author: string | null; date: string | null; isPrivate: boolean }>;
+  /** The maintenance app's AI summary of the tenant, owner and vendor messages. */
+  messagesSummary: { summary: string; messagesRead: number; readAt: string | null } | null;
   receivedAt: string;
 }

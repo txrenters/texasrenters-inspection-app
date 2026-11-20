@@ -45,6 +45,63 @@ function Field({ label, children, wide }: { label: string; children: ReactNode; 
   );
 }
 
+function Unsent() {
+  return <p className="text-muted-foreground text-sm">The maintenance app’s copy of this work order could not be read.</p>;
+}
+
+/** Which of the maintenance app's rules let the work order through, in the office's words. */
+const RULE_WORDS: Record<string, string> = {
+  emergency: 'Emergency — sent whatever it costs',
+  owner_approved_recorded: 'Owner approval on record',
+  under_threshold: 'At or under the approval line — the owner is not asked',
+  owner_approved_in_messages: 'Owner approved in messages (read by AI)',
+  manual: 'Sent by hand from the maintenance app',
+};
+
+const DECISION_WORDS = { approved: 'Approved', declined: 'Declined', not_mentioned: 'Not mentioned' } as const;
+
+/** The crew's estimate and what let the work order through, as the maintenance app decided it. */
+function EstimatePanel({ workOrder: wo }: { workOrder: AdminWorkOrder }) {
+  const approval = wo.approval;
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Crew estimate:">{money(wo.costEstimate)}</Field>
+        <Field label="Approval line:">{approval ? `${money(approval.threshold)} and under goes without the owner` : EMPTY}</Field>
+        <Field label="Sent because:" wide>
+          {approval?.rule ? (RULE_WORDS[approval.rule] ?? humanize(approval.rule)) : EMPTY}
+        </Field>
+        <Field label="Approved by:">{approval?.recordedBy ?? EMPTY}</Field>
+        <Field label="Approval Date:">{day(approval?.recordedAt ?? wo.approvedDate)}</Field>
+      </div>
+      {approval?.summary || approval?.problems.length ? (
+        <div className="grid gap-2">
+          <span className="text-sm font-medium">
+            Owner’s messages, as the AI read them
+            {approval.aiConfidence !== null ? ` (${approval.aiConfidence}% sure)` : ''}:
+          </span>
+          {approval.summary ? (
+            <p className="bg-muted/40 rounded-md border p-3 text-sm whitespace-pre-wrap">{approval.summary}</p>
+          ) : null}
+          {approval.problems.length ? (
+            <ul className="grid gap-1.5">
+              {approval.problems.map((problem) => (
+                <li className="flex flex-wrap items-baseline gap-2 text-sm" key={problem.item}>
+                  <Badge variant={problem.decision === 'approved' ? 'success' : problem.decision === 'declined' ? 'destructive' : 'secondary'}>
+                    {DECISION_WORDS[problem.decision]}
+                  </Badge>
+                  <span className="font-medium">{problem.item}</span>
+                  {problem.evidence ? <span className="text-muted-foreground">“{problem.evidence}”</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * A handed-over work order, read where it was clicked.
  *
@@ -125,6 +182,9 @@ export function WorkOrderDialog({ inspectionId, onClose }: { inspectionId: strin
             <div className="flex justify-center px-6 pb-3">
               <TabsList>
                 <TabsTrigger value="details">Details</TabsTrigger>
+                <TabsTrigger value="estimate">Estimate</TabsTrigger>
+                <TabsTrigger value="notes">Notes{wo?.notes.length ? ` (${wo.notes.length})` : ''}</TabsTrigger>
+                <TabsTrigger value="messages">Messages</TabsTrigger>
                 <TabsTrigger value="visit">Crew visit</TabsTrigger>
               </TabsList>
             </div>
@@ -152,7 +212,6 @@ export function WorkOrderDialog({ inspectionId, onClose }: { inspectionId: strin
                   <Field label="Source:">{wo.source ?? EMPTY}</Field>
                   <Field label="Zone:">{wo.zone ?? EMPTY}</Field>
                   <Field label="Occupancy:">{wo.occupied ? 'Occupied' : 'Vacant'}</Field>
-                  <Field label="Estimated cost:">{money(wo.costEstimate)}</Field>
                   <Field label="Tenants:">
                     {wo.tenants.length
                       ? wo.tenants.map((tenant) => [tenant.name, tenant.phone].filter(Boolean).join(' · ')).join('\n')
@@ -160,8 +219,6 @@ export function WorkOrderDialog({ inspectionId, onClose }: { inspectionId: strin
                   </Field>
                   <Field label="Created Date:">{day(wo.createdDate)}</Field>
                   <Field label="Scheduled End Date:">{day(wo.scheduledEndDate)}</Field>
-                  <Field label="Approval Date:">{day(wo.approvedDate)}</Field>
-                  <Field label="Approved by:">{wo.approval?.recordedBy ?? EMPTY}</Field>
                   <Field label="Description:" wide>
                     {wo.description ?? EMPTY}
                   </Field>
@@ -172,6 +229,53 @@ export function WorkOrderDialog({ inspectionId, onClose }: { inspectionId: strin
                 </Field>
               ) : (
                 <p className="text-muted-foreground text-sm">The maintenance app sent no details.</p>
+              )}
+            </TabsContent>
+
+            <TabsContent className="overflow-y-auto px-6 py-4" value="estimate">
+              {wo ? <EstimatePanel workOrder={wo} /> : <Unsent />}
+            </TabsContent>
+
+            <TabsContent className="overflow-y-auto px-6 py-4" value="notes">
+              {!wo ? (
+                <Unsent />
+              ) : wo.notes.length ? (
+                <ol className="grid gap-3">
+                  {wo.notes.map((note, index) => (
+                    <li className="bg-muted/40 rounded-md border p-3" key={`${note.date ?? ''}-${index}`}>
+                      <div className="mb-1 flex flex-wrap items-center gap-x-2 text-xs">
+                        {note.subject ? <span className="text-sm font-medium">{note.subject}</span> : null}
+                        <span className="text-muted-foreground">
+                          {[note.author, note.date ? day(note.date) : null].filter(Boolean).join(' · ') || EMPTY}
+                        </span>
+                        {note.isPrivate ? <Badge variant="outline">Private</Badge> : null}
+                      </div>
+                      <p className="text-sm break-words whitespace-pre-wrap">{note.body}</p>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-muted-foreground text-sm">No notes on this work order.</p>
+              )}
+            </TabsContent>
+
+            <TabsContent className="overflow-y-auto px-6 py-4" value="messages">
+              {!wo ? (
+                <Unsent />
+              ) : wo.messagesSummary ? (
+                <div className="grid gap-2">
+                  <p className="bg-muted/40 rounded-md border p-3 text-sm break-words whitespace-pre-wrap">
+                    {wo.messagesSummary.summary}
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    AI summary of {wo.messagesSummary.messagesRead} message
+                    {wo.messagesSummary.messagesRead === 1 ? '' : 's'} with the tenant, owner and vendors
+                    {wo.messagesSummary.readAt ? `, written ${day(wo.messagesSummary.readAt)}` : ''}. It is written
+                    again when a new message arrives.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-sm">No messages summary yet.</p>
               )}
             </TabsContent>
 
