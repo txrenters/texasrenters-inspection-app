@@ -120,8 +120,8 @@ export function usePurchasingSetupEdits() {
   };
 }
 
-export function useRequisitions(show: 'open' | 'closed') {
-  return useQuery({ queryKey: purchasingKeys.list(show), queryFn: ({ signal }) => api<RequisitionList>(`${BASE}/requisitions?show=${show}`, { signal }), ...KEPT });
+export function useRequisitions(show: 'open' | 'closed', enabled = true) {
+  return useQuery({ queryKey: purchasingKeys.list(show), queryFn: ({ signal }) => api<RequisitionList>(`${BASE}/requisitions?show=${show}`, { signal }), enabled, ...KEPT });
 }
 
 export function useRequisition(requisitionId: string) {

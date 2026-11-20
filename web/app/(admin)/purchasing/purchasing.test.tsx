@@ -173,7 +173,7 @@ describe('the requisitions list', () => {
     expect(hooks.usePurchaseOrders).not.toHaveBeenCalled();
     expect(within(table).getByRole('row', { name: /PR-0010/ }).textContent).toContain('Sent Back: “Which model? Add a quote.”');
     expect(screen.getByText('Pending Approval', { selector: ':not(span)' }).parentElement?.textContent).toContain('2');
-    expect(hooks.useRequisitions).toHaveBeenCalledWith('open');
+    expect(hooks.useRequisitions).toHaveBeenCalledWith('open', true);
   });
 
   it('narrows by a search from the rows in hand, and says whose requisitions these are', () => {
@@ -849,5 +849,40 @@ describe("a requisition's department", () => {
     const steps = screen.getByRole('list', { name: 'Where this requisition is' });
     expect(steps.textContent).toContain('Pending Order');
     expect(screen.getByText('Status:').parentElement?.textContent).toContain('Pending Order');
+  });
+});
+
+// The live audit (2026-11-21): what somebody without purchasing sees, the empty Orders tab, and the FactBoxes at first.
+describe('what the live audit found', () => {
+  it('tells somebody with no purchasing permission so, with no tabs, no New requisition and no reads', () => {
+    account.permissions = new Set(['inspections:read']);
+    hooks.useRequisitions.mockReturnValue({ isLoading: false, isError: true, data: undefined, error: new Error('refused') });
+    render(<PurchasingPage />);
+    expect(screen.getByText('You do not have access to purchasing')).toBeTruthy();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'New requisition' })).toBeNull();
+    expect(hooks.useRequisitions).toHaveBeenLastCalledWith('open', false);
+  });
+
+  it('shows somebody who keeps stock only Setup, where the codes are', () => {
+    account.permissions = new Set(['inventory:read', 'inventory:manage']);
+    hooks.useRequisitions.mockReturnValue({ isLoading: false, isError: false, data: undefined });
+    render(<PurchasingPage />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Setup']);
+    expect(screen.getByRole('heading', { name: 'Codes' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'New requisition' })).toBeNull();
+  });
+
+  it('points a purchaser at the requisitions Pending Processing when no order is open', () => {
+    url.state = { tab: 'orders', show: 'open', status: 'all', q: '' };
+    hooks.useRequisitions.mockReturnValue({ isLoading: false, isError: false, data: list([]) });
+    hooks.usePurchaseOrders.mockReturnValue({ isLoading: false, isError: false, data: { orders: [] } });
+    render(<PurchasingPage />);
+    expect(screen.getByRole('link', { name: 'Requisitions Pending Processing' }).getAttribute('href')).toBe('/purchasing?tab=requisitions&status=PENDING_PROCESSING');
+  });
+
+  it('fills Line Details from the first line until another is chosen', () => {
+    render(<RequisitionForm choices={CHOICES} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} readOnly requisition={detail()} />);
+    expect(screen.getByText('Item Code:').parentElement?.textContent).toContain('FLT-20251');
   });
 });

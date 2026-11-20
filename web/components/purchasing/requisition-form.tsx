@@ -512,11 +512,14 @@ export function RequisitionForm({
   // The FactBoxes: the item the dropdown is on, else the current line's.
   const current = lines.find((line) => line.key === currentKey);
   const currentRead = readOnly ? requisition?.lines.find((line) => line.id === currentKey) : undefined;
-  const shownItem = highlighted ?? (current ? itemOf.get(current.itemId) : currentRead?.item ? itemOf.get(currentRead.item.id) : undefined);
-  const shownPlace = choices.places.find((option) => option.id === (current?.placeId && current.placeId !== NONE ? current.placeId : (currentRead?.place?.id ?? place)));
+  // With no line chosen yet, they follow the first line with an item (the live audit, 2026-11-21: they stood empty until a line was clicked).
+  const shownDraft = current ?? (currentKey === null ? lines.find((line) => line.itemId !== NONE) : undefined);
+  const shownRead = currentRead ?? (readOnly && currentKey === null ? requisition?.lines[0] : undefined);
+  const shownItem = highlighted ?? (shownDraft ? itemOf.get(shownDraft.itemId) : shownRead?.item ? itemOf.get(shownRead.item.id) : undefined);
+  const shownPlace = choices.places.find((option) => option.id === (shownDraft?.placeId && shownDraft.placeId !== NONE ? shownDraft.placeId : (shownRead?.place?.id ?? place)));
   const advancedLine = lines.find((line) => line.key === advancedFor);
   // Vendor Statistics: the current line's vendor, else its item's usual vendor, else the chosen quote's.
-  const lineVendorId = highlighted ? null : current ? chosen(current.vendorId) : (currentRead?.vendor?.id ?? null);
+  const lineVendorId = highlighted ? null : shownDraft ? chosen(shownDraft.vendorId) : (shownRead?.vendor?.id ?? null);
   const statsVendor = vendorOf(lineVendorId ?? shownItem?.usualVendorId ?? chosenVendorId);
   const vendorStats = statsVendor ? choices.vendorStats?.[statsVendor.id] : undefined;
 
