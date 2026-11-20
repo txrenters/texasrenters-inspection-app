@@ -171,19 +171,35 @@ function roomActions(
     transcriptionJob: { segments: ReadonlyArray<{ text: string }> } | null;
   }>,
   stored: unknown,
+  inspectionType?: string,
 ): PublicInspectionReport['rooms'][number]['actions'] {
   const summary = currentSummary(recordings, stored);
   if (!summary) return undefined;
-  return summary.actions.map((group) => ({
-    heading: RECORDING_ACTION_HEADING[group.group],
-    items: group.items.map((item) => ({
-      text: item.text,
-      details: [...item.details],
-      itemId: item.itemId ?? null,
-      // Repaired after the walkthrough: the report says so, never "needed".
-      ...(item.repairedAt ? { repairedAt: item.repairedAt } : {}),
-    })),
-  }));
+  /**
+   * A move-in report leaves out what the summary says the room needs (the
+   * office, 2026-11-21: "for move in let's disregard the repair mentioned,
+   * let's focus on the good condition"). A move-in follows the make-ready, and
+   * its report is the house as the tenant receives it, not a work list. Only
+   * what the office marked repaired after the walkthrough is sent, so its row
+   * can say so. The verdict cells are untouched: a row scored N still prints
+   * its N. Present, even empty, so the report does not fall back to the
+   * findings' titles for the Comments.
+   */
+  const moveIn = inspectionType === InspectionType.MOVE_IN;
+  return summary.actions
+    .map((group) => ({
+      heading: RECORDING_ACTION_HEADING[group.group],
+      items: group.items
+        .filter((item) => !moveIn || item.repairedAt)
+        .map((item) => ({
+          text: item.text,
+          details: [...item.details],
+          itemId: item.itemId ?? null,
+          // Repaired after the walkthrough: the report says so, never "needed".
+          ...(item.repairedAt ? { repairedAt: item.repairedAt } : {}),
+        })),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 /**
@@ -883,7 +899,7 @@ export class ReportShareService {
                 }
               : {}),
         })),
-        actions: roomActions(area.media ?? [], area.recordingSummary),
+        actions: roomActions(area.media ?? [], area.recordingSummary, inspection.inspectionType),
         observations: roomObservations(inspection.inspectionType, area.media ?? [], area.recordingSummary),
       })),
       findings: inspection.findings.map((finding) => ({

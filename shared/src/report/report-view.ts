@@ -496,13 +496,20 @@ export interface ReportView {
  * left unscored may have been read from that recording by the narration
  * pre-fill (2026-10-07).
  */
-function disclaimer(observed: boolean, repaired = false) {
+function disclaimer(observed: boolean, repaired = false, moveIn = false) {
   return (
     'The condition table is as the inspector scored it; rows left unscored on site are read ' +
     "from the inspector's own words in the walkthrough recording. The comments beside the checklist" +
-    (observed ? ' -- what the inspector said is in good order, and what needs doing --' : '') +
-    " are drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
-    "and cleaning listed under each area's photographs are drawn from a summary of that recording. " +
+    (observed
+      ? moveIn
+        ? ' -- what the inspector said is in good order --'
+        : ' -- what the inspector said is in good order, and what needs doing --'
+      : '') +
+    // A move-in report lists no work (2026-11-21); see `roomActions`.
+    (moveIn
+      ? " are drawn automatically from the inspector's walkthrough recording. "
+      : " are drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
+        "and cleaning listed under each area's photographs are drawn from a summary of that recording. ") +
     (repaired
       ? 'Where a row says it was repaired after the walkthrough, the walkthrough found work needed there ' +
         'and the office recorded the repair on the date shown. '
@@ -784,6 +791,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     disclaimer: disclaimer(
       rooms.some((room) => room.checklist.some((row) => row.observations.length > 0)),
       rooms.some((room) => room.checklist.some((row) => row.repaired !== '')),
+      report.inspection.type === 'MOVE_IN',
     ),
   };
 }

@@ -236,6 +236,34 @@ describe('what a room needs, in the Comments column', () => {
  * what needs doing (the office, 2026-11-19: the report was "all damages" for a
  * house that is move-in ready).
  */
+describe('the closing note of a move-in, which lists no work', () => {
+  it('says the comments are what is in good order, and names no repairs, painting or cleaning', () => {
+    const view = buildReportView(
+      report({
+        inspection: { ...report().inspection, type: 'MOVE_IN' },
+        rooms: [
+          {
+            ...ROOM,
+            checklist: [{ id: 'item-walls', label: 'Walls and ceilings', isClean: true, isUndamaged: true, isWorking: true, comment: null }],
+            actions: [],
+            observations: [{ text: 'Walls look good', itemId: 'item-walls' }],
+          },
+        ],
+      }),
+    );
+
+    expect(view.disclaimer).toContain('-- what the inspector said is in good order --');
+    expect(view.disclaimer).not.toContain('what needs doing');
+    expect(view.disclaimer).not.toContain('repairs, painting');
+    expect(view.disclaimer).toContain('does not by itself authorize charges');
+  });
+
+  it('is unchanged on a move-out', () => {
+    const view = buildReportView(report({ inspection: { ...report().inspection, type: 'MOVE_OUT' } }));
+    expect(view.disclaimer).toContain('the repairs, painting and cleaning listed');
+  });
+});
+
 describe('what is in good order, on a move-in', () => {
   const FLOOR = { id: 'item-floor', label: 'Floor and coverings', isClean: true, isUndamaged: true, isWorking: true, comment: null };
   const WALLS = { id: 'item-walls', label: 'Walls and ceilings', isClean: true, isUndamaged: false, isWorking: true, comment: null };
