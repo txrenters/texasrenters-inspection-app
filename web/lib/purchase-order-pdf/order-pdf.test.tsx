@@ -10,16 +10,16 @@ import type { PurchaseOrderDetail } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
 import { orderFileName } from './download-order';
-import { PurchaseOrderDocument, orderFacts, orderVendorLines } from './order-document';
+import { PurchaseOrderDocument, orderFacts, orderShipToLines, orderVendorLines } from './order-document';
 
 /** Every name, address and price invented. */
 const ORDER = {
   id: 'order-9',
   number: 'PO-0009',
   status: 'APPROVED',
-  vendor: { id: 'vendor-hill', name: 'Hill Country Supply' },
+  vendor: { id: 'vendor-hill', number: 'V00003', name: 'Hill Country Supply' },
   requisition: { id: 'req-12', number: 'PR-0012' },
-  company: { tenantId: 'tenant-thmp', name: 'Example Company' },
+  company: { tenantId: 'tenant-thmp', name: 'Example Company', purchaserCode: 'THMP' },
   expectedOn: '2026-11-24',
   lineCount: 2,
   totalCents: 20005,
@@ -27,7 +27,7 @@ const ORDER = {
   createdAt: '2026-11-18T16:02:00.000Z',
   sentAt: null,
   vendorContact: { contactName: 'A Person', email: 'orders@hill.example', phone: null },
-  deliverTo: { id: 'place-stockroom', name: 'Stockroom' },
+  deliverTo: { id: 'place-stockroom', name: 'Stockroom', code: 'STORE' },
   terms: 'Net 30',
   taxBasisPoints: 825,
   notes: 'Deliver to the back door.',
@@ -52,6 +52,18 @@ const ORDER = {
   approvalLimitCents: 50000,
 } satisfies PurchaseOrderDetail;
 
+/** Every page's text, as a reader of the PDF would see it. */
+async function pageTexts(pdf: Buffer) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const document = await getDocument({ data: new Uint8Array(pdf) }).promise;
+  const pages: string[] = [];
+  for (let number = 1; number <= document.numPages; number += 1) {
+    const content = await (await document.getPage(number)).getTextContent();
+    pages.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '));
+  }
+  return pages;
+}
+
 describe('a purchase order as a PDF', () => {
   it('renders to a PDF, one line or many', async () => {
     const one = await renderToBuffer(<PurchaseOrderDocument order={ORDER} />);
@@ -62,25 +74,44 @@ describe('a purchase order as a PDF', () => {
     expect(long.length).toBeGreaterThan(one.length);
     // What rides on the email must stay under the server's limit for an order's PDF, even a long one.
     expect(long.length).toBeLessThan(200_000);
+
+    // Each page names the company and the order, and which page it is (2026-11-20).
+    const pages = await pageTexts(long);
+    expect(pages.length).toBeGreaterThan(1);
+    pages.forEach((text, index) => {
+      expect(text).toContain('Example Company · PO-0009');
+      expect(text).toContain(`Page ${index + 1} of ${pages.length}`);
+    });
   });
 
-  it('prints the day it was approved, when it is expected, and where it goes', () => {
+  // Laid out as the PoPdf board since 2026-11-20: two columns of facts, each printed even when empty.
+  it('prints the board\'s facts: the day it was approved, the codes, and who ordered it', () => {
     expect(orderFacts(ORDER)).toEqual([
-      { label: 'Ordered', value: 'Nov 19, 2026' },
-      { label: 'Expected by', value: 'Nov 24, 2026' },
-      { label: 'Terms', value: 'Net 30' },
-      { label: 'Deliver to', value: 'Stockroom' },
-      { label: 'Requisition', value: 'PR-0012' },
+      { label: 'Order Date', value: '11/19/2026' },
+      { label: 'Vendor No.', value: 'V00003' },
+      { label: 'Expected Receipt', value: '11/24/2026' },
+      { label: 'Purchaser Code', value: 'THMP' },
+      { label: 'Payment Terms', value: 'Net 30' },
+      { label: 'Location Code', value: 'STORE' },
+      { label: 'Requisition No.', value: 'PR-0012' },
+      { label: 'Ordered by', value: 'Sample Purchaser' },
     ]);
-    expect(orderFacts({ ...ORDER, approvedAt: null, expectedOn: null, terms: null, deliverTo: null })).toEqual([
-      { label: 'Ordered', value: 'Nov 18, 2026' },
-      { label: 'Requisition', value: 'PR-0012' },
+    const bare = orderFacts({ ...ORDER, approvedAt: null, expectedOn: null, terms: null, deliverTo: null, vendor: null, company: null });
+    expect(bare.filter((fact) => fact.value)).toEqual([
+      { label: 'Order Date', value: '11/18/2026' },
+      { label: 'Requisition No.', value: 'PR-0012' },
+      { label: 'Ordered by', value: 'Sample Purchaser' },
     ]);
   });
 
-  it('names the vendor and whoever the office deals with there', () => {
-    expect(orderVendorLines(ORDER)).toEqual(['Hill Country Supply', 'A Person', 'orders@hill.example']);
+  it('names the vendor by number, and whoever the office deals with there', () => {
+    expect(orderVendorLines(ORDER)).toEqual(['V00003 · Hill Country Supply', 'Attn: A Person', 'orders@hill.example']);
     expect(orderVendorLines({ ...ORDER, vendor: null, vendorContact: null })).toEqual(['No vendor chosen']);
+  });
+
+  it('ships to the place by its code, at the office, for the order\'s company', () => {
+    expect(orderShipToLines(ORDER)).toEqual(['STORE · Stockroom', 'Example Company', '1 Example Plaza', 'Receiving: 555-0100']);
+    expect(orderShipToLines({ ...ORDER, deliverTo: null, company: null, from: { ...ORDER.from, phone: null } })).toEqual(['The office', 'Example Company', '1 Example Plaza']);
   });
 
   it('is filed under its number and its vendor', () => {

@@ -100,7 +100,7 @@ export function RequisitionRibbon(props: RequisitionRibbonProps) {
       </RibbonGroup>
 
       <RibbonGroup caption="Print">
-        <RibbonButton disabled={!props.onPrint} hint={props.onPrint ? undefined : 'The requisition as a PDF comes with the next part of the work.'} icon={PrinterIcon} label="Print..." onClick={() => props.onPrint?.()} />
+        <RibbonButton disabled={!props.onPrint} hint={props.onPrint ? 'The requisition, as it was last saved, as a PDF.' : 'Save it first.'} icon={PrinterIcon} label="Print..." onClick={() => props.onPrint?.()} />
       </RibbonGroup>
 
       <RibbonGroup caption="Show Attached">

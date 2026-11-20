@@ -7,6 +7,7 @@ import {
   OPEN_REQUISITION_STATUSES,
   averageCostCents,
   formatMoney,
+  orderGroups,
   requisitionNumber,
   requisitionerCode,
   requisitionSubmitProblem,
@@ -144,7 +145,7 @@ export async function nextDocumentNumber(db: Pick<Db, '$queryRaw'>, organization
 
 /** The history's words for each audited step. */
 const STEP: Record<string, string> = {
-  PURCHASE_REQUISITION_ORDERED: 'made a purchase order from it',
+  PURCHASE_REQUISITION_ORDERED: 'made purchase orders from it',
   PURCHASE_REQUISITION_ORDER_CANCELLED: 'cancelled its purchase order',
   PURCHASE_REQUISITION_CREATED: 'started it',
   PURCHASE_REQUISITION_CHANGED: 'changed it',
@@ -165,6 +166,17 @@ const STEP: Record<string, string> = {
   PURCHASE_REQUISITION_FILE_FOR_VENDOR: 'ticked a file to go to the vendor',
   PURCHASE_REQUISITION_FILE_NOT_FOR_VENDOR: 'unticked a file for the vendor',
 };
+
+/** Whether a vendor the requisition's lines go to has no live order yet: the orders the ribbon may still make. */
+function vendorsUnordered(requisition: Pick<Requisition, 'lines' | 'quotes'>, orders: readonly { vendorId: string | null }[]) {
+  const chosen = requisition.quotes.find((quote) => quote.chosen)?.vendor.id ?? null;
+  const groups = orderGroups(
+    requisition.lines.map((line) => ({ itemId: line.item?.id ?? null, vendorId: line.vendor?.id ?? null })),
+    chosen,
+  );
+  const ordered = new Set(orders.map((order) => order.vendorId));
+  return groups.some((group) => !ordered.has(group.vendorId));
+}
 
 /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
 export function visibleRequisitions(user: AuthenticatedUser): Prisma.PurchaseRequisitionWhereInput {
@@ -192,7 +204,7 @@ export class PurchasingService {
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
-  private actions(user: AuthenticatedUser, requisition: Pick<Requisition, 'status' | 'requestedById'>, totalCents: number, settings: PurchasingSettings): RequisitionActions {
+  private actions(user: AuthenticatedUser, requisition: Pick<Requisition, 'status' | 'requestedById'>, totalCents: number, settings: PurchasingSettings, unordered = false): RequisitionActions {
     const mine = requisition.requestedById === user.id;
     const waiting = requisition.status === Status.SUBMITTED && may(user, APPROVE);
     const approveBlocked = !waiting
@@ -209,7 +221,8 @@ export class PurchasingService {
       approve: waiting && !approveBlocked,
       sendBack: waiting && !mine,
       reject: waiting && !mine,
-      order: requisition.status === Status.APPROVED && may(user, ORDER),
+      // Approved, or Ordered with a vendor still to order from: one whose order was cancelled.
+      order: (requisition.status === Status.APPROVED || (requisition.status === Status.ORDERED && unordered)) && may(user, ORDER),
       approveBlocked,
       // Whoever sees it: their own, or one they decide or order from.
       attach: ATTACHABLE.includes(requisition.status),
@@ -242,7 +255,7 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, settings, levels, audits, order, files, attached] = await Promise.all([
+    const [companies, settings, levels, audits, orders, files, attached, office] = await Promise.all([
       this.companies(organizationId),
       this.settings(this.prisma, organizationId),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
@@ -251,10 +264,16 @@ export class PurchasingService {
         select: { action: true, actorUserId: true, metadata: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
       }),
-      // The order made from it, if one stands: a cancelled order frees the requisition for another.
-      this.prisma.purchaseOrder.findFirst({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } }, select: { id: true, number: true } }),
+      // The orders made from it, one a vendor (2026-11-20): a cancelled one frees its vendor for another.
+      this.prisma.purchaseOrder.findMany({
+        where: { organizationId, requisitionId, status: { not: 'CANCELLED' } },
+        select: { id: true, number: true, status: true, vendorId: true, vendor: { select: { id: true, number: true, name: true } } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
       requisitionFiles(this.prisma, user, requisition),
       requisitionNotesAndLinks(this.prisma, user, requisitionId),
+      // Who it is from, for its PDF: the office's address on its invoices.
+      this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -292,10 +311,18 @@ export class PurchasingService {
       decidedBy: requisition.decidedBy?.displayName ?? null,
       decidedAt: requisition.decidedAt?.toISOString() ?? null,
       history,
-      order,
+      orders: orders.map((order) => ({ id: order.id, number: order.number, status: order.status, vendor: order.vendor })),
+      from: {
+        // The company the stock is for, as its books name it; else the office's own name on its invoices.
+        name: summary.company?.name ?? office?.companyName ?? 'TexasRenters.com',
+        addressLine1: office?.addressLine1 ?? null,
+        addressLine2: office?.addressLine2 ?? null,
+        phone: office?.phone ?? null,
+        email: office?.email ?? null,
+      },
       files,
       ...attached,
-      can: this.actions(user, requisition, summary.estimatedTotalCents, settings),
+      can: this.actions(user, requisition, summary.estimatedTotalCents, settings, vendorsUnordered(requisition, orders)),
       settings,
     };
   }

@@ -38,7 +38,8 @@ const colleague = person(2, 'Another Requester', ['purchasing:request']);
 const manager = person(3, 'Sample Manager', ['purchasing:request', 'purchasing:approve']);
 const owner = person(4, 'Sample Owner', ['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
 const outsider = person(5, 'Other Office', ['purchasing:request', 'purchasing:approve', 'purchasing:approve-any'], OTHER_ORG);
-const PEOPLE = [asker, colleague, manager, owner, outsider];
+const buyer = person(6, 'Sample Purchaser', ['purchasing:request', 'purchasing:order']);
+const PEOPLE = [asker, colleague, manager, owner, outsider, buyer];
 
 type Row = Record<string, unknown>;
 type Where = Record<string, unknown>;
@@ -153,7 +154,13 @@ function database() {
     purchaseOrder: {
       findFirst: jest.fn(async () => null),
       count: jest.fn(async ({ where }: { where: Where }) => liveOrders.filter((row) => row.requisitionId === where.requisitionId).length),
+      // Its live orders, one a vendor (2026-11-20).
+      findMany: jest.fn(async ({ where }: { where: Where }) =>
+        liveOrders.filter((row) => row.requisitionId === where.requisitionId).map((row, n) => ({ id: `order-${n}`, number: null, status: 'DRAFT', vendorId: row.vendorId ?? null, vendor: vendors.find((vendor) => vendor.id === row.vendorId) ?? null })),
+      ),
     },
+    // Who it is from, for its PDF.
+    invoiceSettings: { findUnique: jest.fn(async () => ({ companyName: 'Example Office', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null })) },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
     stockLevel: { groupBy: jest.fn(async () => levels), findMany: jest.fn(async () => placeLevels) },
     stockPlace: {
@@ -843,5 +850,34 @@ describe('notes, comments and links (2026-11-20, Show Attached)', () => {
     const check = (body: unknown) => pipe.transform(body, { type: 'body', metatype: AddRequisitionLinkDto });
     await expect(check({ url: 'https://example.test', title: 'Quote' })).resolves.toEqual({ url: 'https://example.test', title: 'Quote' });
     await expect(check({ url: 'https://example.test' })).rejects.toBeDefined();
+  });
+});
+
+describe('the orders made from a requisition (2026-11-20, one a vendor)', () => {
+  it('lists its live orders with their vendors, and offers more only while a vendor on it has none', async () => {
+    const { service, requisitions, liveOrders, lines } = database();
+    const draft = await service.create(asker, small());
+    await service.submit(asker, draft.id);
+    await service.decide(manager, draft.id, 'APPROVED', {});
+    lines.forEach((line, index) => (line.vendorId = index === 0 ? HILL : ALAMO));
+    expect((await service.detail(buyer, draft.id)).can.order).toBe(true);
+
+    // Ordered from Hill only: Alamo's line is still to order.
+    requisitions[0]!.status = 'ORDERED';
+    liveOrders.push({ requisitionId: draft.id, vendorId: HILL });
+    const ordered = await service.detail(buyer, draft.id);
+    expect(ordered.orders).toEqual([{ id: 'order-0', number: null, status: 'DRAFT', vendor: expect.objectContaining({ id: HILL, name: 'Hill Country Supply' }) }]);
+    expect(ordered.can.order).toBe(true);
+
+    liveOrders.push({ requisitionId: draft.id, vendorId: ALAMO });
+    expect((await service.detail(buyer, draft.id)).can.order).toBe(false);
+    // Somebody who does not buy is never offered it.
+    expect((await service.detail(manager, draft.id)).can.order).toBe(false);
+  });
+
+  it('is headed for its PDF by the company it is for, at the office address', async () => {
+    const { service } = database();
+    const draft = await service.create(asker, small());
+    expect((await service.detail(asker, draft.id)).from).toEqual({ name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null });
   });
 });

@@ -8,6 +8,7 @@ import {
   formatFileSize,
   formatMoney,
   billProblems,
+  orderGroups,
   formatTaxRate,
   orderSubmitProblem,
   orderTotals,
@@ -18,6 +19,7 @@ import {
   type PurchaseOrderDetail,
   type PurchaseOrderFrom,
   type PurchaseOrderList,
+  type PurchaseOrdersMade,
   type PurchaseOrderRow,
   type SavePurchaseOrderInput,
   type SendPurchaseOrderInput,
@@ -115,21 +117,24 @@ const ROW = {
   },
   createdBy: { select: { displayName: true } },
   approvedBy: { select: { displayName: true } },
-  vendor: { select: { id: true, name: true, contactName: true, email: true, phone: true } },
-  deliverTo: { select: { id: true, name: true } },
+  vendor: { select: { id: true, name: true, number: true, contactName: true, email: true, phone: true } },
+  deliverTo: { select: { id: true, name: true, code: true } },
   requisition: { select: { id: true, number: true, requestedById: true, lines: { select: { itemId: true, quantity: true } } } },
   lines: { orderBy: { position: 'asc' }, select: { id: true, quantity: true, unitPriceCents: true, receivedQuantity: true, item: { select: { id: true, code: true, name: true, unit: true } } } },
 } satisfies Prisma.PurchaseOrderSelect;
 type Order = Prisma.PurchaseOrderGetPayload<{ select: typeof ROW }>;
 
-function row(order: Order, companies: ReadonlyMap<string, string>): PurchaseOrderRow {
+/** A company's name and purchaser code, by its Xero tenant. */
+type Companies = ReadonlyMap<string, { name: string; purchaserCode: string | null }>;
+
+function row(order: Order, companies: Companies): PurchaseOrderRow {
   return {
     id: order.id,
     number: order.number,
     status: order.status,
-    vendor: order.vendor ? { id: order.vendor.id, name: order.vendor.name } : null,
+    vendor: order.vendor ? { id: order.vendor.id, name: order.vendor.name, number: order.vendor.number } : null,
     requisition: { id: order.requisition.id, number: order.requisition.number },
-    company: order.xeroTenantId ? { tenantId: order.xeroTenantId, name: companies.get(order.xeroTenantId) ?? 'A company' } : null,
+    company: order.xeroTenantId ? { tenantId: order.xeroTenantId, name: companies.get(order.xeroTenantId)?.name ?? 'A company', purchaserCode: companies.get(order.xeroTenantId)?.purchaserCode ?? null } : null,
     expectedOn: dayOf(order.expectedOn),
     lineCount: order.lines.length,
     totalCents: orderTotals(order.lines, order.taxBasisPoints).totalCents,
@@ -193,9 +198,9 @@ export class PurchaseOrdersService {
     return [ORDER, APPROVE, RECEIVE, BILLS].some((permission) => may(user, permission)) ? {} : { requisition: { requestedById: user.id } };
   }
 
-  private async companyNames(organizationId: string) {
-    const rows = await this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true } });
-    return new Map(rows.map((entry) => [entry.xeroTenantId, entry.name]));
+  private async companyNames(organizationId: string): Promise<Companies> {
+    const rows = await this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, purchaserCode: true } });
+    return new Map(rows.map((entry) => [entry.xeroTenantId, { name: entry.name, purchaserCode: entry.purchaserCode }]));
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
@@ -383,15 +388,21 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * A draft order from an approved requisition: its items and quantities, at
-   * the estimated prices, to the vendor of its chosen quote. The requisition
-   * becomes Ordered in the same step, so two purchasers cannot both make one
-   * (the database holds that too: one live order a requisition).
+   * Draft orders from an approved requisition, one a vendor, as NAV makes them
+   * (2026-11-20, part 4): each line goes to its own vendor, else to the chosen
+   * quote's, at its estimated price; lines with neither go on one order with
+   * no vendor yet, for the purchaser to choose. A vendor no longer in use is
+   * treated as none.
+   *
+   * Made again on a requisition already Ordered, it makes only the orders still
+   * missing -- a vendor whose order was cancelled -- and never a second one for
+   * a vendor that has one: the database holds that too (one live order a
+   * requisition and vendor), so two purchasers pressing at once cannot both.
    */
-  async createFromRequisition(user: AuthenticatedUser, requisitionId: string): Promise<PurchaseOrderDetail> {
+  async createFromRequisition(user: AuthenticatedUser, requisitionId: string): Promise<PurchaseOrdersMade> {
     const organizationId = user.organizationId;
     try {
-      const created = await this.prisma.$transaction(async (tx) => {
+      return await this.prisma.$transaction(async (tx) => {
         const requisition = await tx.purchaseRequisition.findFirst({
           where: { id: requisitionId, organizationId, status: { not: PurchaseRequisitionStatus.DRAFT } },
           select: {
@@ -399,40 +410,61 @@ export class PurchaseOrdersService {
             status: true,
             xeroTenantId: true,
             deliverToPlaceId: true,
-            lines: { orderBy: { position: 'asc' }, select: { itemId: true, quantity: true, estimatedUnitCostCents: true, vendor: { select: { id: true, terms: true, active: true } } } },
-            quotes: { where: { chosen: true }, select: { vendorId: true, vendor: { select: { terms: true, active: true } } } },
+            lines: { orderBy: { position: 'asc' }, select: { itemId: true, quantity: true, estimatedUnitCostCents: true, vendor: { select: { id: true, number: true, name: true, terms: true, active: true } } } },
+            quotes: { where: { chosen: true }, select: { vendor: { select: { id: true, number: true, name: true, terms: true, active: true } } } },
+            orders: { where: { status: { not: Status.CANCELLED } }, select: { vendorId: true } },
           },
         });
         if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
-        if (requisition.status !== PurchaseRequisitionStatus.APPROVED) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'An order is made from an approved requisition that has none yet.');
-        const lines = requisition.lines.flatMap((line) => (line.itemId ? [{ itemId: line.itemId, quantity: line.quantity, unitPriceCents: line.estimatedUnitCostCents }] : []));
-        if (!lines.length) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'This requisition has no line with an item code, so there is nothing to order.');
-        const claimed = await tx.purchaseRequisition.updateMany({ where: { id: requisitionId, organizationId, status: PurchaseRequisitionStatus.APPROVED }, data: { status: PurchaseRequisitionStatus.ORDERED } });
-        if (claimed.count !== 1) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Somebody has just made the order for this requisition.');
-        const quote = requisition.quotes[0];
-        // The chosen quote's vendor; with none, the one vendor every line names (2026-11-20). Lines naming several wait for one order a vendor.
-        const named = [...new Map(requisition.lines.flatMap((line) => (line.vendor ? [[line.vendor.id, line.vendor] as const] : []))).values()];
-        const vendor = quote?.vendor.active ? { id: quote.vendorId, terms: quote.vendor.terms } : named.length === 1 && named[0]!.active && requisition.lines.every((line) => line.vendor) ? { id: named[0]!.id, terms: named[0]!.terms } : null;
-        const order = await tx.purchaseOrder.create({
-          data: {
-            organizationId,
-            requisitionId,
-            vendorId: vendor?.id ?? null,
-            terms: vendor?.terms ?? null,
-            xeroTenantId: requisition.xeroTenantId,
-            deliverToPlaceId: requisition.deliverToPlaceId,
-            createdById: user.id,
-          },
-          select: { id: true },
+        if (requisition.status !== PurchaseRequisitionStatus.APPROVED && requisition.status !== PurchaseRequisitionStatus.ORDERED)
+          throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Orders are made from an approved requisition.');
+        const quoteVendor = requisition.quotes[0]?.vendor;
+        const usable = (vendor: typeof quoteVendor | null) => (vendor?.active ? vendor : null);
+        const vendors = new Map(requisition.lines.flatMap((line) => (usable(line.vendor) ? [[line.vendor!.id, line.vendor!] as const] : [])));
+        if (usable(quoteVendor)) vendors.set(quoteVendor!.id, quoteVendor!);
+        const groups = orderGroups(
+          requisition.lines.map((line) => ({ ...line, vendorId: usable(line.vendor)?.id ?? null })),
+          usable(quoteVendor)?.id ?? null,
+        );
+        if (!groups.length) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'This requisition has no line with an item code, so there is nothing to order.');
+        const ordered = new Set(requisition.orders.map((order) => order.vendorId));
+        const missing = groups.filter((group) => !ordered.has(group.vendorId));
+        if (!missing.length) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Every vendor on this requisition has its order already.');
+        if (requisition.status === PurchaseRequisitionStatus.APPROVED) {
+          const claimed = await tx.purchaseRequisition.updateMany({ where: { id: requisitionId, organizationId, status: PurchaseRequisitionStatus.APPROVED }, data: { status: PurchaseRequisitionStatus.ORDERED } });
+          if (claimed.count !== 1) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Somebody has just made the orders for this requisition.');
+        }
+
+        const made: PurchaseOrdersMade['orders'] = [];
+        for (const group of missing) {
+          const vendor = group.vendorId ? vendors.get(group.vendorId)! : null;
+          const order = await tx.purchaseOrder.create({
+            data: {
+              organizationId,
+              requisitionId,
+              vendorId: vendor?.id ?? null,
+              terms: vendor?.terms ?? null,
+              xeroTenantId: requisition.xeroTenantId,
+              deliverToPlaceId: requisition.deliverToPlaceId,
+              createdById: user.id,
+            },
+            select: { id: true },
+          });
+          await tx.purchaseOrderLine.createMany({
+            data: group.lines.map((line, position) => ({ organizationId, orderId: order.id, position, itemId: line.itemId!, quantity: line.quantity, unitPriceCents: line.estimatedUnitCostCents })),
+          });
+          await this.audit(tx, user, 'PURCHASE_ORDER_CREATED', ENTITY, order.id, { requisition: requisition.number, lines: group.lines.length, vendor: vendor?.name ?? null });
+          made.push({ id: order.id, vendor: vendor ? { id: vendor.id, number: vendor.number, name: vendor.name } : null });
+        }
+        await this.audit(tx, user, 'PURCHASE_REQUISITION_ORDERED', 'PurchaseRequisition', requisitionId, {
+          number: requisition.number,
+          orders: made.length,
+          note: made.map((order) => order.vendor?.name ?? 'no vendor yet').join(', '),
         });
-        await tx.purchaseOrderLine.createMany({ data: lines.map((line, position) => ({ organizationId, orderId: order.id, position, ...line })) });
-        await this.audit(tx, user, 'PURCHASE_ORDER_CREATED', ENTITY, order.id, { requisition: requisition.number, lines: lines.length });
-        await this.audit(tx, user, 'PURCHASE_REQUISITION_ORDERED', 'PurchaseRequisition', requisitionId, { number: requisition.number });
-        return order;
+        return { orders: made };
       });
-      return this.detail(user, created.id);
     } catch (error) {
-      if (taken(error)) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'This requisition already has an order.');
+      if (taken(error)) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Somebody has just made these orders. Open the requisition again.');
       throw error;
     }
   }
@@ -470,6 +502,30 @@ export class PurchaseOrdersService {
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
       if (order.status !== Status.DRAFT) throw new ApplicationError(409, 'PURCHASE_ORDER_FIXED', 'An order cannot be changed once it is submitted, unless it is sent back.');
+      // An item already on another live order from the same requisition would be bought twice (2026-11-20, one order a vendor).
+      const elsewhere = await tx.purchaseOrderLine.findMany({
+        where: { organizationId, itemId: { in: input.lines.map((line) => line.itemId) }, order: { requisitionId: order.requisitionId, id: { not: orderId }, status: { not: Status.CANCELLED } } },
+        select: { item: { select: { code: true } }, order: { select: { number: true, vendor: { select: { name: true } } } } },
+      });
+      if (elsewhere.length) {
+        const [first] = elsewhere;
+        throw new ApplicationError(
+          400,
+          'PURCHASE_ORDER_ITEM_ON_ANOTHER',
+          `${first!.item.code} is already on ${first!.order.number ?? 'another order'}${first!.order.vendor ? ` to ${first!.order.vendor.name}` : ''}, made from the same requisition.`,
+        );
+      }
+      await this.write(tx, user, order, orderId, input);
+    }).catch((error: unknown) => {
+      if (taken(error)) throw new ApplicationError(409, 'PURCHASE_ORDER_VENDOR_TAKEN', 'Another order from this requisition already goes to that vendor.');
+      throw error;
+    });
+    return this.detail(user, orderId);
+  }
+
+  private async write(tx: Db, user: AuthenticatedUser, order: Awaited<ReturnType<PurchaseOrdersService['found']>>, orderId: string, input: SavePurchaseOrderInput) {
+    const organizationId = user.organizationId;
+    {
       if (input.vendorId && !(await tx.vendor.findFirst({ where: { organizationId, id: input.vendorId, active: true }, select: { id: true } })))
         throw new ApplicationError(400, 'VENDOR_NOT_FOUND', 'That vendor is not in use.');
       if (input.deliverToPlaceId && !(await tx.stockPlace.findFirst({ where: { organizationId, id: input.deliverToPlaceId, active: true }, select: { id: true } })))
@@ -491,8 +547,7 @@ export class PurchaseOrdersService {
       if (input.lines.length)
         await tx.purchaseOrderLine.createMany({ data: input.lines.map((line, position) => ({ organizationId, orderId, position, itemId: line.itemId, quantity: line.quantity, unitPriceCents: line.unitPriceCents })) });
       await this.audit(tx, user, 'PURCHASE_ORDER_CHANGED', ENTITY, orderId, { lines: input.lines.length, totalCents: orderTotals(input.lines, input.taxBasisPoints).totalCents });
-    });
-    return this.detail(user, orderId);
+    }
   }
 
   /** Hands it to the approvers. It takes its number the first time, and keeps it if it comes back and goes again. */
@@ -548,7 +603,11 @@ export class PurchaseOrdersService {
       const order = await this.found(tx, user, orderId);
       if (!CANCELLABLE.includes(order.status)) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order is already cancelled.');
       await this.move(tx, organizationId, orderId, CANCELLABLE, { status: Status.CANCELLED, cancelledById: user.id, cancelledAt: new Date(), cancelReason: reason });
-      await tx.purchaseRequisition.updateMany({ where: { id: order.requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.APPROVED } });
+      // One order a vendor (2026-11-20): the requisition is approved again only once none of its orders is left;
+      // while others stand it stays Ordered, and the purchaser can make this vendor's order again.
+      const others = await tx.purchaseOrder.count({ where: { organizationId, requisitionId: order.requisitionId, id: { not: orderId }, status: { not: Status.CANCELLED } } });
+      if (!others)
+        await tx.purchaseRequisition.updateMany({ where: { id: order.requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.APPROVED } });
       await this.audit(tx, user, 'PURCHASE_ORDER_CANCELLED', ENTITY, orderId, { number: order.number, note: reason });
       await this.audit(tx, user, 'PURCHASE_REQUISITION_ORDER_CANCELLED', 'PurchaseRequisition', order.requisitionId, { order: order.number, note: reason });
     });
