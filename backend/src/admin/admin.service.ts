@@ -55,6 +55,7 @@ import {
   type AdminJob,
   type JobInspectionType,
   type JobNextNumber,
+  type AdminWorkOrder,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -75,6 +76,7 @@ import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-r
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
+import { workOrderView } from '../work-orders/work-order-view';
 import { OFFICE_NOTE_SELECT, officeNoteView } from './inspection-notes.service';
 import {
   DONE_INSPECTION_STATUSES,
@@ -2204,6 +2206,22 @@ export class AdminService {
       occupancy: leases > 0 || (!unitId && tenancies.length > 0) ? ('OCCUPIED' as const) : ('VACANT' as const),
       zone: zoneNumberOf(tenancies.find((tenancy) => tenancy.zone)?.zone),
     };
+  }
+
+  /**
+   * The work order behind a handed-over visit, as the maintenance app last sent
+   * it, for the console's work order dialog.
+   */
+  async inspectionWorkOrder(user: AuthenticatedUser, id: string): Promise<AdminWorkOrder> {
+    const handoff = await this.prisma.workOrderImport.findFirst({
+      where: { organizationId: user.organizationId, inspectionId: id },
+      orderBy: { lastReceivedAt: 'desc' },
+      select: { payload: true, lastReceivedAt: true },
+    });
+    const view = handoff ? workOrderView(handoff.payload, handoff.lastReceivedAt) : null;
+    if (!view)
+      throw new ApplicationError(404, 'WORK_ORDER_NOT_FOUND', 'This visit has no work order from the maintenance app.');
+    return view;
   }
 
   /**

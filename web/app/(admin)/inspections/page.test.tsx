@@ -14,6 +14,7 @@ const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
   useTechnicians: vi.fn(),
   useInspection: vi.fn(() => ({ isLoading: true, isError: false, data: undefined })),
+  useInspectionWorkOrder: vi.fn(() => ({ isLoading: true, isError: false, data: undefined })),
   // The day against Jobber, for the Jobber column; nothing to compare here.
   useJobberDay: vi.fn(() => ({ data: undefined })),
 }));

@@ -13,6 +13,7 @@ import WorkOrdersPage from './page';
 const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
   useInspection: vi.fn(),
+  useInspectionWorkOrder: vi.fn(),
 }));
 vi.mock('@/lib/queries', () => hooks);
 const url = vi.hoisted(() => ({
@@ -109,24 +110,66 @@ describe('when nothing has arrived', () => {
 });
 
 describe('opening a work order', () => {
-  it('opens it in a dialog, not on the inspection page', () => {
-    hooks.useInspection.mockReturnValue({
-      isLoading: false,
-      isError: false,
-      data: {
-        ...row(),
-        internalNotes: 'Work order #44781\nPlumbing · Leak\n\nKitchen sink drips under the cabinet',
-      },
-    });
+  const visit = { isLoading: false, isError: false, data: { ...row(), internalNotes: 'Work order #44781\n\nKitchen sink drips' } };
+  const workOrder = {
+    number: 44781,
+    propertywareId: '98765',
+    url: null,
+    status: 'Open',
+    serviceStatus: 'Vendor Assigned',
+    priority: 'High',
+    isEmergency: false,
+    category: 'Plumbing',
+    type: 'Repair',
+    source: 'Tenant Portal',
+    description: 'Kitchen sink drips under the cabinet',
+    specificLocation: 'Kitchen',
+    authorizedToEnter: 'Yes',
+    zone: '1',
+    occupied: true,
+    costEstimate: 180,
+    createdDate: '2026-11-19',
+    approvedDate: null,
+    dateToEnter: null,
+    scheduledEndDate: null,
+    address: '123 Demo Street, Houston, TX 77001',
+    tenants: [{ name: 'Jane Tenant', phone: '555-0100', email: null }],
+    vendors: [{ name: 'THMP', inHouse: true }],
+    approval: null,
+    receivedAt: '2026-11-20T18:00:00.000Z',
+  };
+
+  it('opens it in a dialog laid out as the maintenance app’s work order modal, not on the inspection page', () => {
+    hooks.useInspection.mockReturnValue(visit);
+    hooks.useInspectionWorkOrder.mockReturnValue({ isLoading: false, isError: false, data: workOrder });
     mount();
 
     expect(screen.queryByRole('link', { name: /44781/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /44781/ }));
 
     const dialog = screen.getByRole('dialog');
-    expect(hooks.useInspection).toHaveBeenLastCalledWith('inspection-1');
-    expect(within(dialog).getByText('Work order #44781')).toBeInTheDocument();
-    expect(within(dialog).getByText(/Kitchen sink drips under the cabinet/)).toBeInTheDocument();
-    expect(within(dialog).getByText('Moses Rodriguez')).toBeInTheDocument();
+    expect(hooks.useInspectionWorkOrder).toHaveBeenLastCalledWith('inspection-1');
+    expect(within(dialog).getByText('#44781')).toBeInTheDocument();
+    expect(within(dialog).getByText('Priority: High')).toBeInTheDocument();
+    expect(within(dialog).getByText('Status: Open')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Non-emergency')).toHaveLength(2);
+    expect(within(dialog).queryByText('Approved')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Plumbing')).toBeInTheDocument();
+    expect(within(dialog).getByText('THMP (in-house)')).toBeInTheDocument();
+    expect(within(dialog).getByText('$180.00')).toBeInTheDocument();
+    expect(within(dialog).getByText('Kitchen sink drips under the cabinet')).toBeInTheDocument();
+    expect(within(dialog).getByRole('tab', { name: 'Crew visit' })).toBeInTheDocument();
+  });
+
+  it('reads the visit’s notes when the maintenance app’s copy cannot be read', () => {
+    hooks.useInspection.mockReturnValue(visit);
+    hooks.useInspectionWorkOrder.mockReturnValue({ isLoading: false, isError: true, data: undefined });
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: /44781/ }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('#44781')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Kitchen sink drips/)).toBeInTheDocument();
   });
 });

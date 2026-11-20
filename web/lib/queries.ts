@@ -2,6 +2,7 @@
 
 import type { VideoPlayback } from './playback';
 import type {
+  AdminWorkOrder,
   RecordingDownload,
   RecordingTranscript,
   AccountDeletionPreflight,
@@ -160,6 +161,7 @@ export const keys = {
   inspectionAudit: (id: string, page: number) =>
     ['admin', 'inspection', id, 'audit', page] as const,
   inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
+  inspectionWorkOrder: (id: string) => ['admin', 'inspection', id, 'work-order'] as const,
   inspectionPhotos: (id: string) => ['admin', 'inspection', id, 'photos'] as const,
   /**
    * Area-first evidence. One summary per inspection, one bundle per area, so an
@@ -479,6 +481,15 @@ export const useInspection = (id: string) =>
     queryKey: keys.inspection(id),
     queryFn: ({ signal }) => api<AdminInspection>(`/api/v1/admin/inspections/${id}`, { signal }),
     enabled: Boolean(id),
+  });
+/** The work order behind a handed-over visit, as the maintenance app last sent it. */
+export const useInspectionWorkOrder = (id: string) =>
+  useQuery({
+    queryKey: keys.inspectionWorkOrder(id),
+    queryFn: ({ signal }) =>
+      api<AdminWorkOrder>(`/api/v1/admin/inspections/${id}/work-order`, { signal }),
+    enabled: Boolean(id),
+    retry: false,
   });
 export const useInspectionAudit = (id: string, page: number) =>
   useQuery({

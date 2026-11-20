@@ -1683,3 +1683,37 @@ export interface AdminDashboardOutlook {
   /** Last quarter, this one and the next, where a plan exists; oldest first. */
   quarters: OutlookQuarter[];
 }
+
+/**
+ * A handed-over work order as the maintenance app last sent it, for the
+ * console's work order dialog (the office, 2026-11-21: the same design as the
+ * maintenance app's work order modal). Read from the stored hand-off; nothing
+ * here is edited in this app.
+ */
+export interface AdminWorkOrder {
+  number: number | null;
+  propertywareId: string | null;
+  url: string | null;
+  status: string | null;
+  serviceStatus: string | null;
+  priority: string | null;
+  isEmergency: boolean | null;
+  category: string | null;
+  type: string | null;
+  source: string | null;
+  description: string | null;
+  specificLocation: string | null;
+  authorizedToEnter: string | null;
+  zone: string | null;
+  occupied: boolean;
+  costEstimate: number | null;
+  createdDate: string | null;
+  approvedDate: string | null;
+  dateToEnter: string | null;
+  scheduledEndDate: string | null;
+  address: string | null;
+  tenants: Array<{ name: string | null; phone: string | null; email: string | null }>;
+  vendors: Array<{ name: string | null; inHouse: boolean }>;
+  approval: { rule: string | null; recordedBy: string | null; summary: string | null } | null;
+  receivedAt: string;
+}
