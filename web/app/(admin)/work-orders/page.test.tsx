@@ -169,9 +169,14 @@ describe('opening a work order', () => {
     expect(within(dialog).getByText('THMP (in-house)')).toBeInTheDocument();
     expect(within(dialog).getByText('Kitchen sink drips under the cabinet')).toBeInTheDocument();
     expect(within(dialog).getByRole('tab', { name: 'Crew visit' })).toBeInTheDocument();
+    // The header answers cost, approval and who is going before any tab is opened.
+    expect(within(dialog).getByText('No approval needed')).toBeInTheDocument();
+    expect(within(dialog).getByText('Moses Rodriguez')).toBeInTheDocument();
 
     fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Estimate' }), { button: 0 });
-    expect(within(dialog).getByText('$180.00')).toBeInTheDocument();
+    // In the header's facts and on the meter against the approval line.
+    expect(within(dialog).getAllByText('$180.00')).toHaveLength(2);
+    expect(within(dialog).getByText('$120.00 under the $300.00 line')).toBeInTheDocument();
     expect(within(dialog).getByText('At or under the approval line — the owner is not asked')).toBeInTheDocument();
 
     fireEvent.mouseDown(within(dialog).getByRole('tab', { name: 'Notes (1)' }), { button: 0 });
