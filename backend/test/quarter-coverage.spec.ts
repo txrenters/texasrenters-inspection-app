@@ -75,6 +75,14 @@ const STOPS = [
   // Booked now, and an old lease's visit still on Jobber's Unscheduled list.
   stop('s-current', 'LEFTOVER', 'PUBLISHED', { inspection: inspection('i-current', 'SCHEDULED', '2026-11-25') }),
   stop('s-leftover', 'LEFTOVER', 'UNSCHEDULED', { leaseActive: false, tenantId: 't-LEFTOVER-old' }),
+  // A new tenant; the old lease's visit still waits for its day on Jobber's Unscheduled list.
+  stop('s-carry', 'CARRY', 'UNSCHEDULED', { leaseActive: false, tenantId: 't-CARRY-old' }),
+  // A new tenant; the old lease's visit is booked.
+  stop('s-booked-old', 'BOOKEDOLD', 'PUBLISHED', {
+    inspection: inspection('i-booked-old', 'SCHEDULED', '2026-11-24'),
+    leaseActive: false,
+    tenantId: 't-BOOKEDOLD-old',
+  }),
   // Out of the package now, still booked.
   stop('s-gone', 'GONE', 'PUBLISHED', { inspection: inspection('i-gone', 'SCHEDULED', '2026-11-25') }),
   // Out of the package, its visit long done: nothing to act on.
@@ -108,7 +116,9 @@ const tenancy = (
 });
 
 const TENANCIES = [
-  ...['REVIEW', 'DONE', 'LATE', 'TODAY', 'NODAY', 'BLOCKED', 'CANCELLED', 'EXCLUDED', 'REBOOKED', 'LEFTOVER'].map((id) => tenancy(id)),
+  ...['REVIEW', 'DONE', 'LATE', 'TODAY', 'NODAY', 'BLOCKED', 'CANCELLED', 'EXCLUDED', 'REBOOKED', 'LEFTOVER', 'CARRY', 'BOOKEDOLD'].map((id) =>
+    tenancy(id),
+  ),
   tenancy('NEWLEASE', { id: 't-NEWLEASE-old', active: false }),
   tenancy('NEWLEASE', { firstSyncedAt: '2026-11-14T08:00:00Z' }),
   // Joined after the quarter was built: in no plan.
@@ -218,6 +228,7 @@ describe('a quarter’s coverage', () => {
       visit: null,
       previousLeaseOpen: 0,
       missingLeases: 1,
+      missingLeaseAction: 'ADD',
     });
     expect(await placeOf('EXCLUDED')).toMatchObject({
       group: 'NONE',
@@ -265,6 +276,28 @@ describe('a quarter’s coverage', () => {
     expect(missing).toMatchObject({ JOINER: 1, UNITS: 2, NEWLEASE: 1, EXCLUDED: 0, REBOOKED: 0, BLOCKED: 0, LEFTOVER: 0 });
   });
 
+  it('says what adding a property would do: add, carry an ended lease’s waiting visit over, or nothing beside one booked', async () => {
+    const coverage = await build().service.coverage(ORG, Q4.id, NOW);
+    const action = Object.fromEntries(coverage.properties.map((property) => [property.buildingId, property.missingLeaseAction]));
+
+    expect(action).toMatchObject({
+      JOINER: 'ADD',
+      UNITS: 'ADD',
+      // Visited for the old lease: a second visit is the office's call.
+      NEWLEASE: 'ADD',
+      CARRY: 'CARRY_OVER',
+      BOOKEDOLD: 'ALREADY_BOOKED',
+      // Every lease has a stop.
+      LEFTOVER: null,
+      EXCLUDED: null,
+    });
+    expect(coverage.properties.find((property) => property.buildingId === 'CARRY')).toMatchObject({
+      group: 'NOT_SCHEDULED',
+      detail: 'NO_DAY',
+      visit: expect.objectContaining({ stopId: 's-carry', previousLease: true }),
+    });
+  });
+
   it('says when an ended lease’s visit is still waiting beside the current one', async () => {
     expect(await placeOf('LEFTOVER')).toMatchObject({
       group: 'SCHEDULED',
@@ -283,8 +316,10 @@ describe('a quarter’s coverage', () => {
       'DONE',
       'LATE',
       'TODAY',
+      'BOOKEDOLD',
       'LEFTOVER',
       'BLOCKED',
+      'CARRY',
       'NODAY',
       'CANCELLED',
       'JOINER',

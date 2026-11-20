@@ -236,6 +236,14 @@ export default function PlanningPage() {
       { planId: plan.id, buildingId },
       {
         onSuccess: (result) => {
+          // Its old lease's visit, moved to the new lease: the same visit in Jobber.
+          if (result.carried.length) {
+            toast.success('Moved to the new lease', {
+              description: 'Give it a day here, then publish the rest: its Jobber visit gets the day and the new lease’s Details.',
+            });
+            setOpenStopId(result.carried[0]!);
+            return;
+          }
           if (!result.added.length) {
             toast.info(`It already has a visit in ${label}.`);
             return;

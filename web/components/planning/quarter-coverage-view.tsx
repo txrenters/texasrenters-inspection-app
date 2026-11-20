@@ -209,7 +209,14 @@ function CoverageRow({
   const facts = [property.city, zoneLabel(property.zone), visitTypeLabel(visit?.inspectionType)].filter(Boolean).join(' · ');
   const notes = extraNotes(property);
   // A visit not yet booked is fixed in its window here; one booked is opened as the inspection.
-  const fixHere = Boolean(visit?.stopId && onOpenStop && (property.group === 'NOT_SCHEDULED' || property.detail === 'EXCLUDED'));
+  // Not one about to move to a new lease: its window would give the old lease's visit a day.
+  const fixHere = Boolean(
+    visit?.stopId &&
+      onOpenStop &&
+      property.missingLeaseAction !== 'CARRY_OVER' &&
+      (property.group === 'NOT_SCHEDULED' || property.detail === 'EXCLUDED'),
+  );
+  const addable = property.missingLeaseAction === 'ADD' || property.missingLeaseAction === 'CARRY_OVER';
 
   return (
     <TableRow>
@@ -230,14 +237,14 @@ function CoverageRow({
         <p className="text-sm">{nextStep(property)}</p>
         {notes.length ? <p className="text-muted-foreground text-xs">{notes.join(' · ')}</p> : null}
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
-          {onAdd && property.missingLeases ? (
+          {onAdd && addable ? (
             <button
               className="text-primary font-medium hover:underline disabled:opacity-60"
               disabled={adding}
               onClick={() => onAdd(property.buildingId)}
               type="button"
             >
-              {adding ? 'Adding…' : `Add to ${quarter}`}
+              {adding ? 'Adding…' : property.missingLeaseAction === 'CARRY_OVER' ? 'Move to the new lease' : `Add to ${quarter}`}
             </button>
           ) : null}
           {fixHere ? (
