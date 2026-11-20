@@ -11,7 +11,8 @@ import type {
   PurchaseOrderDecisionInput,
   PurchaseOrderDetail,
   PurchaseOrderList,
-  PurchasingSettings,
+  DocumentSeriesKind,
+  PurchasingSetup,
   RequisitionChoices,
   RequisitionDecisionInput,
   RequisitionDetail,
@@ -20,7 +21,9 @@ import type {
   ReceiveGoodsInput,
   ReverseReceiptInput,
   SavePurchaseOrderInput,
-  SavePurchasingSettingsInput,
+  SaveDocumentSeriesInput,
+  SavePurchasingApprovalsInput,
+  SaveRequisitionFileRulesInput,
   SaveRequisitionInput,
   SaveVendorBillInput,
   SendPurchaseOrderInput,
@@ -46,7 +49,35 @@ export const purchasingKeys = {
   choices: ['purchasing', 'choices'] as const,
   orders: (show: 'open' | 'closed') => ['purchasing', 'orders', show] as const,
   order: (orderId: string) => ['purchasing', 'order', orderId] as const,
+  setup: ['purchasing', 'setup'] as const,
 };
+
+/** Purchasing Setup (2026-11-20, part 5a): only a system admin or a Purchasing admin reads it. */
+export function usePurchasingSetup(enabled: boolean) {
+  return useQuery({ queryKey: purchasingKeys.setup, queryFn: ({ signal }) => api<PurchasingSetup>(`${BASE}/setup`, { signal }), enabled, ...KEPT });
+}
+
+/**
+ * Each section of Setup saves on its own, as the page saves as it goes. Every
+ * save answers with the whole Setup, kept as it came; the requisitions and
+ * orders, held to it, are read again when next looked at.
+ */
+export function usePurchasingSetupEdits() {
+  const client = useQueryClient();
+  const saved = (setup: PurchasingSetup) => {
+    client.setQueryData(purchasingKeys.setup, setup);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] !== 'setup' });
+  };
+  const put = <Input,>(path: string) => (input: Input) => api<PurchasingSetup>(`${BASE}/setup/${path}`, { method: 'PUT', body: JSON.stringify(input) });
+  return {
+    approvals: useMutation({ mutationFn: put<SavePurchasingApprovalsInput>('approvals'), onSuccess: saved }),
+    files: useMutation({ mutationFn: put<SaveRequisitionFileRulesInput>('files'), onSuccess: saved }),
+    series: useMutation({
+      mutationFn: ({ kind, input }: { kind: DocumentSeriesKind; input: SaveDocumentSeriesInput }) => put<SaveDocumentSeriesInput>(`numbers/${encodeURIComponent(kind)}`)(input),
+      onSuccess: saved,
+    }),
+  };
+}
 
 export function useRequisitions(show: 'open' | 'closed') {
   return useQuery({ queryKey: purchasingKeys.list(show), queryFn: ({ signal }) => api<RequisitionList>(`${BASE}/requisitions?show=${show}`, { signal }), ...KEPT });
@@ -174,10 +205,6 @@ export function usePurchasingEdits() {
       mutationFn: ({ requisitionId, step, input = {} }: { requisitionId: string; step: RequisitionStep; input?: RequisitionDecisionInput }) =>
         api<RequisitionDetail>(`${path(requisitionId)}/${step}`, { method: 'POST', body: JSON.stringify(input) }),
       onSuccess: saved,
-    }),
-    saveSettings: useMutation({
-      mutationFn: (input: SavePurchasingSettingsInput) => api<PurchasingSettings>(`${BASE}/settings`, { method: 'PUT', body: JSON.stringify(input) }),
-      onSuccess: () => client.invalidateQueries({ queryKey: purchasingKeys.all }),
     }),
   };
 }

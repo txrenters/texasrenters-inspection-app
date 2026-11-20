@@ -10,12 +10,13 @@ import { cn } from '@/lib/utils';
  * (2026-11-20): Requisitions marked, Orders and Codes a click away. Codes only
  * for whoever may keep them.
  */
-export function PurchasingTabs({ current }: { current: 'requisitions' | 'orders' | 'codes' }) {
+export function PurchasingTabs({ current }: { current: 'requisitions' | 'orders' | 'codes' | 'setup' }) {
   const { has } = usePermissions();
   const tabs = [
     { key: 'requisitions', label: 'Requisitions' },
     { key: 'orders', label: 'Orders' },
     ...(has('purchasing:codes') ? [{ key: 'codes', label: 'Codes' }] : []),
+    ...(has('purchasing:setup') ? [{ key: 'setup', label: 'Setup' }] : []),
   ] as const;
   return (
     <nav aria-label="Purchasing" className="mb-3 flex gap-6 border-b">

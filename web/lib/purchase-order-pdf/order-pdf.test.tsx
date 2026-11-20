@@ -6,7 +6,7 @@
  * thing the two builds handle differently.
  */
 import { renderToBuffer } from '@react-pdf/renderer';
-import type { PurchaseOrderDetail } from '@texasrenters/shared';
+import { stepsFromLimit, type PurchaseOrderDetail } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
 import { orderFileName } from './download-order';
@@ -48,8 +48,9 @@ const ORDER = {
   bill: null,
   shortCloseReason: null,
   history: [],
-  can: { edit: false, submit: false, approve: false, sendBack: false, send: true, cancel: true, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null },
-  approvalLimitCents: 50000,
+  can: { edit: false, change: false, submit: false, approve: false, sendBack: false, send: true, cancel: true, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null },
+  approvalSteps: stepsFromLimit(50000, 2),
+  reapproveChangedOrders: false,
 } satisfies PurchaseOrderDetail;
 
 describe('a purchase order as a PDF', () => {

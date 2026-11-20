@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
 import { requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
+import { DEFAULT_FILE_RULES, stepsFromLimit } from '../src/contracts/purchasing-setup';
 
 // Purchase requisitions, phase 2 (2026-11-19). Every figure invented.
-const SETTINGS = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
+// The office before Purchasing Setup: $500.00, and two quotes above it, read as two steps.
+const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES };
+const quotesAbove = (quotes: number) => ({ ...SETTINGS, steps: stepsFromLimit(50000, quotes) });
 const line = (quantity: number, estimatedUnitCostCents: number) => ({ quantity, estimatedUnitCostCents });
 const quote = (chosen: boolean) => ({ chosen });
 
@@ -44,11 +47,27 @@ describe('whether it can be submitted', () => {
   it('needs the office\'s number of quotes only above the limit', () => {
     const large = { ...ready, lines: [line(40, 1530)] };
     expect(requisitionSubmitProblem({ ...ready, lines: [line(1, 50000)] }, SETTINGS)).toBeNull();
-    expect(requisitionSubmitProblem(large, SETTINGS)).toBe('Above the approval limit, 2 quotes are needed.');
-    expect(requisitionSubmitProblem({ ...large, quotes: [quote(true)] }, { ...SETTINGS, quotesAboveLimit: 1 })).toBeNull();
-    expect(requisitionSubmitProblem(large, { ...SETTINGS, quotesAboveLimit: 1 })).toBe('Above the approval limit, 1 quote is needed.');
+    expect(requisitionSubmitProblem(large, SETTINGS)).toBe('At this amount, 2 quotes are needed.');
+    expect(requisitionSubmitProblem({ ...large, quotes: [quote(true)] }, quotesAbove(1))).toBeNull();
+    expect(requisitionSubmitProblem(large, quotesAbove(1))).toBe('At this amount, 1 quote is needed.');
     expect(requisitionSubmitProblem({ ...large, quotes: [quote(true), quote(false)] }, SETTINGS)).toBeNull();
-    expect(requisitionSubmitProblem(large, { ...SETTINGS, quotesAboveLimit: 0 })).toBeNull();
+    expect(requisitionSubmitProblem(large, quotesAbove(0))).toBeNull();
+  });
+
+  // Purchasing Setup, 2026-11-20: each step says its own quotes; and above an amount, a file must be attached.
+  it('needs the quotes of the step its amount falls in, and the quote attached above the amount the office set', () => {
+    const steps = [
+      { upToCents: 50000, approver: 'ANY_APPROVER' as const, quotesNeeded: 0, reminderDays: 1 },
+      { upToCents: 500000, approver: 'ANY_APPROVER' as const, quotesNeeded: 1, reminderDays: 1 },
+      { upToCents: null, approver: 'ANY_AMOUNT' as const, quotesNeeded: 2, reminderDays: 2 },
+    ];
+    const settings = { steps, files: { ...DEFAULT_FILE_RULES, quoteFileAboveCents: 50000 } };
+    const middle = { ...ready, lines: [line(10, 10000)] };
+    expect(requisitionSubmitProblem(ready, settings)).toBeNull();
+    expect(requisitionSubmitProblem(middle, settings)).toBe('At this amount, 1 quote is needed.');
+    expect(requisitionSubmitProblem({ ...middle, quotes: [quote(true)] }, settings)).toBe('Above $500.00, attach the quote before sending it.');
+    expect(requisitionSubmitProblem({ ...middle, quotes: [quote(true)], files: [{}] }, settings)).toBeNull();
+    expect(requisitionSubmitProblem({ ...ready, lines: [line(1, 500001)], quotes: [quote(true)], files: [{}] }, settings)).toBe('At this amount, 2 quotes are needed.');
   });
 });
 

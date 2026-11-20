@@ -1,4 +1,4 @@
-import type { RequisitionDetail, RequisitionFile } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, type RequisitionDetail, type RequisitionFile } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,7 +21,8 @@ const file = (n: number, over: Partial<RequisitionFile> = {}): RequisitionFile =
   ...over,
 });
 /** Only what the FactBox reads of a requisition. */
-const requisition = (files: RequisitionFile[], attach = true) => ({ id: 'req-12', files, can: { attach } }) as unknown as RequisitionDetail;
+// The office's rules as they were before Purchasing Setup (2026-11-20): every kind, 20 MB, 20 files.
+const requisition = (files: RequisitionFile[], attach = true) => ({ id: 'req-12', files, can: { attach }, settings: { steps: [], files: DEFAULT_FILE_RULES } }) as unknown as RequisitionDetail;
 const pdf = (name: string, size = 1000) => {
   const chosen = new File(['%PDF-1.7'], name, { type: 'application/pdf' });
   Object.defineProperty(chosen, 'size', { value: size });

@@ -159,6 +159,8 @@ function database() {
     stockPlace: { findFirst: jest.fn(async ({ where }: { where: Where }) => (where.id === STOCKROOM && where.organizationId === ORG ? { id: STOCKROOM } : null)) },
     xeroOrganisation: { findMany: jest.fn(async () => [{ xeroTenantId: 'tenant-thmp', name: 'THMP' }]) },
     purchasingSettings: { findUnique: jest.fn(async () => null) },
+    // No approval steps saved: the office's limit reads as two steps (Purchasing Setup, 2026-11-20).
+    purchasingApprovalStep: { findMany: jest.fn(async () => []) },
     invoiceSettings: { findUnique: jest.fn(async () => ({ companyName: 'Example Office', addressLine1: '1 Example Plaza', addressLine2: 'Testville, TX 77000', phone: null, email: 'office@example.test' })) },
     purchaseOrderDelivery: {
       findMany: jest.fn(async ({ where }: { where: Where }) => deliveries.filter((row) => matches(row, where)).reverse()),
@@ -286,6 +288,55 @@ describe('making an order', () => {
   });
 });
 
+describe('changing an approved order (Purchasing Setup, 2026-11-20)', () => {
+  const office = (reapproveChangedOrders: boolean) => ({
+    approvalLimitCents: 50000,
+    quotesAboveLimit: 2,
+    emailApprovers: false,
+    reapproveChangedOrders,
+    fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'],
+    fileMaxBytes: 20_000_000,
+    filesMax: 20,
+    quoteFileAboveCents: null,
+    fileRemoval: 'UNTIL_SENT',
+  });
+
+  it('stays approved when it only comes down, and goes back for approval when it rises -- never approved by whoever raised it', async () => {
+    const { service, orderId, audits } = await order('approved');
+    expect((await service.detail(buyer, orderId)).can).toMatchObject({ change: true, edit: false });
+    expect((await service.detail(manager, orderId)).can).toMatchObject({ change: false });
+
+    expect(await service.update(buyer, orderId, terms({ lines: [line(FILTER, 30, 390), line(BATTERY, 24, 185)] }))).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Owner' });
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL', metadata: expect.objectContaining({ again: false, note: 'it stays approved' }) });
+
+    const raised = await service.update(everything, orderId, terms({ lines: [line(FILTER, 40, 390), line(BATTERY, 24, 185)] }));
+    expect(raised).toMatchObject({ status: 'AWAITING_APPROVAL', approvedBy: null, number: 'PO-0001' });
+    expect(raised.history[0]).toMatchObject({ by: 'Sample Everything', what: 'changed it after it was approved: it goes back for approval' });
+    expect((await service.detail(everything, orderId)).can).toMatchObject({ approve: false, approveBlocked: 'You changed this order after it was approved, so somebody else approves the change.' });
+    await expect(service.decide(everything, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OVER_LIMIT' });
+    expect(await service.decide(manager, orderId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Manager' });
+  });
+
+  it('goes back for approval with another vendor, and for every change when the office says so', async () => {
+    const vendor = await order('approved');
+    expect(await vendor.service.update(buyer, vendor.orderId, terms({ vendorId: ALAMO, lines: [line(FILTER, 30, 390)] }))).toMatchObject({ status: 'AWAITING_APPROVAL' });
+
+    const every = await order('approved');
+    every.db.purchasingSettings.findUnique.mockResolvedValue(office(true) as never);
+    expect(await every.service.update(buyer, every.orderId, terms({ lines: [line(FILTER, 30, 390)] }))).toMatchObject({ status: 'AWAITING_APPROVAL' });
+  });
+
+  it('sent to the vendor and changed, is to be sent again; and is never changed while it waits', async () => {
+    const sent = await order('approved');
+    sent.orders[0]!.status = 'SENT';
+    expect(await sent.service.update(buyer, sent.orderId, terms({ lines: [line(FILTER, 30, 390)] }))).toMatchObject({ status: 'APPROVED', can: { send: true } });
+    expect(sent.audits.at(-1)).toMatchObject({ metadata: expect.objectContaining({ note: 'it stays approved, to be sent again' }) });
+
+    const waiting = await order('waiting');
+    await expect(waiting.service.update(buyer, waiting.orderId, terms())).rejects.toMatchObject({ code: 'PURCHASE_ORDER_FIXED' });
+  });
+});
+
 describe('approving an order', () => {
   it('is never done by whoever made it, whatever else they may do', async () => {
     const { service, orderId, orders } = await order('waiting', everything);
@@ -309,7 +360,7 @@ describe('approving an order', () => {
     // $499.20 before tax is under the limit; with 8.25% it is $540.38.
     const { service, orderId } = await order('waiting', buyer, terms({ lines: [line(FILTER, 128, 390)] }));
 
-    expect((await service.detail(manager, orderId)).can).toMatchObject({ approve: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.' });
+    expect((await service.detail(manager, orderId)).can).toMatchObject({ approve: false, approveBlocked: 'At $540.38 it needs somebody who may approve any amount.' });
     await expect(service.decide(manager, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OVER_LIMIT' });
     expect(await service.decide(owner, orderId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', totalCents: 54038 });
   });

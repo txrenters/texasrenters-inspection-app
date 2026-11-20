@@ -1,9 +1,9 @@
 import { PurchaseRequisitionStatus as Status, type Prisma } from '@prisma/client';
 import {
-  EDITABLE_REQUISITION_STATUSES,
   REQUISITION_FILE_TYPES,
   requisitionerCode,
   type RequisitionFile,
+  type FileRemoval,
   type RequisitionFileType,
 } from '@texasrenters/shared';
 
@@ -19,8 +19,14 @@ type Db = Prisma.TransactionClient;
 
 /** A file can be attached, and ticked for the vendor, until the requisition is finished with. */
 export const ATTACHABLE: readonly Status[] = [Status.DRAFT, Status.SUBMITTED, Status.SENT_BACK, Status.APPROVED, Status.ORDERED];
-/** Whoever attached a file may take it off while the requisition is still being written; once sent, it stays on the record. */
-export const FILES_REMOVABLE = EDITABLE_REQUISITION_STATUSES as readonly Status[];
+/**
+ * Whoever attached a file may take it off while the requisition is still being
+ * written -- or, if the office says so in Purchasing Setup (2026-11-20), until
+ * it is ordered. After that it stays on the record.
+ */
+export function filesRemovable(removal: FileRemoval): readonly Status[] {
+  return removal === 'UNTIL_ORDERED' ? [Status.DRAFT, Status.SUBMITTED, Status.SENT_BACK, Status.APPROVED] : [Status.DRAFT, Status.SENT_BACK];
+}
 
 const FILE = {
   id: true,
@@ -34,12 +40,16 @@ const FILE = {
 } satisfies Prisma.PurchaseRequisitionFileSelect;
 
 /** A requisition's files, oldest first, with what the caller may do to each. */
-export async function requisitionFiles(db: Pick<Db, 'purchaseRequisitionFile'>, user: AuthenticatedUser, requisition: { id: string; status: Status }): Promise<RequisitionFile[]> {
-  const rows = await db.purchaseRequisitionFile.findMany({
-    where: { organizationId: user.organizationId, requisitionId: requisition.id },
-    select: FILE,
-    orderBy: [{ attachedAt: 'asc' }, { id: 'asc' }],
-  });
+export async function requisitionFiles(db: Pick<Db, 'purchaseRequisitionFile' | 'purchasingSettings'>, user: AuthenticatedUser, requisition: { id: string; status: Status }): Promise<RequisitionFile[]> {
+  const [rows, rules] = await Promise.all([
+    db.purchaseRequisitionFile.findMany({
+      where: { organizationId: user.organizationId, requisitionId: requisition.id },
+      select: FILE,
+      orderBy: [{ attachedAt: 'asc' }, { id: 'asc' }],
+    }),
+    db.purchasingSettings.findUnique({ where: { organizationId: user.organizationId }, select: { fileRemoval: true } }),
+  ]);
+  const removable = filesRemovable(rules?.fileRemoval === 'UNTIL_ORDERED' ? 'UNTIL_ORDERED' : 'UNTIL_SENT');
   return rows.map((row) => ({
     id: row.id,
     fileName: row.fileName,
@@ -48,7 +58,7 @@ export async function requisitionFiles(db: Pick<Db, 'purchaseRequisitionFile'>, 
     attachedBy: { id: row.attachedById, name: row.attachedBy.displayName, code: requisitionerCode(row.attachedBy.displayName) },
     attachedAt: row.attachedAt.toISOString(),
     forVendor: row.forVendor,
-    canRemove: row.attachedById === user.id && FILES_REMOVABLE.includes(requisition.status),
+    canRemove: row.attachedById === user.id && removable.includes(requisition.status),
   }));
 }
 

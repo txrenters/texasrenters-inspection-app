@@ -5,7 +5,11 @@ import {
   VENDOR_FILES_MAX_BYTES,
   formatFileSize,
   formatMoney,
+  approvalStepFor,
+  approvalStepRange,
+  approverSaying,
   formatTaxRate,
+  orderChangeNeedsApproval,
   orderSubmitProblem,
   orderTotals,
   parseMoney,
@@ -84,7 +88,9 @@ const LINE_COLUMNS: Array<Column<PurchaseOrderLine>> = [
 export default function PurchaseOrderPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const order = usePurchaseOrder(orderId);
-  const editing = Boolean(order.data?.can.edit);
+  // An approved order opened for a change (Purchasing Setup, 2026-11-20); a draft is always open.
+  const [changing, setChanging] = useState(false);
+  const editing = Boolean(order.data?.can.edit) || (changing && Boolean(order.data?.can.change));
   const choices = useRequisitionChoices(editing);
   const edits = usePurchaseOrderEdits();
 
@@ -133,15 +139,17 @@ export default function PurchaseOrderPage() {
           choices={choices.data}
           error={edits.update.error ?? edits.step.error}
           key={data.id}
+          onCancelChange={data.can.edit ? undefined : () => setChanging(false)}
           onSave={async (input, submit) => {
             await edits.update.mutateAsync({ orderId, input });
             if (submit) await edits.step.mutateAsync({ orderId, step: 'submit' });
+            setChanging(false);
           }}
           order={data}
           pending={edits.update.isPending || edits.step.isPending}
         />
       ) : (
-        <OrderView data={data} />
+        <OrderView data={data} onChange={data.can.change ? () => setChanging(true) : undefined} />
       )}
     </>
   );
@@ -160,15 +168,19 @@ function OrderForm({
   order,
   choices,
   onSave,
+  onCancelChange,
   pending,
   error,
 }: {
   order: PurchaseOrderDetail;
   choices: RequisitionChoices;
   onSave: (input: SavePurchaseOrderInput, submit: boolean) => Promise<unknown>;
+  /** Set while an approved order is being changed: leaves it as it was. */
+  onCancelChange?: () => void;
   pending: boolean;
   error: Error | null;
 }) {
+  const changing = Boolean(onCancelChange);
   const [vendor, setVendor] = useState(order.vendor?.id ?? NONE);
   const [place, setPlace] = useState(order.deliverTo?.id ?? NONE);
   const [expectedOn, setExpectedOn] = useState(order.expectedOn ?? '');
@@ -333,13 +345,18 @@ function OrderForm({
       </div>
 
       <aside className="grid gap-4">
-        <AsideCard title="Before you submit">
+        <AsideCard title={changing ? 'Changing an approved order' : 'Before you submit'}>
           <Totals subtotalCents={totals.subtotalCents} taxBasisPoints={input.taxBasisPoints} taxCents={totals.taxCents} totalCents={totals.totalCents} />
           <p className="text-muted-foreground mt-3 text-xs">
-            {totals.totalCents > order.approvalLimitCents
-              ? `Above the ${formatMoney(order.approvalLimitCents)} approval limit: it needs somebody who may approve any amount.`
-              : `Within the ${formatMoney(order.approvalLimitCents)} approval limit.`}{' '}
-            You made it, so somebody else approves it.
+            {changing
+              ? orderChangeNeedsApproval(
+                  { totalCents: order.totalCents, itemIds: order.lines.map((line) => line.item.id), vendorId: order.vendor?.id ?? null },
+                  { totalCents: totals.totalCents, itemIds: input.lines.map((line) => line.itemId), vendorId: input.vendorId },
+                  order.reapproveChangedOrders,
+                )
+                ? `This change goes back for approval: ${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps)).toLowerCase()} approves it again.`
+                : `This change stays approved${order.status === 'SENT' ? ', and the order is to be sent to the vendor again' : ''}.`
+              : `${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps))} approves it at this amount. You made it, so somebody else approves it.`}
           </p>
           {problem ? (
             <p className="text-warning mt-3 text-xs font-medium" role="status">
@@ -351,15 +368,27 @@ function OrderForm({
               <AlertDescription>{error.message}</AlertDescription>
             </Alert>
           ) : null}
-          <div className="mt-4 grid gap-2">
-            <Button disabled={pending || Boolean(problem)} onClick={() => save(true)} type="button">
-              {pending ? <Spinner /> : null}
-              Submit for approval
-            </Button>
-            <Button disabled={pending || !complete} onClick={() => save(false)} type="button" variant="outline">
-              Save the draft
-            </Button>
-          </div>
+          {changing ? (
+            <div className="mt-4 grid gap-2">
+              <Button disabled={pending || Boolean(problem)} onClick={() => save(false)} type="button">
+                {pending ? <Spinner /> : null}
+                Save the change
+              </Button>
+              <Button disabled={pending} onClick={onCancelChange} type="button" variant="outline">
+                Keep it as it was
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-2">
+              <Button disabled={pending || Boolean(problem)} onClick={() => save(true)} type="button">
+                {pending ? <Spinner /> : null}
+                Submit for approval
+              </Button>
+              <Button disabled={pending || !complete} onClick={() => save(false)} type="button" variant="outline">
+                Save the draft
+              </Button>
+            </div>
+          )}
         </AsideCard>
         <OrderAside data={order} />
       </aside>
@@ -382,7 +411,7 @@ function Totals({ subtotalCents, taxCents, taxBasisPoints, totalCents }: { subto
 
 // ── The order as it stands ────────────────────────────────────────────────
 
-function OrderView({ data }: { data: PurchaseOrderDetail }) {
+function OrderView({ data, onChange }: { data: PurchaseOrderDetail; onChange?: () => void }) {
   const edits = usePurchaseOrderEdits();
   const [note, setNote] = useState('');
   const [downloading, setDownloading] = useState(false);
@@ -441,7 +470,8 @@ function OrderView({ data }: { data: PurchaseOrderDetail }) {
         {deciding ? (
           <AsideCard title="Your decision">
             <p className="text-muted-foreground text-xs">
-              {data.can.approveBlocked ?? `${formatMoney(data.totalCents)} against a ${formatMoney(data.approvalLimitCents)} approval limit. Approving lets it be sent to the vendor.`}
+              {data.can.approveBlocked ??
+                `${formatMoney(data.totalCents)}, in the ${approvalStepRange(data.approvalSteps, data.approvalSteps.indexOf(approvalStepFor(data.totalCents, data.approvalSteps)))} step. Approving lets it be sent to the vendor.`}
             </p>
             {data.can.sendBack ? (
               <Field className="mt-3">
@@ -469,14 +499,14 @@ function OrderView({ data }: { data: PurchaseOrderDetail }) {
             </div>
           </AsideCard>
         ) : null}
-        <OrderAside data={data} />
+        <OrderAside data={data} onChange={onChange} />
       </aside>
     </div>
   );
 }
 
 /** What both the form and the view show beside the order: its details, the emails sent, its history, and send and cancel. */
-function OrderAside({ data }: { data: PurchaseOrderDetail }) {
+function OrderAside({ data, onChange }: { data: PurchaseOrderDetail; onChange?: () => void }) {
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   return (
@@ -493,9 +523,14 @@ function OrderAside({ data }: { data: PurchaseOrderDetail }) {
           ]}
           label="Order details"
         />
-        {data.can.send || data.can.cancel ? (
+        {data.can.send || data.can.cancel || onChange ? (
           <div className="mt-4 grid gap-2">
             {data.can.send ? <Button onClick={() => setSending(true)}>{data.status === 'SENT' ? 'Email the vendor again' : 'Send to the vendor'}</Button> : null}
+            {onChange ? (
+              <Button onClick={onChange} variant="outline">
+                Change the order
+              </Button>
+            ) : null}
             {data.can.cancel ? (
               <Button className="text-destructive" onClick={() => setCancelling(true)} variant="outline">
                 Cancel this order

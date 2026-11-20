@@ -1,4 +1,4 @@
-import type { PurchaseOrderDetail, VendorBillView } from '@texasrenters/shared';
+import { stepsFromLimit, type PurchaseOrderDetail, type VendorBillView } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,7 +10,7 @@ const mutation = () => ({ mutateAsync: vi.fn(async () => ({})), isPending: false
 const hooks = vi.hoisted(() => ({ usePurchaseReceivingEdits: vi.fn(), useRequisitionChoices: vi.fn() }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 
-const NOTHING = { edit: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
+const NOTHING = { edit: false, change: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
 const order = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => ({
   id: 'order-9',
   number: 'PO-0009',
@@ -49,7 +49,8 @@ const order = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => 
   shortCloseReason: null,
   history: [],
   can: NOTHING,
-  approvalLimitCents: 50000,
+  approvalSteps: stepsFromLimit(50000, 2),
+  reapproveChangedOrders: false,
   ...over,
 });
 const bill = (over: Partial<VendorBillView> = {}): VendorBillView => ({

@@ -1,9 +1,8 @@
 'use client';
 
 import {
-  REQUISITION_FILES_MAX,
-  REQUISITION_FILE_ACCEPT,
-  REQUISITION_FILE_MAX_BYTES,
+  fileGroupsAccept,
+  fileGroupsSaying,
   REQUISITION_FILE_TYPES,
   VENDOR_FILES_MAX_BYTES,
   formatFileSize,
@@ -44,6 +43,8 @@ export function AttachmentsFactBox({ requisition }: { requisition?: RequisitionD
 
 function Attachments({ requisition }: { requisition: RequisitionDetail }) {
   const { attach, setForVendor, remove } = useRequisitionFiles(requisition.id);
+  // The office's rules (Purchasing Setup, 2026-11-20); the server checks them again.
+  const rules = requisition.settings.files;
   const chooser = useRef<HTMLInputElement>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [sending, setSending] = useState<{ name: string; index: number; count: number; fraction: number } | null>(null);
@@ -56,18 +57,18 @@ function Attachments({ requisition }: { requisition: RequisitionDetail }) {
   async function add(chosen: File[]) {
     setProblem(null);
     if (!chosen.length) return;
-    const room = REQUISITION_FILES_MAX - files.length;
+    const room = rules.maxFiles - files.length;
     if (chosen.length > room) {
       setProblem(
         room > 0
-          ? `Only ${room} more ${room === 1 ? 'file fits' : 'files fit'}: a requisition holds at most ${REQUISITION_FILES_MAX}.`
-          : `A requisition holds at most ${REQUISITION_FILES_MAX} files. Take one off first.`,
+          ? `Only ${room} more ${room === 1 ? 'file fits' : 'files fit'}: a requisition holds at most ${rules.maxFiles}.`
+          : `A requisition holds at most ${rules.maxFiles} files. Take one off first.`,
       );
       return;
     }
-    const tooBig = chosen.find((file) => file.size > REQUISITION_FILE_MAX_BYTES);
+    const tooBig = chosen.find((file) => file.size > rules.maxBytes);
     if (tooBig) {
-      setProblem(`${tooBig.name} is ${formatFileSize(tooBig.size)}; a file is at most ${formatFileSize(REQUISITION_FILE_MAX_BYTES)}.`);
+      setProblem(`${tooBig.name} is ${formatFileSize(tooBig.size)}; a file is at most ${formatFileSize(rules.maxBytes)}.`);
       return;
     }
     for (const [index, file] of chosen.entries()) {
@@ -168,7 +169,7 @@ function Attachments({ requisition }: { requisition: RequisitionDetail }) {
             Attach&hellip;
           </Button>
           <input
-            accept={REQUISITION_FILE_ACCEPT}
+            accept={fileGroupsAccept(rules.groups)}
             aria-label="Choose files to attach"
             className="sr-only"
             multiple
@@ -181,7 +182,7 @@ function Attachments({ requisition }: { requisition: RequisitionDetail }) {
             tabIndex={-1}
             type="file"
           />
-          <p className="text-muted-foreground text-[11px]">PDF, pictures, Word, Excel · up to {formatFileSize(REQUISITION_FILE_MAX_BYTES)} each</p>
+          <p className="text-muted-foreground text-[11px]">{fileGroupsSaying(rules.groups)} · up to {formatFileSize(rules.maxBytes)} each</p>
         </div>
       ) : (
         <p className="text-muted-foreground mt-2 text-xs">This requisition is finished with, so nothing more is attached to it.</p>

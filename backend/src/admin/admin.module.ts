@@ -52,6 +52,10 @@ import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { PurchasingCodesController } from './purchasing-codes.controller';
 import { PurchasingCodesService } from './purchasing-codes.service';
+import { PurchasingSetupController } from './purchasing-setup.controller';
+import { PurchasingSetupService } from './purchasing-setup.service';
+import { RequisitionApproversService } from './requisition-approvers';
+import { RequisitionRemindersScheduler } from './requisition-reminders.scheduler';
 import { StockCountsController } from './stock-counts.controller';
 import { VendorBillsXeroController } from './vendor-bills-xero.controller';
 import { VendorBillsXeroService } from './vendor-bills-xero.service';
@@ -131,6 +135,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     StockSlipsController,
     StockCountsController,
     PurchasingCodesController,
+    PurchasingSetupController,
     InventoryMonitoringController,
     VendorBillsXeroController,
     InventoryController,
@@ -190,6 +195,9 @@ import { TechnicianSkillsService } from './technician-skills.service';
     StockSlipsService,
     StockCountsService,
     PurchasingCodesService,
+    PurchasingSetupService,
+    RequisitionApproversService,
+    RequisitionRemindersScheduler,
     InventoryMonitoringService,
     VendorBillsXeroService,
     PurchasingService,

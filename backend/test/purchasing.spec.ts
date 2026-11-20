@@ -1,8 +1,9 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { MACHINE_FORBIDDEN_PERMISSIONS, type RequisitionDecisionInput, type SavePurchasingSettingsInput, type SaveRequisitionInput } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, MACHINE_FORBIDDEN_PERMISSIONS, stepsFromLimit, type RequisitionDecisionInput, type SaveRequisitionInput } from '@texasrenters/shared';
 
-import { AddRequisitionLinkDto, PurchasingController, RequisitionDecisionDto, SavePurchasingSettingsDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
+import { AddRequisitionLinkDto, PurchasingController, RequisitionDecisionDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
+import { PurchasingSetupService } from '../src/admin/purchasing-setup.service';
 import { PurchasingService } from '../src/admin/purchasing.service';
 import { sniffRequisitionFile } from '../src/admin/requisition-files';
 import { RequisitionFilesService } from '../src/admin/requisition-files.service';
@@ -87,6 +88,8 @@ function database() {
   const quotes: Row[] = [];
   const audits: Row[] = [];
   const settings: Row[] = [];
+  /** Approval steps saved in Purchasing Setup (2026-11-20): none until a test saves some. */
+  const steps: Row[] = [];
   /** Files attached (2026-11-20). */
   const files: Row[] = [];
   /** Notes, comments and links (2026-11-20). */
@@ -117,6 +120,7 @@ function database() {
         department: codes.find((code) => code.id === line.departmentId) ?? null,
       })),
     quotes: quotes.filter((quote) => quote.requisitionId === requisition.id).map((quote) => ({ ...quote, vendor: vendors.find((vendor) => vendor.id === quote.vendorId) })),
+    files: files.filter((file) => file.requisitionId === requisition.id),
   });
 
   const db = {
@@ -186,8 +190,18 @@ function database() {
       upsert: jest.fn(async ({ create, update }: { create: Row; update: Row }) => {
         const found = settings.find((row) => row.organizationId === create.organizationId);
         if (found) Object.assign(found, update);
-        else settings.push({ ...create });
+        // The columns' own defaults, as the migration gives them.
+        else settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', ...create });
       }),
+    },
+    // Setup's numbers, read back after a save: none changed here.
+    documentSeries: { findMany: jest.fn(async () => []) },
+    purchasingApprovalStep: {
+      findMany: jest.fn(async ({ where }: { where: Where }) => steps.filter((row) => matches(row, where)).sort((a, b) => (a.position as number) - (b.position as number))),
+      deleteMany: jest.fn(async ({ where }: { where: Where }) => {
+        for (let index = steps.length - 1; index >= 0; index -= 1) if (matches(steps[index]!, where)) steps.splice(index, 1);
+      }),
+      createMany: jest.fn(async ({ data }: { data: Row[] }) => steps.push(...data)),
     },
     purchaseRequisitionFile: {
       findMany: jest.fn(async ({ where }: { where: Where }) =>
@@ -258,8 +272,10 @@ function database() {
     signedUrl: jest.fn(async (key: string, _seconds: number, disposition: string): Promise<string | null> => `https://files.example/${key}?disposition=${encodeURIComponent(disposition)}`),
     durable: jest.fn(() => true),
   };
-  const service = new PurchasingService(db as never);
-  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
+  // The approvers are asked by email after a submit (2026-11-20): counted here, sent nowhere.
+  const approvers = { ask: jest.fn(async () => 0) };
+  const service = new PurchasingService(db as never, approvers as never);
+  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, approvers, steps, setup: new PurchasingSetupService(db as never), filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -387,7 +403,7 @@ describe('a requisition', () => {
   it('above the limit needs its quotes, with one chosen', async () => {
     const { service } = database();
     const none = await service.create(asker, large({ quotes: [] }));
-    await expect(service.submit(asker, none.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Above the approval limit, 2 quotes are needed.' });
+    await expect(service.submit(asker, none.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'At this amount, 2 quotes are needed.' });
 
     const unchosen = await service.create(asker, large({ quotes: [{ vendorId: HILL, totalCents: 61200, delivery: null, chosen: false }, { vendorId: ALAMO, totalCents: 64000, delivery: null, chosen: false }] }));
     await expect(service.submit(asker, unchosen.id)).rejects.toMatchObject({ message: 'Mark one quote as the chosen one.' });
@@ -458,7 +474,7 @@ describe('deciding a requisition', () => {
     expect((await service.detail(manager, requisitionId)).can).toMatchObject({
       approve: false,
       sendBack: true,
-      approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.',
+      approveBlocked: 'At $612.00 it needs somebody who may approve any amount.',
     });
     await expect(service.decide(manager, requisitionId, 'APPROVED', {})).rejects.toMatchObject({ code: 'REQUISITION_OVER_LIMIT' });
     expect(await service.decide(owner, requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', decidedBy: 'Sample Owner' });
@@ -487,24 +503,31 @@ describe('deciding a requisition', () => {
   });
 });
 
-describe('the limits and the form\'s choices', () => {
-  it('start at $500.00 and two quotes, and are changed with an audit entry', async () => {
-    const { service, audits } = database();
-    expect((await service.list(asker)).settings).toEqual({ approvalLimitCents: 50000, quotesAboveLimit: 2 });
-
-    expect(await service.saveSettings(owner, { approvalLimitCents: 100000, quotesAboveLimit: 3 })).toEqual({ approvalLimitCents: 100000, quotesAboveLimit: 3 });
-    expect(audits).toEqual([expect.objectContaining({ action: 'PURCHASING_SETTINGS_CHANGED', actorUserId: owner.id, metadata: { from: { approvalLimitCents: 50000, quotesAboveLimit: 2 }, to: { approvalLimitCents: 100000, quotesAboveLimit: 3 } } })]);
-
-    await service.saveSettings(owner, { approvalLimitCents: 100000, quotesAboveLimit: 3 });
-    expect(audits).toHaveLength(1);
+describe('the approval steps and the form\'s choices', () => {
+  it('start as $500.00 and two quotes above it, every kind of file, until Setup changes them', async () => {
+    const { service } = database();
+    expect((await service.list(asker)).settings).toEqual({ steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES });
   });
 
-  it('move what a manager may approve', async () => {
-    const { service } = database();
+  // Purchasing Setup, 2026-11-20: the steps replace the one limit.
+  it('move what a manager may approve, by the step its amount falls in', async () => {
+    const { service, setup } = database();
     const draft = await service.create(asker, large());
-    await service.saveSettings(owner, { approvalLimitCents: 100000, quotesAboveLimit: 2 });
+    await setup.saveApprovals(owner, { steps: [{ ...stepsFromLimit(100000, 2)[0]!, quotesNeeded: 0 }, stepsFromLimit(100000, 2)[1]!], emailApprovers: false, reapproveChangedOrders: false });
     await service.submit(asker, draft.id);
     expect(await service.decide(manager, draft.id, 'APPROVED', {})).toMatchObject({ status: 'APPROVED' });
+  });
+
+  it('ask the approvers after it is sent, and refuse it above the office\'s amount until the quote is attached', async () => {
+    const { service, setup, approvers, files } = database();
+    const draft = await service.create(asker, small());
+    await setup.saveFiles(owner, { ...DEFAULT_FILE_RULES, quoteFileAboveCents: 10000 });
+    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Above $100.00, attach the quote before sending it.' });
+    expect(approvers.ask).not.toHaveBeenCalled();
+
+    files.push({ id: id(70), organizationId: ORG, requisitionId: draft.id, fileName: 'quote.pdf', contentType: 'application/pdf', sizeBytes: 900, forVendor: false, attachedById: asker.id, attachedAt: new Date() });
+    await service.submit(asker, draft.id);
+    expect(approvers.ask).toHaveBeenCalledWith(ORG, draft.id);
   });
 
   it('offer the items in use with what is on hand and what one cost', async () => {
@@ -547,13 +570,11 @@ describe('the requests the page sends', () => {
       lines: [{ ...line(ALARM, 40, 1530), description: 'Smoke alarm', placeId: STOCKROOM, expectedOn: '2026-11-26', vendorId: HILL, departmentId: id(53), notes: 'Back door' }],
     };
     const decision: Required<RequisitionDecisionInput> = { note: 'Which model?' };
-    const limits: Required<SavePurchasingSettingsInput> = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
 
     await expect(check(requisition, SaveRequisitionDto)).resolves.toBeDefined();
     await expect(check(small({ xeroTenantId: null, neededBy: null, deliverToPlaceId: null }), SaveRequisitionDto)).resolves.toBeDefined();
     await expect(check(decision, RequisitionDecisionDto)).resolves.toBeDefined();
     await expect(check({}, RequisitionDecisionDto)).resolves.toBeDefined();
-    await expect(check(limits, SavePurchasingSettingsDto)).resolves.toBeDefined();
   });
 
   it('refuse a line that asks in words for something with no item code', async () => {
@@ -571,17 +592,15 @@ describe('the requests the page sends', () => {
     await expect(check(small({ lines: [line(FILTER, 0, 390)] }), SaveRequisitionDto)).rejects.toBeDefined();
     await expect(check(small({ lines: [line(FILTER, 1.5, 390)] }), SaveRequisitionDto)).rejects.toBeDefined();
     await expect(check(small({ lines: [{ ...line(FILTER, 1, 390), approved: true } as never] }), SaveRequisitionDto)).rejects.toBeDefined();
-    await expect(check({ approvalLimitCents: -1, quotesAboveLimit: 2 }, SavePurchasingSettingsDto)).rejects.toBeDefined();
   });
 });
 
 describe('who may do what', () => {
   const permissionsOf = (name: string) => Reflect.getMetadata('permissions', (PurchasingController.prototype as unknown as Record<string, object>)[name]!) as string[];
 
-  it('opens Purchasing with purchasing:request, decides with purchasing:approve, and sets the limits with approve-any', () => {
+  it('opens Purchasing with purchasing:request and decides with purchasing:approve', () => {
     for (const own of ['list', 'choices', 'create', 'detail', 'update', 'submit', 'cancel']) expect(permissionsOf(own)).toEqual(['purchasing:request']);
     for (const decision of ['approve', 'sendBack', 'reject']) expect(permissionsOf(decision)).toEqual(['purchasing:request', 'purchasing:approve']);
-    expect(permissionsOf('saveSettings')).toEqual(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
   });
 
   it('never lets an API key ask for or approve a purchase', () => {
@@ -668,6 +687,27 @@ describe('files on a requisition (2026-11-20, part 3)', () => {
     for (let n = 0; n < 20; n += 1)
       files.push({ id: id(700 + n), organizationId: ORG, requisitionId: draft.id, fileName: `${n}.pdf`, contentType: 'application/pdf', sizeBytes: 10, storageKey: `k${n}`, forVendor: false, attachedById: asker.id, attachedAt: new Date() });
     await expect(filesService.attach(asker, draft.id, upload(PDF))).rejects.toMatchObject({ code: 'REQUISITION_FILES_FULL', message: 'A requisition holds at most 20 files. Take one off first.' });
+  });
+
+  // Purchasing Setup, 2026-11-20: the office says which kinds, how large, how many, and who may take one off until when.
+  it('is held to the rules the office set: its kinds, its largest file, its count, and who may take one off until when', async () => {
+    const { service, filesService, setup, files } = database();
+    const draft = await service.create(asker, small());
+    await setup.saveFiles(owner, { groups: ['PDF', 'WORD'], maxBytes: 5_000_000, maxFiles: 2, quoteFileAboveCents: null, removal: 'UNTIL_ORDERED' });
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+    await expect(filesService.attach(asker, draft.id, upload(png, 'shelf.png'))).rejects.toMatchObject({ code: 'REQUISITION_FILE_INVALID', message: 'Attach PDF or Word.' });
+    await expect(filesService.attach(asker, draft.id, { ...upload(PDF), size: 5_000_001 })).rejects.toMatchObject({ code: 'REQUISITION_FILE_TOO_BIG', message: 'A file is at most 5 MB; this one is 19 B.' });
+    await filesService.attach(asker, draft.id, upload(PDF));
+    await filesService.attach(asker, draft.id, upload(PDF, 'second.pdf'));
+    await expect(filesService.attach(asker, draft.id, upload(PDF, 'third.pdf'))).rejects.toMatchObject({ code: 'REQUISITION_FILES_FULL', message: 'A requisition holds at most 2 files. Take one off first.' });
+
+    // Until it is ordered: still taken off once it is sent for approval.
+    await service.submit(asker, draft.id);
+    const sent = await service.detail(asker, draft.id);
+    expect(sent.files.map((file) => file.canRemove)).toEqual([true, true]);
+    await filesService.remove(asker, draft.id, sent.files[0]!.id);
+    expect(files).toHaveLength(1);
   });
 
   it('takes the stored copy away again when the row cannot be written', async () => {

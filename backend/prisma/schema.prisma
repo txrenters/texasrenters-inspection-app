@@ -418,6 +418,7 @@ model Organization {
   stockCategories StockCategory[]
   documentSeries DocumentSeries[]
   purchasingSettings PurchasingSettings?
+  purchasingApprovalSteps PurchasingApprovalStep[]
   purchasingCodes      PurchasingCode[]
   purchasingCodeXeroOptions PurchasingCodeXeroOption[]
   purchaseRequisitions PurchaseRequisition[]
@@ -5929,6 +5930,9 @@ model DocumentSeries {
   organizationId String @db.Uuid
   kind           String
   next           Int    @default(1)
+  /// Purchasing Setup (2026-11-20): what its numbers start with and how many digits; null writes them as before.
+  prefix         String?
+  digits         Int?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -5942,9 +5946,38 @@ model PurchasingSettings {
   approvalLimitCents Int      @default(50000)
   /// Quotes a requisition above the limit needs before it is submitted.
   quotesAboveLimit   Int      @default(2)
+  /// Purchasing Setup (2026-11-20). Email the approvers when a requisition is sent for approval.
+  emailApprovers         Boolean  @default(false)
+  /// Every change to an approved order goes back for approval; off, only one that raises it or adds a line.
+  reapproveChangedOrders Boolean  @default(false)
+  /// Files on a requisition: the kinds allowed (PDF, PICTURES, WORD, EXCEL), the largest, how many, when a quote must be attached, who may remove one.
+  fileGroups             String[] @default(["PDF", "PICTURES", "WORD", "EXCEL"])
+  fileMaxBytes           Int      @default(20000000)
+  filesMax               Int      @default(20)
+  quoteFileAboveCents    Int?
+  fileRemoval            String   @default("UNTIL_SENT")
   updatedAt          DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// One approval step by amount (Purchasing Setup, 2026-11-20). With none saved,
+/// the office's limit and quotes above it read as two steps.
+model PurchasingApprovalStep {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  position       Int
+  /// Its top, inclusive; null on the last step.
+  upToCents      Int?
+  /// ANY_APPROVER or ANY_AMOUNT.
+  approver       String
+  quotesNeeded   Int     @default(0)
+  /// Days before the approvers are reminded, once; null for none.
+  reminderDays   Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, position])
 }
 
 /// Somebody asks for stock and says why; somebody else decides. It moves no
@@ -5969,6 +6002,9 @@ model PurchaseRequisition {
   reason           String
   requestedById    String                    @db.Uuid
   submittedAt      DateTime?
+  /// When it was last sent for approval, and when its approvers were reminded: once (Purchasing Setup, 2026-11-20).
+  approvalRequestedAt DateTime?
+  approvalRemindedAt  DateTime?
   /// Who approved, sent back or rejected it, when, and their note.
   decidedById      String?                   @db.Uuid
   decidedAt        DateTime?

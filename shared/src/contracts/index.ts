@@ -129,6 +129,7 @@ export * from './receiving.js';
 export * from './stock-slips.js';
 export * from './stock-counts.js';
 export * from './purchasing-codes.js';
+export * from './purchasing-setup.js';
 export * from './phone-counts.js';
 export * from './inventory-monitoring.js';
 export * from './vendor-bills-xero.js';

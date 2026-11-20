@@ -48,6 +48,7 @@ export const PERMISSION_KEYS = [
   'purchasing:receive',
   'purchasing:bills',
   'purchasing:codes',
+  'purchasing:setup',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -336,7 +337,7 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
       {
         key: 'purchasing:approve-any',
         label: 'Approve any amount',
-        description: 'Approve a requisition above the approval limit, and set that limit and how many quotes it asks for. With "Approve requisitions".',
+        description: 'Approve a requisition or order in an approval step that needs somebody who may approve any amount. With "Approve requisitions".',
       },
       {
         key: 'purchasing:order',
@@ -360,6 +361,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         label: 'Manage purchasing codes',
         description:
           "Make and change the codes a requisition picks from: line types, request codes, department and cost center codes and their Xero tracking, and each company's purchaser code.",
+      },
+      {
+        key: 'purchasing:setup',
+        label: 'Purchasing admin',
+        description:
+          'Open Purchasing Setup and change it: the approval steps by amount, the approver emails and reminders, document numbers and the rules for files on a requisition. Every change is audited.',
       },
     ],
   },
@@ -470,6 +477,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'purchasing:bills',
   // The lists a requisition is coded with: changed by a person at the screen.
   'purchasing:codes',
+  'purchasing:setup',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);
