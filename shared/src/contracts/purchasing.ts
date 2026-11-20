@@ -20,20 +20,59 @@ import { approvalStepFor, type ApprovalStep, type RequisitionFileRules } from '.
 export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
 export type RequisitionStatus = (typeof REQUISITION_STATUSES)[number];
 
-/** As the office reads them. */
+/** As the office reads them, in NAV's words (2026-11-21). Where its orders are known, `requisitionStage` says more. */
 export const REQUISITION_STATUS_LABEL: Record<RequisitionStatus, string> = {
-  DRAFT: 'Draft',
-  SUBMITTED: 'Waiting for approval',
-  SENT_BACK: 'Sent back',
-  APPROVED: 'Approved',
+  DRAFT: 'Open',
+  SUBMITTED: 'Pending Approval',
+  SENT_BACK: 'Sent Back',
+  APPROVED: 'Pending Processing',
   ORDERED: 'Ordered',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled',
-  CLOSED: 'Received and paid',
+  CLOSED: 'Closed',
 };
 
-/** Still being worked on by somebody: the list's "open". */
-export const OPEN_REQUISITION_STATUSES: readonly RequisitionStatus[] = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED'];
+/**
+ * Where a requisition is, as NAV says it (the office, 2026-11-21), read from
+ * its own status and its orders':
+ *   Open -> Pending Approval (its department's approver) -> Pending Processing
+ *   (a purchaser makes the order) -> Pending Order (the order waits for the
+ *   purchasing manager, or to be sent) -> Ordered (with the vendor) ->
+ *   Received -> Closed.
+ * Sent Back, Rejected and Cancelled stand aside from it.
+ */
+export const REQUISITION_STAGES = ['OPEN', 'PENDING_APPROVAL', 'SENT_BACK', 'PENDING_PROCESSING', 'PENDING_ORDER', 'ORDERED', 'RECEIVED', 'CLOSED', 'REJECTED', 'CANCELLED'] as const;
+export type RequisitionStage = (typeof REQUISITION_STAGES)[number];
+export const REQUISITION_STAGE_LABEL: Record<RequisitionStage, string> = {
+  OPEN: 'Open',
+  PENDING_APPROVAL: 'Pending Approval',
+  SENT_BACK: 'Sent Back',
+  PENDING_PROCESSING: 'Pending Processing',
+  PENDING_ORDER: 'Pending Order',
+  ORDERED: 'Ordered',
+  RECEIVED: 'Received',
+  CLOSED: 'Closed',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+};
+/** The stages in the order a requisition goes through them: the steps the page draws. */
+export const REQUISITION_STAGE_STEPS: readonly RequisitionStage[] = ['OPEN', 'PENDING_APPROVAL', 'PENDING_PROCESSING', 'PENDING_ORDER', 'ORDERED', 'RECEIVED', 'CLOSED'];
+
+/** The stage of a requisition, from its status and its orders' (a cancelled order counts for nothing): the least far along of them. */
+export function requisitionStage(status: RequisitionStatus, orders: readonly PurchaseOrderStatus[]): RequisitionStage {
+  if (status === 'DRAFT') return 'OPEN';
+  if (status === 'SUBMITTED') return 'PENDING_APPROVAL';
+  if (status === 'APPROVED') return 'PENDING_PROCESSING';
+  if (status !== 'ORDERED') return status;
+  const live = orders.filter((order) => order !== 'CANCELLED');
+  if (!live.length || live.includes('DRAFT')) return 'PENDING_PROCESSING';
+  if (live.some((order) => order === 'AWAITING_APPROVAL' || order === 'APPROVED')) return 'PENDING_ORDER';
+  if (live.some((order) => order === 'SENT' || order === 'PARTLY_RECEIVED')) return 'ORDERED';
+  return 'RECEIVED';
+}
+
+/** Still being worked on by somebody, or on its way: the list's "open" -- everything until it is closed, rejected or cancelled (2026-11-21). */
+export const OPEN_REQUISITION_STATUSES: readonly RequisitionStatus[] = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED'];
 /** The requester may change it: before it is submitted, and when it is sent back. */
 export const EDITABLE_REQUISITION_STATUSES: readonly RequisitionStatus[] = ['DRAFT', 'SENT_BACK'];
 
@@ -179,6 +218,8 @@ export interface SaveRequisitionInput {
   /** The kind of request: one of the office's request codes. (2026-11-20, as are the next two.) */
   requestCodeId?: string | null;
   costCenterId?: string | null;
+  /** The department it is for (2026-11-21): its approvers are that department's. */
+  departmentId?: string | null;
   /** The day on the paper, YYYY-MM-DD; null or left out for today. */
   documentDate?: string | null;
   /** A note on why it is needed; may be empty. */
@@ -211,6 +252,10 @@ export interface RequisitionRow {
   estimatedTotalCents: number;
   /** The approver's note when it was sent back or rejected. */
   decisionNote: string | null;
+  /** Where it is, with its orders read (2026-11-21). */
+  stage: RequisitionStage;
+  /** The department it is for: its approvers are that department's. */
+  department: PurchasingCodeRef | null;
 }
 
 export interface RequisitionList {

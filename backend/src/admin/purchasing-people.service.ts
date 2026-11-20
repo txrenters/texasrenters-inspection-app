@@ -45,7 +45,7 @@ export class PurchasingPeopleService {
 
   async people(user: AuthenticatedUser): Promise<PurchasingPeople> {
     const organizationId = user.organizationId;
-    const [members, roles, rows, companies] = await Promise.all([
+    const [members, roles, rows, companies, departments] = await Promise.all([
       this.prisma.organizationMember.findMany({
         where: { organizationId },
         select: {
@@ -61,8 +61,10 @@ export class PurchasingPeopleService {
         },
       }),
       this.prisma.role.findMany({ where: { organizationId, purchasingRole: { not: null } }, select: { id: true, name: true, permissions: true, purchasingRole: true } }),
-      this.prisma.purchasingPerson.findMany({ where: { organizationId }, select: { userProfileId: true, companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true } }),
+      this.prisma.purchasingPerson.findMany({ where: { organizationId }, select: { userProfileId: true, companyTenantIds: true, departmentIds: true, approvesAnyAmount: true, approvalLimitCents: true } }),
       this.prisma.xeroOrganisation.findMany({ where: { organizationId, status: 'CONNECTED' }, select: { xeroTenantId: true, name: true, purchaserCode: true }, orderBy: { name: 'asc' } }),
+      // The departments an approver may be given (2026-11-21).
+      this.prisma.purchasingCode.findMany({ where: { organizationId, kind: 'DEPARTMENT', active: true }, select: { id: true, code: true, name: true }, orderBy: { code: 'asc' } }),
     ]);
     const columns = this.columns(user, roles);
     const settingsOf = new Map(rows.map((row) => [row.userProfileId, row]));
@@ -110,6 +112,7 @@ export class PurchasingPeopleService {
         systemAdmin,
         you: person.id === user.id,
         companyTenantIds: row?.companyTenantIds ?? [],
+        departmentIds: row?.departmentIds ?? [],
         approvesAnyAmount: row?.approvesAnyAmount ?? false,
         approvalLimitCents: row?.approvalLimitCents ?? null,
       });
@@ -120,6 +123,7 @@ export class PurchasingPeopleService {
       people,
       roles: columns,
       companies: companies.map((company) => ({ tenantId: company.xeroTenantId, name: company.name, purchaserCode: company.purchaserCode })),
+      departments,
       candidates,
     };
   }
@@ -149,7 +153,7 @@ export class PurchasingPeopleService {
     return this.people(user);
   }
 
-  /** A person's companies and approver limit. */
+  /** A person's companies, departments (as an approver, 2026-11-21) and approver limit. */
   async savePerson(user: AuthenticatedUser, personId: string, input: SavePurchasingPersonInput): Promise<PurchasingPeople> {
     const organizationId = user.organizationId;
     await this.assertChangeable(user, personId);
@@ -161,18 +165,30 @@ export class PurchasingPeopleService {
       const known = await this.prisma.xeroOrganisation.count({ where: { organizationId, xeroTenantId: { in: tenantIds }, status: 'CONNECTED' } });
       if (known !== tenantIds.length) throw new ApplicationError(400, 'PURCHASING_PERSON_INVALID', 'A company chosen is not connected to this office.');
     }
-    const to = { companyTenantIds: tenantIds, approvesAnyAmount: input.approvesAnyAmount, approvalLimitCents: input.approvalLimitCents };
+    const departmentIds = input.departmentIds === undefined ? null : [...new Set(input.departmentIds)];
+    if (departmentIds?.length) {
+      const known = await this.prisma.purchasingCode.count({ where: { organizationId, kind: 'DEPARTMENT', active: true, id: { in: departmentIds } } });
+      if (known !== departmentIds.length) throw new ApplicationError(400, 'PURCHASING_PERSON_INVALID', 'A department chosen is not on the list, or is switched off.');
+    }
     await this.prisma.$transaction(async (tx) => {
       const before = await tx.purchasingPerson.findUnique({
         where: { organizationId_userProfileId: { organizationId, userProfileId: personId } },
-        select: { companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true },
+        select: { companyTenantIds: true, departmentIds: true, approvesAnyAmount: true, approvalLimitCents: true },
       });
-      const from = { companyTenantIds: before?.companyTenantIds ?? [], approvesAnyAmount: before?.approvesAnyAmount ?? false, approvalLimitCents: before?.approvalLimitCents ?? null };
+      const from = {
+        companyTenantIds: before?.companyTenantIds ?? [],
+        departmentIds: before?.departmentIds ?? [],
+        approvesAnyAmount: before?.approvesAnyAmount ?? false,
+        approvalLimitCents: before?.approvalLimitCents ?? null,
+      };
+      // Departments left out of the request stay as they are.
+      const to = { companyTenantIds: tenantIds, departmentIds: departmentIds ?? from.departmentIds, approvesAnyAmount: input.approvesAnyAmount, approvalLimitCents: input.approvalLimitCents };
       const same =
         before &&
         from.approvesAnyAmount === to.approvesAnyAmount &&
         from.approvalLimitCents === to.approvalLimitCents &&
-        [...from.companyTenantIds].sort().join() === [...to.companyTenantIds].sort().join();
+        [...from.companyTenantIds].sort().join() === [...to.companyTenantIds].sort().join() &&
+        [...from.departmentIds].sort().join() === [...to.departmentIds].sort().join();
       if (same) return;
       await tx.purchasingPerson.upsert({ where: { organizationId_userProfileId: { organizationId, userProfileId: personId } }, create: { organizationId, userProfileId: personId, ...to }, update: to });
       await this.audit(tx, user, { person: personId, from, to });

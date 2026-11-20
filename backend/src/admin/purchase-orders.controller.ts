@@ -86,6 +86,13 @@ export class PurchaseOrdersController {
     return this.orders.list(request.user, query.show ?? 'open');
   }
 
+  /** Requests to Approve (2026-11-21): the orders waiting that the caller, a purchasing manager, may approve. Before the id route. */
+  @Get('orders/to-approve')
+  @RequirePermissions('purchasing:request')
+  toApprove(@Req() request: AuthenticatedRequest) {
+    return this.orders.toApprove(request.user);
+  }
+
   @Post('requisitions/:requisitionId/order')
   @RequirePermissions('purchasing:request', 'purchasing:order')
   create(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string) {
@@ -112,14 +119,14 @@ export class PurchaseOrdersController {
   }
 
   @Post('orders/:orderId/approve')
-  @RequirePermissions('purchasing:request', 'purchasing:approve')
+  @RequirePermissions('purchasing:request', 'purchasing:approve-orders')
   @HttpCode(200)
   approve(@Req() request: AuthenticatedRequest, @Param('orderId', ParseUUIDPipe) orderId: string, @Body() body: PurchaseOrderDecisionDto) {
     return this.orders.decide(request.user, orderId, 'APPROVED', body);
   }
 
   @Post('orders/:orderId/send-back')
-  @RequirePermissions('purchasing:request', 'purchasing:approve')
+  @RequirePermissions('purchasing:request', 'purchasing:approve-orders')
   @HttpCode(200)
   sendBack(@Req() request: AuthenticatedRequest, @Param('orderId', ParseUUIDPipe) orderId: string, @Body() body: PurchaseOrderDecisionDto) {
     return this.orders.decide(request.user, orderId, 'SENT_BACK', body);

@@ -12,6 +12,7 @@ import type {
   PurchaseOrderDetail,
   PurchaseOrdersMade,
   PurchaseOrderList,
+  PurchaseOrderRow,
   AddPurchasingPersonInput,
   DocumentSeriesKind,
   PurchasingPeople,
@@ -22,6 +23,7 @@ import type {
   RequisitionDetail,
   RequisitionFileLink,
   RequisitionList,
+  RequisitionRow,
   ReceiveGoodsInput,
   ReverseReceiptInput,
   SavePurchaseOrderInput,
@@ -58,6 +60,7 @@ export const purchasingKeys = {
   order: (orderId: string) => ['purchasing', 'order', orderId] as const,
   setup: ['purchasing', 'setup'] as const,
   people: ['purchasing', 'setup', 'people'] as const,
+  toApprove: (what: 'requisitions' | 'orders') => ['purchasing', 'to-approve', what] as const,
 };
 
 /** Purchasing Setup (2026-11-20, part 5a): only a system admin or a Purchasing admin reads it. */
@@ -133,6 +136,14 @@ export function useRequisition(requisitionId: string) {
 /** What the form chooses from: read only while a form is open. */
 export function useRequisitionChoices(enabled: boolean) {
   return useQuery({ queryKey: purchasingKeys.choices, queryFn: ({ signal }) => api<RequisitionChoices>(`${BASE}/choices`, { signal }), enabled, ...KEPT });
+}
+
+/** Requests to Approve (2026-11-21): what waits for the caller's approval -- requisitions for an approver, orders for a purchasing manager. */
+export function useRequisitionsToApprove(enabled: boolean) {
+  return useQuery({ queryKey: purchasingKeys.toApprove('requisitions'), queryFn: ({ signal }) => api<RequisitionRow[]>(`${BASE}/requisitions/to-approve`, { signal }), enabled, ...KEPT });
+}
+export function useOrdersToApprove(enabled: boolean) {
+  return useQuery({ queryKey: purchasingKeys.toApprove('orders'), queryFn: ({ signal }) => api<PurchaseOrderRow[]>(`${BASE}/orders/to-approve`, { signal }), enabled, ...KEPT });
 }
 
 export function usePurchaseOrders(show: 'open' | 'closed', enabled: boolean) {

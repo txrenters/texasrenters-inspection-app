@@ -45,10 +45,10 @@ const person = (n: number, displayName: string, permissions: string[], organizat
 const buyer = person(1, 'Sample Purchaser', ['purchasing:request', 'purchasing:order']);
 const keeper = person(2, 'Sample Stock Keeper', ['purchasing:request', 'purchasing:receive']);
 const clerk = person(3, 'Sample Accounts', ['purchasing:request', 'purchasing:bills']);
-const owner = person(4, 'Sample Owner', ['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
+const owner = person(4, 'Sample Owner', ['purchasing:request', 'purchasing:approve-orders', 'purchasing:approve-any']);
 /** Keeps the bills and may approve any amount: still never approves a mismatch on a bill they entered. */
-const boss = person(5, 'Sample Boss', ['purchasing:request', 'purchasing:bills', 'purchasing:approve', 'purchasing:approve-any']);
-const outsider = person(6, 'Other Office', ['purchasing:request', 'purchasing:receive', 'purchasing:bills', 'purchasing:approve', 'purchasing:approve-any', 'purchasing:order'], OTHER_ORG);
+const boss = person(5, 'Sample Boss', ['purchasing:request', 'purchasing:bills', 'purchasing:approve-orders', 'purchasing:approve-any']);
+const outsider = person(6, 'Other Office', ['purchasing:request', 'purchasing:receive', 'purchasing:bills', 'purchasing:approve-orders', 'purchasing:approve-any', 'purchasing:order'], OTHER_ORG);
 const PEOPLE = [buyer, keeper, clerk, owner, boss, outsider];
 
 type Row = Record<string, unknown>;
@@ -534,7 +534,7 @@ describe('who may do what', () => {
   it('receives with purchasing:receive, bills and pays with purchasing:bills, and overrides a mismatch with approve-any', () => {
     for (const receives of ['receive', 'reverseReceipt']) expect(permissionsOf(receives)).toEqual(['purchasing:request', 'purchasing:receive']);
     for (const bills of ['saveBill', 'approveBill', 'payBill']) expect(permissionsOf(bills)).toEqual(['purchasing:request', 'purchasing:bills']);
-    expect(permissionsOf('approveBillAnyway')).toEqual(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
+    expect(permissionsOf('approveBillAnyway')).toEqual(['purchasing:request', 'purchasing:approve-orders', 'purchasing:approve-any']);
     expect(permissionsOf('closeShort')).toEqual(['purchasing:request', 'purchasing:order']);
   });
 

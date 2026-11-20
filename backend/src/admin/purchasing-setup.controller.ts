@@ -38,7 +38,7 @@ import {
   type SetPurchasingRoleInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { PurchasingPeopleService } from './purchasing-people.service';
@@ -103,6 +103,7 @@ export class RequisitionFieldSettingDto implements Required<RequisitionFieldSett
 
 export class RequisitionFieldsDto implements Record<RequisitionFieldKey, RequisitionFieldSettingDto> {
   @ValidateNested() @Type(() => RequisitionFieldSettingDto) REQUEST_CODE!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) DEPARTMENT!: RequisitionFieldSettingDto;
   @ValidateNested() @Type(() => RequisitionFieldSettingDto) COST_CENTER!: RequisitionFieldSettingDto;
   @ValidateNested() @Type(() => RequisitionFieldSettingDto) DOCUMENT_DATE!: RequisitionFieldSettingDto;
   @ValidateNested() @Type(() => RequisitionFieldSettingDto) EXPECTED_RECEIPT!: RequisitionFieldSettingDto;
@@ -129,6 +130,7 @@ export class SetPurchasingRoleDto implements Required<SetPurchasingRoleInput> {
 
 export class SavePurchasingPersonDto implements Required<SavePurchasingPersonInput> {
   @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(80, { each: true }) companyTenantIds!: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsUUID('all', { each: true }) departmentIds!: string[];
   @IsBoolean() approvesAnyAmount!: boolean;
   @ValidateIf(GIVEN) @IsInt() @Min(1) @Max(MOST_CENTS) approvalLimitCents!: number | null;
 }

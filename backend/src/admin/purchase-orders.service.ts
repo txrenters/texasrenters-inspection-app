@@ -66,6 +66,8 @@ import { vendorFilesOf } from './requisition-files';
 
 const ORDER = 'purchasing:order';
 const APPROVE = 'purchasing:approve';
+/** The purchasing manager's (the office, 2026-11-21): approving orders, apart from approving requisitions. */
+const APPROVE_ORDERS = 'purchasing:approve-orders';
 const APPROVE_ANY = 'purchasing:approve-any';
 const RECEIVE = 'purchasing:receive';
 const BILLS = 'purchasing:bills';
@@ -206,7 +208,7 @@ export class PurchaseOrdersService {
 
   /** Everybody's, for whoever makes, approves, receives or bills orders; for anybody else, the orders made from their own requisitions. */
   private visible(user: AuthenticatedUser): Prisma.PurchaseOrderWhereInput {
-    return [ORDER, APPROVE, RECEIVE, BILLS].some((permission) => may(user, permission)) ? {} : { requisition: { requestedById: user.id } };
+    return [ORDER, APPROVE, APPROVE_ORDERS, RECEIVE, BILLS].some((permission) => may(user, permission)) ? {} : { requisition: { requestedById: user.id } };
   }
 
   private async companyNames(organizationId: string): Promise<Companies> {
@@ -227,7 +229,8 @@ export class PurchaseOrdersService {
     const decides = !rules.ownCompaniesOnly || acts;
     const purchaser = may(user, ORDER) && acts;
     const mine = order.createdById === user.id;
-    const waiting = order.status === Status.AWAITING_APPROVAL && may(user, APPROVE);
+    // The purchasing manager approves an order before the purchaser sends it (the office, 2026-11-21).
+    const waiting = order.status === Status.AWAITING_APPROVAL && may(user, APPROVE_ORDERS);
     // An approver approves one they made or changed as anybody else's (the office, 2026-11-21): within their limit, the step and their companies.
     const approveBlocked = !waiting ? null : approvalRefusal(rules.standing, rules.steps, totalCents, order.xeroTenantId, rules.ownCompaniesOnly);
     return {
@@ -244,7 +247,7 @@ export class PurchaseOrdersService {
       bill: may(user, BILLS) && acts && BILLABLE.includes(order.status) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
       approveBill: may(user, BILLS) && acts && bill?.status === 'MATCHED',
       // Somebody who may approve any amount, whoever entered it (the office, 2026-11-21): audited as their own when it is.
-      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && acts && bill?.status === 'HELD',
+      overrideBill: may(user, APPROVE_ORDERS) && may(user, APPROVE_ANY) && acts && bill?.status === 'HELD',
       pay: may(user, BILLS) && acts && bill?.status === 'APPROVED',
       closeShort: purchaser && order.status === Status.PARTLY_RECEIVED,
       approveBlocked,
@@ -266,6 +269,20 @@ export class PurchaseOrdersService {
       this.companyNames(organizationId),
     ]);
     return { orders: orders.map((order) => row(order, companies)) };
+  }
+
+  /** Requests to Approve (the office, 2026-11-21): the orders waiting that the caller, a purchasing manager, may approve now, the longest waiting first. */
+  async toApprove(user: AuthenticatedUser): Promise<PurchaseOrderRow[]> {
+    if (!may(user, APPROVE_ORDERS)) return [];
+    const organizationId = user.organizationId;
+    const [orders, companies, setup, standing] = await Promise.all([
+      this.prisma.purchaseOrder.findMany({ where: { organizationId, status: Status.AWAITING_APPROVAL }, select: ROW, orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }], take: CLOSED_SHOWN }),
+      this.companyNames(organizationId),
+      readPurchasingSetup(this.prisma, organizationId),
+      readStanding(this.prisma, user),
+    ]);
+    const rules = { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing };
+    return orders.filter((order) => this.actions(user, order, orderTotals(order.lines, order.taxBasisPoints).totalCents, rules).approve).map((order) => row(order, companies));
   }
 
   async detail(user: AuthenticatedUser, orderId: string): Promise<PurchaseOrderDetail> {
@@ -630,7 +647,7 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     const note = text(input.note);
     // The route asks for it too; here it does not rest on the route, now that an approver's own is theirs to approve.
-    if (!may(user, APPROVE)) throw new ApplicationError(403, 'PURCHASE_ORDER_NOT_APPROVER', 'Only an approver decides an order.');
+    if (!may(user, APPROVE_ORDERS)) throw new ApplicationError(403, 'PURCHASE_ORDER_NOT_APPROVER', 'Only a purchasing manager decides an order.');
     if (decision === 'SENT_BACK' && !note) throw new ApplicationError(400, 'PURCHASE_ORDER_NOTE_NEEDED', 'Say what to change, so the purchaser knows.');
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);

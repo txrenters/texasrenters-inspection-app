@@ -17,13 +17,14 @@ export const PURCHASE_ORDER_STATUSES = ['DRAFT', 'AWAITING_APPROVAL', 'APPROVED'
 export type PurchaseOrderStatus = (typeof PURCHASE_ORDER_STATUSES)[number];
 
 export const PURCHASE_ORDER_STATUS_LABEL: Record<PurchaseOrderStatus, string> = {
-  DRAFT: 'Draft',
-  AWAITING_APPROVAL: 'Waiting for approval',
-  APPROVED: 'Approved, not sent',
-  SENT: 'Sent to the vendor',
-  PARTLY_RECEIVED: 'Partly received',
+  // NAV's words (2026-11-21): approved is Released, for the purchaser to send.
+  DRAFT: 'Open',
+  AWAITING_APPROVAL: 'Pending Approval',
+  APPROVED: 'Released',
+  SENT: 'Sent to Vendor',
+  PARTLY_RECEIVED: 'Partly Received',
   RECEIVED: 'Received',
-  CLOSED: 'Received and paid',
+  CLOSED: 'Closed',
   CANCELLED: 'Cancelled',
 };
 

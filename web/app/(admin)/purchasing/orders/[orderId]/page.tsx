@@ -354,9 +354,9 @@ function OrderForm({
                   { totalCents: totals.totalCents, itemIds: input.lines.map((line) => line.itemId), vendorId: input.vendorId },
                   order.reapproveChangedOrders,
                 )
-                ? `This change goes back for approval: ${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps)).toLowerCase()} approves it again.`
+                ? `This change goes back for approval: ${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps), 'order').toLowerCase()} approves it again.`
                 : `This change stays approved${order.status === 'SENT' ? ', and the order is to be sent to the vendor again' : ''}.`
-              : `${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps))} approves it at this amount. If you may approve it, you may approve your own.`}
+              : `${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps), 'order')} approves it at this amount, before it is sent to the vendor.`}
           </p>
           {problem ? (
             <p className="text-warning mt-3 text-xs font-medium" role="status">

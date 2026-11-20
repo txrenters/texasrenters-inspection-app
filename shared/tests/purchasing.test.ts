@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
-import { orderGroups, requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
+import { REQUISITION_STAGE_LABEL, orderGroups, requisitionNumber, requisitionStage, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
+import { departmentRefusal } from '../src/contracts/purchasing-roles';
 import { DEFAULT_PAGE_LAYOUT } from '../src/contracts/purchasing-page';
 import { DEFAULT_FILE_RULES, stepsFromLimit } from '../src/contracts/purchasing-setup';
 
@@ -114,5 +115,34 @@ describe('how a requisition becomes purchase orders (2026-11-20)', () => {
     expect(orderGroups([at('filter', null), at('battery', 'alamo')], 'hill').map((group) => group.vendorId)).toEqual(['hill', 'alamo']);
     expect(orderGroups([at('filter', null), at('battery', null)], null)).toEqual([{ vendorId: null, lines: [at('filter', null), at('battery', null)] }]);
     expect(orderGroups([at(null, 'hill')], null)).toEqual([]);
+  });
+});
+
+// 2026-11-21, the office: a requisition reads as NAV's, from its own status and its orders'.
+
+describe("a requisition's stage", () => {
+  it('goes Open, Pending Approval, Pending Processing, Pending Order, Ordered, Received, Closed', () => {
+    const said = (status: Parameters<typeof requisitionStage>[0], orders: Parameters<typeof requisitionStage>[1] = []) => REQUISITION_STAGE_LABEL[requisitionStage(status, orders)];
+    expect(said('DRAFT')).toBe('Open');
+    expect(said('SUBMITTED')).toBe('Pending Approval');
+    expect(said('APPROVED')).toBe('Pending Processing');
+    // An order still a draft is the purchaser's still; one waiting for the purchasing manager, or released and not sent, is Pending Order.
+    expect(said('ORDERED', ['DRAFT', 'SENT'])).toBe('Pending Processing');
+    expect(said('ORDERED', ['AWAITING_APPROVAL', 'SENT'])).toBe('Pending Order');
+    expect(said('ORDERED', ['APPROVED'])).toBe('Pending Order');
+    expect(said('ORDERED', ['SENT', 'PARTLY_RECEIVED', 'CANCELLED'])).toBe('Ordered');
+    expect(said('ORDERED', ['RECEIVED', 'CLOSED'])).toBe('Received');
+    expect(said('CLOSED', ['CLOSED'])).toBe('Closed');
+    expect(said('SENT_BACK')).toBe('Sent Back');
+    expect(said('REJECTED')).toBe('Rejected');
+  });
+});
+
+describe("an approver's departments", () => {
+  it('approve only their own, choosing one first; an approver of every department approves any', () => {
+    expect(departmentRefusal({ departments: null }, null)).toBeNull();
+    expect(departmentRefusal({ departments: ['maint'] }, 'maint')).toBeNull();
+    expect(departmentRefusal({ departments: ['maint'] }, 'hvac')).toBe("You approve only for your own departments, and this is another department's.");
+    expect(departmentRefusal({ departments: ['maint'] }, null)).toBe('You approve only for your own departments: its department is to be chosen first.');
   });
 });

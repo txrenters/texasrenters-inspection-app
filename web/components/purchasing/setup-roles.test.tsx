@@ -21,6 +21,7 @@ const person = (over: Partial<PurchasingPersonRow>): PurchasingPersonRow => ({
   systemAdmin: false,
   you: false,
   companyTenantIds: [],
+  departmentIds: [],
   approvesAnyAmount: false,
   approvalLimitCents: null,
   ...over,
@@ -37,6 +38,7 @@ const PEOPLE: PurchasingPeople = {
     { tenantId: 'ccp', name: 'Crystal Creek Pest', purchaserCode: 'CCP' },
     { tenantId: 'thmp', name: 'Texas Home Maintenance Pros', purchaserCode: 'THMP' },
   ],
+  departments: [{ id: 'dept-maint', code: 'MAINT', name: 'Maintenance' }],
   candidates: [{ id: 'sam', name: 'Sam Stock' }],
 };
 let edits: Record<'setRole' | 'savePerson' | 'addPerson', { mutate: ReturnType<typeof vi.fn>; isPending: boolean; error: Error | null }>;
@@ -53,7 +55,7 @@ describe('Roles and who holds them', () => {
   it('shows each person, their roles, an approver limit and their companies, as the board does', () => {
     render(<RolesSection enabled />);
     const rows = screen.getAllByRole('row').map((row) => row.textContent);
-    expect(rows[0]).toBe('PersonRequisitionerPurchaserApproverStock keeperReceiverCode adminBill payerPurchasing adminCompanies');
+    expect(rows[0]).toBe('PersonRequisitionerPurchaserApproverPurchasing managerStock keeperReceiverCode adminBill payerPurchasing adminCompanies');
     expect(rows[1]).toContain('Pat Sample PSAMPLE');
     expect(rows[1]).toContain('THMP, CCP');
     expect(rows[2]).toContain('to $5,000.00');
@@ -84,17 +86,28 @@ describe('Roles and who holds them', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Lee Sample: approval limit' }));
     fireEvent.click(screen.getByLabelText('Any amount'));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'lee', input: { companyTenantIds: ['thmp'], approvesAnyAmount: true, approvalLimitCents: null } });
+    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'lee', input: { companyTenantIds: ['thmp'], departmentIds: [], approvesAnyAmount: true, approvalLimitCents: null } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Lee Sample: approval limit' }));
     fireEvent.click(screen.getByLabelText('Up to an amount'));
     fireEvent.change(screen.getByLabelText('Approval limit, in dollars'), { target: { value: '7,500' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save, up to $7,500.00' }));
-    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'lee', input: { companyTenantIds: ['thmp'], approvesAnyAmount: false, approvalLimitCents: 750000 } });
+    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'lee', input: { companyTenantIds: ['thmp'], departmentIds: [], approvesAnyAmount: false, approvalLimitCents: 750000 } });
 
     fireEvent.keyDown(screen.getByRole('button', { name: 'Pat Sample: companies' }), { key: 'Enter' });
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Crystal Creek Pest/ }));
-    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'pat', input: { companyTenantIds: ['thmp'], approvesAnyAmount: false, approvalLimitCents: null } });
+    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'pat', input: { companyTenantIds: ['thmp'], departmentIds: [], approvesAnyAmount: false, approvalLimitCents: null } });
+  });
+
+  // 2026-11-21, the office: a requisition goes to the approvers of its department, ticked here.
+  it('ticks the departments an approver approves, beside the Approver box only', () => {
+    render(<RolesSection enabled />);
+    expect(screen.queryByRole('button', { name: 'Pat Sample: departments approved' })).toBeNull();
+    const departments = screen.getByRole('button', { name: 'Lee Sample: departments approved' });
+    expect(departments.textContent).toBe('All departments');
+    fireEvent.keyDown(departments, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /MAINT · Maintenance/ }));
+    expect(edits.savePerson.mutate).toHaveBeenLastCalledWith({ personId: 'lee', input: { companyTenantIds: ['thmp'], departmentIds: ['dept-maint'], approvesAnyAmount: false, approvalLimitCents: 500000 } });
   });
 
   it('adds somebody of the office to the list', () => {
