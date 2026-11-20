@@ -1,54 +1,82 @@
 'use client';
 
+import type { RequisitionChoices, SaveRequisitionInput } from '@texasrenters/shared';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
 
 import { PurchasingTabs } from '@/components/purchasing/purchasing-tabs';
-import { RequisitionForm } from '@/components/purchasing/requisition-form';
 import { ErrorState, PageSkeleton } from '@/components/states';
-import { usePermissions } from '@/lib/auth';
 import { usePurchasingEdits, useRequisitionChoices } from '@/lib/purchasing-queries';
 
 /**
- * A new purchase requisition (2026-11-19, phase 2; laid out as the canvas's NAV
- * page 2026-11-20). It gets its number when it is first saved, as a draft that
- * is its author's alone; submitted, it goes to the approvers. Either way the
- * page then moves to the requisition itself.
+ * New purchase requisition. As in NAV (the office's choice, 2026-11-21), New
+ * makes the draft at once, so its PR number shows from the start; every field
+ * is blank. One left empty stays a draft until somebody deletes it.
+ *
+ * From the Reorder list ("?items=<item>:<quantity>,..."), the draft starts with
+ * the items ticked, for the company of the first: what one usually costs, from
+ * its usual vendor.
  */
 export default function NewRequisitionPage() {
   const router = useRouter();
-  // "?items=<item>:<quantity>,...": what the Reorder list ticked. Read once, as the form's starting lines.
   const asked = useSearchParams().get('items') ?? '';
-  const start = asked
+  // The items need the choices; a blank one needs nothing.
+  const choices = useRequisitionChoices(Boolean(asked));
+  const { create } = usePurchasingEdits();
+  // Made once, though React draws the page twice in development.
+  const making = useRef(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (making.current || (asked && !choices.data)) return;
+    making.current = true;
+    void create
+      .mutateAsync(draftFor(asked, choices.data))
+      // Replaced, so Back goes to the list rather than making another.
+      .then((made) => router.replace(`/purchasing/requisitions/${made.id}`))
+      .catch(() => undefined);
+    // Made once per attempt, once the choices are in hand.
+  }, [attempt, asked, choices.data]);
+
+  const failed = create.error ?? (asked ? choices.error : null);
+  if (failed)
+    return (
+      <>
+        <PurchasingTabs current="requisitions" />
+        <ErrorState
+          error={failed}
+          retry={() => {
+            create.reset();
+            if (choices.isError) void choices.refetch();
+            making.current = false;
+            setAttempt((n) => n + 1);
+          }}
+        />
+      </>
+    );
+  return <PageSkeleton />;
+}
+
+/** A blank draft, or the Reorder list's items for the first one's company. */
+function draftFor(asked: string, choices: RequisitionChoices | undefined): SaveRequisitionInput {
+  const wanted = asked
     .split(',')
     .map((pair) => pair.split(':'))
     .flatMap(([itemId, quantity]) => (itemId && /^\d{1,6}$/.test(quantity ?? '') && Number(quantity) > 0 ? [{ itemId, quantity: Number(quantity) }] : []));
-  const choices = useRequisitionChoices(true);
-  const { create, step } = usePurchasingEdits();
-  const { permissions } = usePermissions();
-
-  if (choices.isLoading) return <PageSkeleton />;
-  if (choices.isError || !choices.data) return <ErrorState error={choices.error} retry={() => void choices.refetch()} />;
-
-  return (
-    <>
-      <PurchasingTabs current="requisitions" />
-      <RequisitionForm
-        choices={choices.data}
-        error={create.error ?? step.error}
-        onDiscard={() => router.push('/purchasing')}
-        permissions={permissions}
-        onSave={async (input, submit) => {
-          // Made once: if submitting is refused, the draft is kept and opened, where the reason shows.
-          const made = create.data ?? (await create.mutateAsync(input));
-          try {
-            if (submit) await step.mutateAsync({ requisitionId: made.id, step: 'submit' });
-          } finally {
-            router.replace(`/purchasing/requisitions/${made.id}`);
-          }
-        }}
-        pending={create.isPending || step.isPending}
-        start={start}
-      />
-    </>
-  );
+  const picked = wanted.flatMap(({ itemId, quantity }) => (choices?.items ?? []).filter((item) => item.id === itemId).map((item) => ({ item, quantity })));
+  const company = picked[0]?.item.companyTenantId ?? null;
+  return {
+    xeroTenantId: company,
+    neededBy: null,
+    deliverToPlaceId: null,
+    requestCodeId: null,
+    costCenterId: null,
+    documentDate: null,
+    reason: '',
+    // Another company's items would be refused: a requisition is for one company.
+    lines: picked
+      .filter(({ item }) => item.companyTenantId === company)
+      .map(({ item, quantity }) => ({ itemId: item.id, quantity, estimatedUnitCostCents: item.priceCents ?? item.averageCostCents ?? 0, vendorId: item.usualVendorId ?? null })),
+    quotes: [],
+  };
 }

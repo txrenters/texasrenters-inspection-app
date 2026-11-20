@@ -291,7 +291,7 @@ function database() {
   // The approvers are asked by email after a submit (2026-11-20): counted here, sent nowhere.
   const approvers = { ask: jest.fn(async () => 0) };
   const service = new PurchasingService(db as never, approvers as never);
-  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, approvers, steps, persons, setup: new PurchasingSetupService(db as never), filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
+  return { db, items, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, approvers, steps, persons, setup: new PurchasingSetupService(db as never), filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -944,8 +944,28 @@ describe('companies and approver limits (Purchasing Setup, 2026-11-21)', () => {
     const { service, persons } = database();
     persons.push(person(asker, { companyTenantIds: [PEST] }));
     await expect(service.create(asker, small())).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS', message: "You ask for stock only for your own companies, and this is another company's." });
-    await expect(service.create(asker, small({ xeroTenantId: null, lines: [] }))).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS' });
     expect((await service.choices(asker)).companies.map((company) => company.tenantId)).toEqual([PEST]);
+  });
+
+  // 2026-11-21: New makes the draft at once, every field blank, so a draft may wait for its company; it is sent only for one of theirs.
+  it('lets them keep a draft with no company yet, but not send it until it is one of theirs', async () => {
+    const { service, persons } = database();
+    persons.push(person(asker, { companyTenantIds: [PEST] }));
+    const draft = await service.create(asker, small({ xeroTenantId: null, lines: [] }));
+    // Blank stays blank: no document date until somebody gives one.
+    expect(draft).toMatchObject({ status: 'DRAFT', company: null, documentDate: null, lines: [] });
+    expect(draft.number).toMatch(/^PR-/);
+    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Add at least one item.' });
+  });
+
+  it('refuses to send a draft with no company for somebody limited to some', async () => {
+    const { service, persons, items } = database();
+    // An item kept for no company yet, which a requisition with none may ask for.
+    const loose = items.find((item) => item.id === FILTER)!;
+    loose.xeroTenantId = null;
+    const draft = await service.create(asker, small({ xeroTenantId: null, lines: [line(FILTER, 2, 390)] }));
+    persons.push(person(asker, { companyTenantIds: [PEST] }));
+    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS', message: 'You ask for stock only for your own companies: choose one of them.' });
   });
 
   it('lets an approver decide only for their own companies while the office says so', async () => {

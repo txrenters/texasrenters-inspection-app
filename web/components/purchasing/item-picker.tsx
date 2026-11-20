@@ -160,8 +160,11 @@ export function ItemCodePicker({
             }}
             onFocus={(event) => event.currentTarget.select()}
             onKeyDown={onKeyDown}
-            placeholder="Code or description"
+            // A line's cell starts blank (2026-11-21); the field elsewhere says what to type.
+            placeholder={variant === 'cell' ? undefined : 'Code or description'}
             role="combobox"
+            // No width of its own: it fills what the column gives it, so a short code's column stays narrow.
+            size={1}
             spellCheck={false}
             value={typed ?? value?.code ?? ''}
           />

@@ -127,6 +127,7 @@ const list = (requisitions: RequisitionRow[], seesAll = true): RequisitionList =
 beforeEach(() => {
   url.state = { tab: 'requisitions', show: 'open', status: 'all', q: '' };
   router.push.mockReset();
+  router.replace.mockReset();
   router.query = '';
   pdf.orderAttachment.mockClear();
   pdf.downloadOrder.mockClear();
@@ -193,33 +194,53 @@ describe('the requisitions list', () => {
   });
 });
 
-describe('a requisition begun from the Reorder list', () => {
-  it('starts with the ticked items at the quantities asked, for their company, at what one cost', () => {
+// New makes the draft at once, as NAV does, so its PR number shows from the start (2026-11-21).
+describe('a new requisition', () => {
+  it('is made blank, numbered, and opened, with nothing chosen for the person', async () => {
+    edits.create!.mutateAsync.mockResolvedValue({ id: 'req-new' });
+    render(<NewRequisitionPage />);
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/purchasing/requisitions/req-new'));
+    expect(edits.create!.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(edits.create!.mutateAsync).toHaveBeenCalledWith({ xeroTenantId: null, neededBy: null, deliverToPlaceId: null, requestCodeId: null, costCenterId: null, documentDate: null, reason: '', lines: [], quotes: [] });
+  });
+
+  it('from the Reorder list, starts with the ticked items at the quantities asked, for their company, at what one cost', async () => {
     router.query = 'items=item-glue:12,item-nothing:5,item-filter:9,item-glue:x';
+    edits.create!.mutateAsync.mockResolvedValue({ id: 'req-new' });
     render(<NewRequisitionPage />);
 
     // The first item on it is the pest company's, so the request is that company's: the filter is another's and is left off.
-    const table = screen.getByRole('table', { name: 'Lines' });
-    expect((within(table).getByLabelText('Quantity of Glue boards') as HTMLInputElement).value).toBe('12');
-    expect((within(table).getByLabelText('Direct unit cost of Glue boards') as HTMLInputElement).value).toBe('9.10');
-    expect(within(table).queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
-    expect(screen.getByLabelText('Purchaser Code').textContent).toContain('Crystal Creek Pest');
-    // Nothing is saved by opening it.
-    expect(edits.create!.mutateAsync).not.toHaveBeenCalled();
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/purchasing/requisitions/req-new'));
+    expect(edits.create!.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ xeroTenantId: 'tenant-pest', deliverToPlaceId: null, documentDate: null, lines: [{ itemId: 'item-glue', quantity: 12, estimatedUnitCostCents: 910, vendorId: null }] }),
+    );
   });
 
-  it('is an empty requisition, one blank line ready, when nothing was ticked', () => {
-    render(<NewRequisitionPage />);
-    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
-    expect((screen.getByLabelText('Quantity of line 1') as HTMLInputElement).value).toBe('');
-    expect(screen.getByLabelText('Purchaser Code').textContent).toContain('THMP');
+  it('says why it could not be made, and tries again', async () => {
+    edits.create!.mutateAsync.mockRejectedValueOnce(new Error('Somebody is offline.')).mockResolvedValue({ id: 'req-new' });
+    const { rerender } = render(<NewRequisitionPage />);
+    await waitFor(() => expect(edits.create!.mutateAsync).toHaveBeenCalledTimes(1));
+    hooks.usePurchasingEdits.mockReturnValue({ ...edits, create: { ...edits.create!, error: new Error('Somebody is offline.') } });
+    rerender(<NewRequisitionPage />);
+    expect(screen.getByText('Somebody is offline.')).toBeTruthy();
+    hooks.usePurchasingEdits.mockReturnValue(edits);
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/purchasing/requisitions/req-new'));
+    expect(edits.create!.mutateAsync).toHaveBeenCalledTimes(2);
   });
 });
+
+const choose = (label: string, option: string) => {
+  fireEvent.keyDown(screen.getByLabelText(label), { key: 'ArrowDown' });
+  fireEvent.click(screen.getByRole('option', { name: option }));
+};
 
 describe("a line's cost", () => {
   it('starts from the usual price the stock keeper gave the item, and from the average cost when it has none', () => {
     const priced: RequisitionChoices = { ...CHOICES, items: CHOICES.items.map((item) => (item.id === 'item-filter' ? { ...item, priceCents: 425 } : item)) };
     render(<RequisitionForm choices={priced} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} />);
+    choose('Purchaser Code', 'THMP · THMP');
     fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
     const table = screen.getByRole('table', { name: 'Lines' });
     // The filter has a price of $4.25 and cost $3.90 on average: the price is what the line starts from.
@@ -237,8 +258,22 @@ describe('filling a requisition in', () => {
   };
   const submit = () => screen.getByRole('button', { name: 'Send Approval Request' }) as HTMLButtonElement;
 
+  it('starts with every field and its one line blank (2026-11-21)', () => {
+    mount();
+    // Nothing chosen reads as blank; each list still offers its "none" to clear a choice.
+    for (const field of ['Purchaser Code', 'Request Code', 'Location Code', 'Cost Center Code']) expect(screen.getByLabelText(field).textContent).toBe('');
+    expect((screen.getByLabelText('Document Date:') as HTMLInputElement).value).toBe('');
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
+    expect(screen.getByLabelText('Type of line 1').textContent).toBe('');
+    expect((screen.getByLabelText('Item on line 1') as HTMLInputElement).placeholder).toBe('');
+    // Nothing to add from Everything That Is Low until the requisition is for a company.
+    expect((screen.getByRole('button', { name: 'Add Everything That Is Low' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('adds everything of the company that is low, at what the office usually orders and what one cost', async () => {
     const onSave = mount();
+    choose('Purchaser Code', 'THMP · THMP');
+    choose('Location Code', 'STORE · Stockroom');
     fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
 
     const table = screen.getByRole('table', { name: 'Lines' });
@@ -274,11 +309,16 @@ describe('filling a requisition in', () => {
 
   it('says who approves, and asks for quotes once it is above the limit', () => {
     mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    // Before the Purchaser Code is chosen, every company's codes are offered, and the one picked decides it (2026-11-21).
     fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
-    // Only the requisition's company's item codes are offered.
-    expect(screen.queryByRole('option', { name: /Glue boards/ })).toBeNull();
+    expect(screen.getByRole('option', { name: /Glue boards/ })).toBeTruthy();
     fireEvent.click(screen.getByRole('option', { name: /SMK-10/ }));
+    expect(screen.getByLabelText('Purchaser Code').textContent).toContain('THMP');
+    // Then only that company's codes are.
+    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    fireEvent.keyDown(screen.getByLabelText('Item on line 2'), { key: 'ArrowDown' });
+    expect(screen.queryByRole('option', { name: /Glue boards/ })).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Item on line 2'), { key: 'Escape' });
     expect((screen.getByLabelText('Direct unit cost of Smoke alarm') as HTMLInputElement).value).toBe('15.30');
     fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '40' } });
 
@@ -311,6 +351,7 @@ describe('filling a requisition in', () => {
 
   it('takes an item typed by part of its description, and fills the line from it in yellow (2026-11-20)', async () => {
     const onSave = mount();
+    choose('Location Code', 'STORE · Stockroom');
     fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-11-26' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
     const picker = screen.getByLabelText('Item on line 1');
@@ -357,7 +398,8 @@ describe('filling a requisition in', () => {
     fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
     fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     const dialog = screen.getByRole('dialog', { name: 'Select – Item Codes' });
-    expect(within(dialog).getAllByRole('row')).toHaveLength(4);
+    // No company chosen yet: every company's codes, with the header row.
+    expect(within(dialog).getAllByRole('row')).toHaveLength(5);
     fireEvent.change(within(dialog).getByPlaceholderText('*filter*'), { target: { value: '*alarm*' } });
     expect(within(dialog).getAllByRole('row')).toHaveLength(2);
     expect((within(dialog).getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true);

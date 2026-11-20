@@ -91,6 +91,8 @@ const LEAVE = 'What you changed here since it was last saved is lost.';
 
 /** The fields a picked item fills, marked until somebody changes them. */
 type Filled = 'description' | 'place' | 'quantity' | 'cost' | 'expected' | 'vendor' | 'department';
+/** Each line can be deleted from its own row (2026-11-21). */
+const DELETE_COLUMN: SheetColumn = { key: 'delete', label: 'Delete', width: 'w-9', labelHidden: true };
 
 interface LineDraft {
   key: string;
@@ -107,6 +109,8 @@ interface LineDraft {
   departmentId: string;
   notes: string;
   filled: Filled[];
+  /** Line Amount as it is being typed; the amount from quantity and cost once it is left. */
+  amount?: string | null;
 }
 interface QuoteDraft {
   key: string;
@@ -153,8 +157,8 @@ function useTracked<T>(initial: T | (() => T), mark: () => void): [T, Dispatch<S
 
 const LINE_COLUMNS: readonly SheetColumn[] = [
   { key: 'type', label: 'Type', width: 'w-28' },
-  { key: 'item', label: 'Item Code', width: 'w-44' },
-  { key: 'description', label: 'Description', width: 'w-60' },
+  { key: 'item', label: 'Item Code', width: 'w-32' },
+  { key: 'description', label: 'Description', width: 'w-80' },
   { key: 'place', label: 'Location Code', width: 'w-36' },
   { key: 'quantity', label: 'Quantity', numeric: true, width: 'w-24' },
   { key: 'unit', label: 'Unit of Measure', width: 'w-28' },
@@ -162,7 +166,7 @@ const LINE_COLUMNS: readonly SheetColumn[] = [
   { key: 'amount', label: 'Line Amount', numeric: true, width: 'w-32' },
   { key: 'expected', label: 'Expected Receipt Date', width: 'w-40' },
   { key: 'vendor', label: 'Vendor No.', width: 'w-44' },
-  { key: 'notes', label: 'Notes', width: 'w-56' },
+  { key: 'notes', label: 'Notes', width: 'w-80' },
   { key: 'department', label: 'Department Code', width: 'w-36' },
 ];
 
@@ -177,7 +181,6 @@ export interface RequisitionDecisions {
 export function RequisitionForm({
   choices,
   requisition,
-  start,
   onSave,
   pending,
   error,
@@ -190,8 +193,6 @@ export function RequisitionForm({
   choices: RequisitionChoices;
   /** The requisition being changed or read; none for a new one. */
   requisition?: RequisitionDetail;
-  /** Items to begin a new one with, from the Reorder list. The company is theirs; one of another company is left off. */
-  start?: { itemId: string; quantity: number }[];
   /** Saves it, and submits it when asked. Resolves once done; a refusal is shown from `error`. */
   onSave: (input: SaveRequisitionInput, submit: boolean) => Promise<unknown>;
   pending: boolean;
@@ -227,15 +228,13 @@ export function RequisitionForm({
   const [changed, setChanged] = useState(false);
   const mark = () => setChanged(true);
 
-  // A new one begun from the Reorder list is for the company of the first item on it.
-  const begun = requisition ? [] : (start ?? []).flatMap((line) => choices.items.filter((item) => item.id === line.itemId).map((item) => ({ item, quantity: line.quantity })));
-  const begunFor = begun[0]?.item.companyTenantId;
-  const [company, setCompany] = useTracked(requisition?.company?.tenantId ?? (requisition ? NONE : (begunFor ?? choices.companies[0]?.tenantId ?? NONE)), mark);
+  // Every field starts blank (2026-11-21): nothing is chosen for the person.
+  const [company, setCompany] = useTracked(requisition?.company?.tenantId ?? NONE, mark);
   const [neededBy, setNeededBy] = useTracked(requisition?.neededBy ?? '', mark);
-  const [place, setPlace] = useTracked(requisition?.deliverTo?.id ?? (requisition ? NONE : (choices.places[0]?.id ?? NONE)), mark);
+  const [place, setPlace] = useTracked(requisition?.deliverTo?.id ?? NONE, mark);
   const [requestCode, setRequestCode] = useTracked(requisition?.requestCode?.id ?? NONE, mark);
   const [costCenter, setCostCenter] = useTracked(requisition?.costCenter?.id ?? NONE, mark);
-  const [documentDate, setDocumentDate] = useTracked(requisition?.documentDate ?? businessToday(), mark);
+  const [documentDate, setDocumentDate] = useTracked(requisition?.documentDate ?? '', mark);
   const [reason, setReason] = useTracked(requisition?.reason ?? '', mark);
   const [moreShown, setMoreShown] = useState(Boolean(requisition?.reason));
 
@@ -254,7 +253,7 @@ export function RequisitionForm({
     if (departmentId !== NONE) filled.push('department');
     return {
       key: base.key ?? key(),
-      typeId: item.lineTypeId ?? base.typeId ?? firstType(choices),
+      typeId: item.lineTypeId ?? (base.typeId && base.typeId !== NONE ? base.typeId : firstType(choices)),
       itemId: item.id,
       description: item.name,
       placeId,
@@ -267,9 +266,10 @@ export function RequisitionForm({
       filled,
     };
   };
-  const blankLine = (previous?: LineDraft): LineDraft => ({
+  /** A line with every cell blank (2026-11-21); only the Location Code and date chosen on General carry down. */
+  const blankLine = (): LineDraft => ({
     key: key(),
-    typeId: firstType(choices),
+    typeId: NONE,
     itemId: NONE,
     description: '',
     placeId: place,
@@ -277,15 +277,15 @@ export function RequisitionForm({
     cost: '',
     expectedOn: neededBy,
     vendorId: NONE,
-    departmentId: previous?.departmentId ?? NONE,
+    departmentId: NONE,
     notes: '',
     filled: [],
   });
 
   const [lines, setLines] = useTracked<LineDraft[]>(() => {
-    const drafted = requisition?.lines.map((line) => draftOf(line, choices)) ?? begun.filter(({ item }) => item.companyTenantId === begunFor).map(({ item, quantity }) => ({ ...filledLine(item, quantity), filled: [] as Filled[] }));
-    // The spreadsheet's next row, ready to type in.
-    return readOnly ? drafted : [...drafted, blankLine(drafted.at(-1))];
+    const drafted = requisition?.lines.map((line) => draftOf(line, choices)) ?? [];
+    // One blank line to type in, and no more: a line is added only by Add New Line (2026-11-21).
+    return readOnly || drafted.length ? drafted : [blankLine()];
   }, mark);
   const [quotes, setQuotes] = useTracked<QuoteDraft[]>(
     () => requisition?.quotes.map((quote) => ({ key: key(), vendorId: quote.vendor.id, total: dollars(quote.totalCents), delivery: quote.delivery ?? '', chosen: quote.chosen })) ?? [],
@@ -306,29 +306,40 @@ export function RequisitionForm({
   const companyId = chosen(company);
   const companyRow = choices.companies.find((option) => option.tenantId === companyId);
   const offered = choices.items.filter((item) => item.companyTenantId === companyId);
+  // Before the Purchaser Code is chosen, a line may take any item, and the requisition becomes for its company (2026-11-21).
+  const pickable = companyId ? offered : choices.items;
   const used = new Set(lines.flatMap((line) => (line.itemId !== NONE ? [line.itemId] : [])));
   const setLine = (lineKey: string, change: Partial<LineDraft>, field?: Filled) =>
     setLines((rows) => rows.map((row) => (row.key === lineKey ? { ...row, ...change, filled: field ? row.filled.filter((one) => one !== field) : row.filled } : row)));
   const setQuote = (quoteKey: string, change: Partial<QuoteDraft>) => setQuotes((rows) => rows.map((row) => (row.key === quoteKey ? { ...row, ...change } : row)));
   /** What a line may take: its company's items of its type, none already on another line. */
-  const offeredFor = (line: LineDraft) => offered.filter((item) => (item.id === line.itemId || !used.has(item.id)) && (line.typeId === NONE || !item.lineTypeId || item.lineTypeId === line.typeId));
+  const offeredFor = (line: LineDraft) => pickable.filter((item) => (item.id === line.itemId || !used.has(item.id)) && (line.typeId === NONE || !item.lineTypeId || item.lineTypeId === line.typeId));
 
   const pickFor = (line: LineDraft, item: PickerItem) => {
     const index = lines.findIndex((row) => row.key === line.key);
-    setLines((rows) => {
-      const next = rows.map((row) => (row.key === line.key ? filledLine(item, null, row, rows[index - 1]) : row));
-      // Filling the last row opens the next one, as a spreadsheet's does.
-      return next.at(-1)!.itemId !== NONE && next.length < MOST_REQUISITION_LINES ? [...next, blankLine(next.at(-1))] : next;
-    });
+    // Picked before the Purchaser Code: the requisition is for the item's company.
+    if (!companyId && item.companyTenantId) setCompany(item.companyTenantId);
+    setLines((rows) => rows.map((row) => (row.key === line.key ? filledLine(item, null, row, rows[index - 1]) : row)));
     setCurrentKey(line.key);
   };
-  /** Lines for items, after the lines already filled, keeping one blank row at the end. */
+  /** Line Amount typed (2026-11-21): the unit cost becomes it over the quantity, a quantity of 1 when none is given yet. */
+  const setAmount = (line: LineDraft, typed: string) => {
+    const cents = money(typed);
+    const quantity = whole(line.quantity) ?? 1;
+    const change: Partial<LineDraft> = { amount: typed };
+    if (cents !== null && cents >= 0) {
+      change.cost = dollars(Math.round(cents / quantity));
+      if (!whole(line.quantity)) change.quantity = String(quantity);
+    }
+    setLine(line.key, change, 'cost');
+  };
+  /** Lines for items, after the lines already filled. */
   const addItems = (picked: { item: PickerItem; quantity: number | null }[]) =>
     setLines((rows) => {
       const kept = rows.filter((row) => !isBlank(row));
       const added = picked.filter(({ item }) => !kept.some((row) => row.itemId === item.id)).map(({ item, quantity }) => filledLine(item, quantity, {}, kept.at(-1)));
-      const all = [...kept, ...added].slice(0, MOST_REQUISITION_LINES - 1);
-      return [...all, blankLine(all.at(-1))];
+      const all = [...kept, ...added].slice(0, MOST_REQUISITION_LINES);
+      return all.length ? all : [blankLine()];
     });
   /** A scanned label: one more of an item already asked for, else a new line for it. */
   const scan = (item: { id: string; code: string }): string | void => {
@@ -336,6 +347,7 @@ export function RequisitionForm({
     if (on) return setLine(on.key, { quantity: String((whole(on.quantity) ?? 0) + 1) });
     const picked = itemOf.get(item.id);
     if (!picked) return;
+    if (!companyId && picked.companyTenantId) setCompany(picked.companyTenantId);
     if (lines.filter((line) => !isBlank(line)).length >= MOST_REQUISITION_LINES) return `A requisition holds ${MOST_REQUISITION_LINES} lines.`;
     addItems([{ item: picked, quantity: null }]);
   };
@@ -349,11 +361,12 @@ export function RequisitionForm({
 
   /** Copy Document: another requisition's lines, and its General if asked. */
   function copyFrom(from: RequisitionDetail, options: { general: boolean; replace: boolean }): string | null {
-    const target = options.general && from.company ? from.company.tenantId : companyId;
+    // Copied into one with no company yet (2026-11-21), it takes the other's, as picking an item does.
+    const target = (options.general || !companyId) && from.company ? from.company.tenantId : companyId;
     const taken = from.lines.filter((line) => line.item && itemOf.get(line.item.id)?.companyTenantId === target);
     if (!taken.length) return `${from.number ?? 'That requisition'} has no line this requisition's company buys.`;
+    if (target !== companyId && target) setCompany(target);
     if (options.general) {
-      if (from.company) setCompany(from.company.tenantId);
       setPlace(from.deliverTo?.id ?? NONE);
       setRequestCode(from.requestCode?.id ?? NONE);
       setCostCenter(from.costCenter?.id ?? NONE);
@@ -362,8 +375,8 @@ export function RequisitionForm({
     setLines((rows) => {
       const kept = options.replace ? [] : rows.filter((row) => !isBlank(row));
       const copied = taken.filter((line) => !kept.some((row) => row.itemId === line.item!.id)).map((line) => draftOf(line, choices));
-      const all = [...kept, ...copied].slice(0, MOST_REQUISITION_LINES - 1);
-      return [...all, blankLine(all.at(-1))];
+      const all = [...kept, ...copied].slice(0, MOST_REQUISITION_LINES);
+      return all.length ? all : [blankLine()];
     });
     const left = from.lines.length - taken.length;
     setNotice(`Copied ${formatCount(taken.length)} ${taken.length === 1 ? 'line' : 'lines'} from ${from.number ?? 'the requisition'}${left ? `; ${formatCount(left)} for another company left out` : ''}.`);
@@ -500,7 +513,7 @@ export function RequisitionForm({
   const deleteLine = (lineKey: string) =>
     setLines((rows) => {
       const left = rows.filter((row) => row.key !== lineKey);
-      return left.length && isBlank(left.at(-1)!) ? left : [...left, blankLine(left.at(-1))];
+      return left.length ? left : [blankLine()];
     });
   const move = (lineKey: string, by: -1 | 1) =>
     setLines((rows) => {
@@ -515,9 +528,9 @@ export function RequisitionForm({
     setLines((rows) => {
       if (rows.length >= MOST_REQUISITION_LINES) return rows;
       const at = rows.findIndex((row) => row.key === lineKey);
-      return [...rows.slice(0, at), blankLine(rows[at - 1]), ...rows.slice(at)];
+      return [...rows.slice(0, at), blankLine(), ...rows.slice(at)];
     });
-  const addLine = () => setLines((rows) => (rows.length >= MOST_REQUISITION_LINES ? rows : [...rows, blankLine(rows.at(-1))]));
+  const addLine = () => setLines((rows) => (rows.length >= MOST_REQUISITION_LINES ? rows : [...rows, blankLine()]));
 
   const deciding = Boolean(can && (can.approve || can.sendBack || can.reject || can.approveBlocked));
   const title = requisition?.number ?? (requisition ? 'Draft requisition' : 'New Requisition');
@@ -811,7 +824,7 @@ export function RequisitionForm({
                           Add Everything That Is Low
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => setLines((rows) => [...rows.filter((row) => !isBlank(row)), blankLine(rows.filter((row) => !isBlank(row)).at(-1))])}>Delete Empty Lines</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setLines((rows) => (rows.some((row) => !isBlank(row)) ? rows.filter((row) => !isBlank(row)) : [blankLine()]))}>Delete Empty Lines</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <Button className="h-7 px-2" disabled={lines.length >= MOST_REQUISITION_LINES} onClick={addLine} type="button" variant="ghost">
@@ -868,25 +881,36 @@ export function RequisitionForm({
                   className="max-w-md"
                   hint="Scan a label to add the item. Scan it again for one more."
                   id={`${ids}-scan`}
-                  items={offered}
+                  items={pickable}
                   missing={(code) => (choices.items.some((item) => item.code === code) ? `${code} is bought for another company.` : `No item has the code ${code}.`)}
                   onItem={scan}
                 />
               ) : null}
 
-              <Sheet label="Lines" className="min-w-[96rem]">
-                <SheetHead columns={editing ? lineColumns : lineColumns.map((column) => ({ ...column, required: false }))} />
+              <Sheet label="Lines" className="min-w-[112rem]">
+                <SheetHead columns={editing ? [DELETE_COLUMN, ...lineColumns] : lineColumns.map((column) => ({ ...column, required: false }))} />
                 {editing ? (
-                  <SheetBody onKeyDown={sheetKeys(() => (lines.at(-1) && !isBlank(lines.at(-1)!) ? addLine() : undefined))}>
+                  <SheetBody onKeyDown={sheetKeys()}>
                     {lines.map((line, index) => {
                       if (!isBlank(line) && !visible.has(line.key)) return null;
                       const item = itemOf.get(line.itemId);
-                      const parsed = isBlank(line) ? null : parse(line);
                       const name = item?.name ?? `line ${index + 1}`;
                       const fill = (field: Filled) => (line.filled.includes(field) ? 'bg-warning/15' : '');
                       return (
                         <tr className={cn(line.key === currentKey ? 'bg-accent/40' : 'hover:bg-muted/40')} key={line.key} onFocusCapture={() => setCurrentKey(line.key)}>
                           <RowNumber current={line.key === currentKey} n={index + 1} />
+                          <td className={cn(CELL, 'text-center')}>
+                            <button
+                              aria-label={`Delete line ${index + 1}`}
+                              className="text-muted-foreground hover:text-destructive focus-visible:ring-primary inline-flex size-8 items-center justify-center focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset disabled:opacity-30"
+                              // The only line, blank, is already as empty as a requisition gets.
+                              disabled={lines.length === 1 && isBlank(line)}
+                              onClick={() => deleteLine(line.key)}
+                              type="button"
+                            >
+                              <Trash2Icon aria-hidden="true" className="size-3.5" />
+                            </button>
+                          </td>
                           <td className={CELL}>
                             <Pick
                               cell
@@ -923,7 +947,17 @@ export function RequisitionForm({
                           <td className={cn(CELL, fill('cost'))}>
                             <input aria-label={`Direct unit cost of ${name}`} className={cn(CELL_INPUT, 'text-right tabular-nums')} inputMode="decimal" onChange={(event) => setLine(line.key, { cost: event.target.value }, 'cost')} placeholder={isBlank(line) ? '' : '0.00'} value={line.cost} />
                           </td>
-                          <td className={cn(CELL_TEXT, 'text-right tabular-nums')}>{parsed ? formatMoney(parsed.quantity * parsed.estimatedUnitCostCents) : ''}</td>
+                          <td className={CELL}>
+                            <input
+                              aria-label={`Line amount of ${name}`}
+                              className={cn(CELL_INPUT, 'text-right tabular-nums')}
+                              inputMode="decimal"
+                              // Left, it shows quantity × cost: the amount itself when it divides, else to the cent.
+                              onBlur={() => setLine(line.key, { amount: null })}
+                              onChange={(event) => setAmount(line, event.target.value)}
+                              value={line.amount ?? (whole(line.quantity) && money(line.cost) !== null ? dollars(whole(line.quantity)! * money(line.cost)!) : '')}
+                            />
+                          </td>
                           <td className={cn(CELL, fill('expected'))}>
                             <input aria-label={`Expected receipt date of ${name}`} className={CELL_INPUT} onChange={(event) => setLine(line.key, { expectedOn: event.target.value }, 'expected')} type="date" value={line.expectedOn} />
                           </td>
@@ -1216,7 +1250,8 @@ function draftOf(line: RequisitionLine, choices: RequisitionChoices): LineDraft 
 /** A NAV-style dropdown: a list to choose from, with "none" first where none may be chosen. `cell`: drawn as a cell of the grid. */
 function Pick({ id, label, value, onChange, options, none, cell }: { id?: string; label: string; value: string; onChange: (value: string) => void; options: readonly { value: string; label: string }[]; none?: string; cell?: boolean }) {
   return (
-    <Select onValueChange={onChange} value={value}>
+    // Nothing chosen reads as blank (2026-11-21); the list still offers "None" to clear one.
+    <Select onValueChange={onChange} value={value === NONE ? '' : value}>
       <SelectTrigger
         aria-label={label}
         className={cn(
