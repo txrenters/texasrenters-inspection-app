@@ -118,12 +118,14 @@ export async function readPurchasingSetup(
  */
 export function standingOf(
   permissions: readonly string[],
-  row: { companyTenantIds: string[]; approvesAnyAmount: boolean; approvalLimitCents: number | null } | null,
+  row: { companyTenantIds: string[]; departmentIds?: string[]; approvesAnyAmount: boolean; approvalLimitCents: number | null } | null,
 ): PurchasingStanding {
   const approveAny = permissions.includes('purchasing:approve-any');
   return {
     permissions,
     companies: row?.companyTenantIds.length ? row.companyTenantIds : null,
+    // As an approver, the departments ticked for them (2026-11-21); none is every department.
+    departments: row?.departmentIds?.length ? row.departmentIds : null,
     anyAmount: row ? row.approvesAnyAmount || (row.approvalLimitCents === null && approveAny) : approveAny,
     limitCents: row?.approvesAnyAmount ? null : (row?.approvalLimitCents ?? null),
   };
@@ -132,7 +134,7 @@ export function standingOf(
 export async function readStanding(db: Pick<Db, 'purchasingPerson'>, person: { id: string; organizationId: string; permissions: readonly string[] }): Promise<PurchasingStanding> {
   const row = await db.purchasingPerson.findUnique({
     where: { organizationId_userProfileId: { organizationId: person.organizationId, userProfileId: person.id } },
-    select: { companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true },
+    select: { companyTenantIds: true, departmentIds: true, approvesAnyAmount: true, approvalLimitCents: true },
   });
   return standingOf(person.permissions, row);
 }

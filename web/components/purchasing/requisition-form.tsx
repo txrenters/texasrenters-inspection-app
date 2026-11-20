@@ -3,7 +3,7 @@
 import {
   MOST_REQUISITION_LINES,
   MOST_REQUISITION_QUOTES,
-  REQUISITION_STATUS_LABEL,
+  REQUISITION_STAGE_LABEL,
   FACT_BOXES,
   approvalStepFor,
   factBoxesFor,
@@ -32,7 +32,7 @@ import { ItemCodePicker, ItemLookupDialog, type PickerItem } from '@/components/
 import { DocumentTitle, FactBox, FastTab, FieldRow, FieldValue } from '@/components/purchasing/nav-kit';
 import { CommentsTab, LinksFactBox, NotesFactBox } from '@/components/purchasing/requisition-attached';
 import { CategoriesDialog, CopyDocumentDialog, DeleteDialog, NoteDialog } from '@/components/purchasing/requisition-dialogs';
-import { approverFor } from '@/components/purchasing/requisition-parts';
+import { RequisitionSteps, approverFor } from '@/components/purchasing/requisition-parts';
 import { RequisitionRibbon } from '@/components/purchasing/requisition-ribbon';
 import { CELL, CELL_INPUT, CELL_TEXT, RowNumber, Sheet, SheetBody, SheetHead, sheetKeys, type SheetColumn } from '@/components/purchasing/sheet-grid';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -113,6 +113,8 @@ interface LineDraft {
   /** Given its own Location Code or Expected Receipt Date on the line, it no longer goes with General's (2026-11-21). */
   ownPlace?: boolean;
   ownDate?: boolean;
+  /** Given its own Department Code on the line, it no longer goes with General's (2026-11-21). */
+  ownDepartment?: boolean;
 }
 interface QuoteDraft {
   key: string;
@@ -235,6 +237,8 @@ export function RequisitionForm({
   const [neededBy, setNeededBy] = useTracked(requisition?.neededBy ?? '', mark);
   const [place, setPlace] = useTracked(requisition?.deliverTo?.id ?? NONE, mark);
   const [requestCode, setRequestCode] = useTracked(requisition?.requestCode?.id ?? NONE, mark);
+  // The department it is for (2026-11-21): its approvers are that department's, and each line is for it unless given its own.
+  const [department, setDepartment] = useTracked(requisition?.department?.id ?? NONE, mark);
   const [costCenter, setCostCenter] = useTracked(requisition?.costCenter?.id ?? NONE, mark);
   // The day it was made, unless another is given (2026-11-21).
   const [documentDate, setDocumentDate] = useTracked(requisition?.documentDate ?? businessToday(), mark);
@@ -242,7 +246,7 @@ export function RequisitionForm({
   const [moreShown, setMoreShown] = useState(Boolean(requisition?.reason));
 
   /** A line for an item: what the office usually orders, at its usual price or what one cost on average, and the rest from the item and General. */
-  const filledLine = (item: PickerItem, quantity: number | null, base: Partial<LineDraft> = {}, previous?: LineDraft): LineDraft => {
+  const filledLine = (item: PickerItem, quantity: number | null, base: Partial<LineDraft> = {}): LineDraft => {
     const filled: Filled[] = ['description'];
     const costCents = item.priceCents ?? item.averageCostCents;
     if (typeof costCents === 'number') filled.push('cost');
@@ -254,8 +258,8 @@ export function RequisitionForm({
     const expectedOn = base.expectedOn || neededBy;
     if (expectedOn && expectedOn === neededBy) filled.push('expected');
     if (item.usualVendorId) filled.push('vendor');
-    const departmentId = previous?.departmentId ?? NONE;
-    if (departmentId !== NONE) filled.push('department');
+    const departmentId = base.departmentId && base.departmentId !== NONE ? base.departmentId : department;
+    if (departmentId !== NONE && departmentId === department) filled.push('department');
     return {
       key: base.key ?? key(),
       typeId: item.lineTypeId ?? (base.typeId && base.typeId !== NONE ? base.typeId : firstType(choices)),
@@ -271,6 +275,7 @@ export function RequisitionForm({
       filled,
       ownPlace: base.ownPlace,
       ownDate: base.ownDate,
+      ownDepartment: base.ownDepartment,
     };
   };
   /** A line with every cell blank (2026-11-21) but the Location Code and Expected Receipt Date chosen on General. */
@@ -284,13 +289,13 @@ export function RequisitionForm({
     cost: '',
     expectedOn: neededBy,
     vendorId: NONE,
-    departmentId: NONE,
+    departmentId: department,
     notes: '',
     filled: [],
   });
 
   const [lines, setLines] = useTracked<LineDraft[]>(() => {
-    const drafted = requisition?.lines.map((line) => draftOf(line, choices, { placeId: requisition.deliverTo?.id ?? NONE, expectedOn: requisition.neededBy ?? '' })) ?? [];
+    const drafted = requisition?.lines.map((line) => draftOf(line, choices, { placeId: requisition.deliverTo?.id ?? NONE, expectedOn: requisition.neededBy ?? '', departmentId: requisition.department?.id ?? NONE })) ?? [];
     // One blank line to type in, and no more: a line is added only by Add New Line (2026-11-21).
     return readOnly || drafted.length ? drafted : [blankLine()];
   }, mark);
@@ -323,10 +328,9 @@ export function RequisitionForm({
   const offeredFor = (line: LineDraft) => pickable.filter((item) => (item.id === line.itemId || !used.has(item.id)) && (line.typeId === NONE || !item.lineTypeId || item.lineTypeId === line.typeId));
 
   const pickFor = (line: LineDraft, item: PickerItem) => {
-    const index = lines.findIndex((row) => row.key === line.key);
     // Picked before the Purchaser Code: the requisition is for the item's company.
     if (!companyId && item.companyTenantId) setCompany(item.companyTenantId);
-    setLines((rows) => rows.map((row) => (row.key === line.key ? filledLine(item, null, row, rows[index - 1]) : row)));
+    setLines((rows) => rows.map((row) => (row.key === line.key ? filledLine(item, null, row) : row)));
     setCurrentKey(line.key);
   };
   /** Line Amount typed (2026-11-21): the unit cost becomes it over the quantity, a quantity of 1 when none is given yet. */
@@ -344,7 +348,7 @@ export function RequisitionForm({
   const addItems = (picked: { item: PickerItem; quantity: number | null }[]) =>
     setLines((rows) => {
       const kept = rows.filter((row) => !isBlank(row));
-      const added = picked.filter(({ item }) => !kept.some((row) => row.itemId === item.id)).map(({ item, quantity }) => filledLine(item, quantity, {}, kept.at(-1)));
+      const added = picked.filter(({ item }) => !kept.some((row) => row.itemId === item.id)).map(({ item, quantity }) => filledLine(item, quantity));
       const all = [...kept, ...added].slice(0, MOST_REQUISITION_LINES);
       return all.length ? all : [blankLine()];
     });
@@ -375,6 +379,10 @@ export function RequisitionForm({
     setPlace(next);
     setLines((rows) => rows.map((row) => (row.ownPlace ? row : { ...row, placeId: next, filled: followed(row.filled, 'place', next !== NONE) })));
   }
+  function changeDepartment(next: string) {
+    setDepartment(next);
+    setLines((rows) => rows.map((row) => (row.ownDepartment ? row : { ...row, departmentId: next, filled: followed(row.filled, 'department', next !== NONE) })));
+  }
   function changeNeededBy(next: string) {
     setNeededBy(next);
     setLines((rows) => rows.map((row) => (row.ownDate ? row : { ...row, expectedOn: next, filled: followed(row.filled, 'expected', Boolean(next)) })));
@@ -388,9 +396,12 @@ export function RequisitionForm({
     if (!taken.length) return `${from.number ?? 'That requisition'} has no line this requisition's company buys.`;
     if (target !== companyId && target) setCompany(target);
     // Its lines go with the General they are copied under: the other's, when its General is copied too.
-    const general = options.general ? { placeId: from.deliverTo?.id ?? NONE, expectedOn: from.neededBy ?? '' } : { placeId: place, expectedOn: neededBy };
+    const general = options.general
+      ? { placeId: from.deliverTo?.id ?? NONE, expectedOn: from.neededBy ?? '', departmentId: from.department?.id ?? NONE }
+      : { placeId: place, expectedOn: neededBy, departmentId: department };
     if (options.general) {
       changePlace(from.deliverTo?.id ?? NONE);
+      changeDepartment(from.department?.id ?? NONE);
       setRequestCode(from.requestCode?.id ?? NONE);
       setCostCenter(from.costCenter?.id ?? NONE);
       changeNeededBy(from.neededBy ?? '');
@@ -437,6 +448,7 @@ export function RequisitionForm({
     neededBy: neededBy || null,
     deliverToPlaceId: chosen(place),
     requestCodeId: chosen(requestCode),
+    departmentId: chosen(department),
     costCenterId: chosen(costCenter),
     documentDate: documentDate || null,
     reason: reason.trim(),
@@ -692,8 +704,10 @@ export function RequisitionForm({
 
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <DocumentTitle>{title}</DocumentTitle>
-        <span className="text-muted-foreground text-sm">{REQUISITION_STATUS_LABEL[requisition?.status ?? 'DRAFT']}</span>
+        <span className="text-muted-foreground text-sm">{REQUISITION_STAGE_LABEL[requisition?.stage ?? 'OPEN']}</span>
       </div>
+      {/* Where it is on NAV's way, and so whose turn it is (2026-11-21). */}
+      <RequisitionSteps stage={requisition?.stage ?? 'OPEN'} />
       {notice ? (
         <p className="text-muted-foreground text-sm" role="status">
           {notice}
@@ -735,6 +749,27 @@ export function RequisitionForm({
                       <Pick id={`${ids}-request`} label="Request Code" none="None" onChange={setRequestCode} options={(choices.requestCodes ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))} value={requestCode} />
                     ) : (
                       generalValue(requisition?.requestCode ? `${requisition.requestCode.code} · ${requisition.requestCode.name}` : null)
+                    )}
+                  </FieldRow>
+                ) : null}
+                {showsField('DEPARTMENT', editing ? department !== NONE : requisition?.department) ? (
+                  <FieldRow
+                    hint={editing ? "Its approvers are this department's. Every line is for it, unless it is given its own." : undefined}
+                    htmlFor={editing ? `${ids}-department` : undefined}
+                    label="Department Code"
+                    required={editing && required('DEPARTMENT')}
+                  >
+                    {editing ? (
+                      <Pick
+                        id={`${ids}-department`}
+                        label="Department Code"
+                        none="None"
+                        onChange={changeDepartment}
+                        options={(choices.departments ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))}
+                        value={department}
+                      />
+                    ) : (
+                      generalValue(requisition?.department ? `${requisition.department.code} · ${requisition.department.name}` : null)
                     )}
                   </FieldRow>
                 ) : null}
@@ -781,7 +816,7 @@ export function RequisitionForm({
                     )}
                   </FieldRow>
                 ) : null}
-                <FieldRow label="Status">{generalValue(REQUISITION_STATUS_LABEL[requisition?.status ?? 'DRAFT'])}</FieldRow>
+                <FieldRow label="Status">{generalValue(REQUISITION_STAGE_LABEL[requisition?.stage ?? 'OPEN'])}</FieldRow>
                 <FieldRow label="Approved By">
                   {generalValue(requisition && ['APPROVED', 'ORDERED', 'CLOSED'].includes(requisition.status) ? requisition.decidedBy : null)}
                 </FieldRow>
@@ -993,7 +1028,7 @@ export function RequisitionForm({
                           ) : null}
                           {showsDepartment ? (
                             <td className={cn(CELL, fill('department'))}>
-                              <Pick cell label={`Department of ${name}`} none="None" onChange={(departmentId) => setLine(line.key, { departmentId }, 'department')} options={(choices.departments ?? []).map((code) => ({ value: code.id, label: code.code }))} value={line.departmentId} />
+                              <Pick cell label={`Department of ${name}`} none="None" onChange={(departmentId) => setLine(line.key, { departmentId, ownDepartment: departmentId !== NONE && departmentId !== department }, 'department')} options={(choices.departments ?? []).map((code) => ({ value: code.id, label: code.code }))} value={line.departmentId} />
                             </td>
                           ) : null}
                         </tr>
@@ -1250,9 +1285,8 @@ export function RequisitionForm({
   );
 }
 
-/** A saved line as the form holds it: nothing marked, as nobody has just picked it. */
-/** A saved line as the form holds it; one whose location or date is not General's has its own. */
-function draftOf(line: RequisitionLine, choices: RequisitionChoices, general: { placeId: string; expectedOn: string }): LineDraft {
+/** A saved line as the form holds it; one whose location, date or department is not General's has its own. */
+function draftOf(line: RequisitionLine, choices: RequisitionChoices, general: { placeId: string; expectedOn: string; departmentId: string }): LineDraft {
   const item = line.item ? choices.items.find((option) => option.id === line.item!.id) : undefined;
   return {
     key: key(),
@@ -1269,6 +1303,7 @@ function draftOf(line: RequisitionLine, choices: RequisitionChoices, general: { 
     filled: [],
     ownPlace: Boolean(line.place) && line.place!.id !== general.placeId,
     ownDate: Boolean(line.expectedOn) && line.expectedOn !== general.expectedOn,
+    ownDepartment: Boolean(line.department) && line.department!.id !== general.departmentId,
   };
 }
 

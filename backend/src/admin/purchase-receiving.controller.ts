@@ -124,7 +124,7 @@ export class PurchaseReceivingController {
   }
 
   @Post('orders/:orderId/bill/approve-anyway')
-  @RequirePermissions('purchasing:request', 'purchasing:approve', 'purchasing:approve-any')
+  @RequirePermissions('purchasing:request', 'purchasing:approve-orders', 'purchasing:approve-any')
   @HttpCode(200)
   approveBillAnyway(@Req() request: AuthenticatedRequest, @Param('orderId', ParseUUIDPipe) orderId: string, @Body() body: ApproveVendorBillAnywayDto) {
     return this.receiving.approveBillAnyway(request.user, orderId, body);

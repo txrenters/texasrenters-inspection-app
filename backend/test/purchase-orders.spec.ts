@@ -40,12 +40,14 @@ const person = (n: number, displayName: string, permissions: string[], organizat
 const asker = person(1, 'Sample Requester', ['purchasing:request']);
 const colleague = person(2, 'Another Requester', ['purchasing:request']);
 const buyer = person(3, 'Sample Purchaser', ['purchasing:request', 'purchasing:order']);
-const manager = person(4, 'Sample Manager', ['purchasing:request', 'purchasing:approve']);
-const owner = person(5, 'Sample Owner', ['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
-/** Buys and approves: still never approves an order they made. */
-const everything = person(6, 'Sample Everything', ['purchasing:request', 'purchasing:order', 'purchasing:approve', 'purchasing:approve-any']);
-const outsider = person(7, 'Other Office', ['purchasing:request', 'purchasing:order', 'purchasing:approve', 'purchasing:approve-any'], OTHER_ORG);
-const PEOPLE = [asker, colleague, buyer, manager, owner, everything, outsider];
+const manager = person(4, 'Sample Manager', ['purchasing:request', 'purchasing:approve-orders']);
+const owner = person(5, 'Sample Owner', ['purchasing:request', 'purchasing:approve-orders', 'purchasing:approve-any']);
+/** Buys, and approves as a purchasing manager: one they made too (2026-11-21). */
+const everything = person(6, 'Sample Everything', ['purchasing:request', 'purchasing:order', 'purchasing:approve-orders', 'purchasing:approve-any']);
+const outsider = person(7, 'Other Office', ['purchasing:request', 'purchasing:order', 'purchasing:approve-orders', 'purchasing:approve-any'], OTHER_ORG);
+/** Approves requisitions only: never an order (2026-11-21). */
+const reviewer = person(8, 'Requisition Approver', ['purchasing:request', 'purchasing:approve']);
+const PEOPLE = [asker, colleague, buyer, manager, owner, everything, outsider, reviewer];
 
 type Row = Record<string, unknown>;
 type Where = Record<string, unknown>;
@@ -401,6 +403,15 @@ describe('changing an approved order (Purchasing Setup, 2026-11-20)', () => {
 });
 
 describe('approving an order', () => {
+  // 2026-11-21, the office: the purchasing manager approves orders; a requisition's approver does not.
+  it("is never decided by an approver of requisitions only, and waits in the purchasing manager's Requests to Approve", async () => {
+    const { service, orderId } = await order('waiting');
+    expect((await service.detail(reviewer, orderId)).can).toMatchObject({ approve: false, sendBack: false });
+    await expect(service.decide(reviewer, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_NOT_APPROVER' });
+    expect(await service.toApprove(reviewer)).toEqual([]);
+    expect((await service.toApprove(manager)).map((row) => row.id)).toEqual([orderId]);
+  });
+
   // 2026-11-21, the office: an approver approves an order they made, as anybody else's.
   it('is done by whoever made it when they are an approver, audited as their own, but never sent back by them', async () => {
     const { service, orderId, orders, audits } = await order('waiting', everything);
@@ -614,10 +625,10 @@ describe('the requests the page sends', () => {
 describe('who may do what', () => {
   const permissionsOf = (name: string) => Reflect.getMetadata('permissions', (PurchaseOrdersController.prototype as unknown as Record<string, object>)[name]!) as string[];
 
-  it('reads with purchasing:request, buys with purchasing:order, and approves with purchasing:approve', () => {
+  it('reads with purchasing:request, buys with purchasing:order, and approves orders with purchasing:approve-orders (the purchasing manager, 2026-11-21)', () => {
     for (const read of ['list', 'detail']) expect(permissionsOf(read)).toEqual(['purchasing:request']);
     for (const buys of ['create', 'update', 'submit', 'cancel', 'send']) expect(permissionsOf(buys)).toEqual(['purchasing:request', 'purchasing:order']);
-    for (const decides of ['approve', 'sendBack']) expect(permissionsOf(decides)).toEqual(['purchasing:request', 'purchasing:approve']);
+    for (const decides of ['approve', 'sendBack']) expect(permissionsOf(decides)).toEqual(['purchasing:request', 'purchasing:approve-orders']);
   });
 
   it('never lets an API key make or send an order', () => {

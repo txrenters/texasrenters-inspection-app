@@ -4,22 +4,24 @@ import {
   DEFAULT_FILE_RULES,
   DEFAULT_PAGE_LAYOUT,
   KEEPER_PERMISSIONS,
-  REQUISITION_STATUSES,
+  REQUISITION_STAGES,
+  REQUISITION_STAGE_LABEL,
   REQUISITION_STATUS_LABEL,
   formatMoney,
   stepsFromLimit,
   type PurchasingSettings,
   type RequisitionRow,
-  type RequisitionStatus,
+  type RequisitionStage,
 } from '@texasrenters/shared';
 import { ClipboardListIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { ApprovalsTab } from '@/components/purchasing/approvals-tab';
 import { CodesTab } from '@/components/purchasing/codes-tab';
 import { OrdersTab } from '@/components/purchasing/orders-tab';
-import { RequisitionStatusBadge, approverFor } from '@/components/purchasing/requisition-parts';
+import { RequisitionStageBadge, waitingOn } from '@/components/purchasing/requisition-parts';
 import { SetupTab } from '@/components/purchasing/setup-tab';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -47,8 +49,6 @@ import { useUrlState } from '@/lib/url-state';
 const ALL = 'all';
 
 function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
-  const waitingOn = (row: RequisitionRow) =>
-    row.status === 'SUBMITTED' ? approverFor(row.estimatedTotalCents, settings) : row.status === 'DRAFT' || row.status === 'SENT_BACK' ? row.requestedBy.name : row.status === 'APPROVED' ? 'A purchaser, to make the order' : EMPTY;
   return [
     { key: 'number', header: 'No.', cell: (row) => row.number ?? 'Draft', className: 'whitespace-nowrap' },
     {
@@ -68,11 +68,13 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
     },
     { key: 'by', header: 'Asked by', hideBelow: 'md', cell: (row) => row.requestedBy.name },
     { key: 'day', header: 'Day', hideBelow: 'lg', cell: (row) => formatDay(row.submittedAt ?? row.createdAt), className: 'whitespace-nowrap' },
+    { key: 'department', header: 'Department', hideBelow: 'lg', cell: (row) => row.department?.code ?? EMPTY },
     { key: 'company', header: 'Company', hideBelow: 'xl', cell: (row) => row.company?.name ?? EMPTY },
     { key: 'total', header: 'Est. total', numeric: true, cell: (row) => formatMoney(row.estimatedTotalCents) },
     { key: 'needed', header: 'Needed by', hideBelow: 'lg', cell: (row) => (row.neededBy ? formatDay(row.neededBy) : EMPTY), className: 'whitespace-nowrap' },
-    { key: 'status', header: 'Status', cell: (row) => <RequisitionStatusBadge status={row.status} /> },
-    { key: 'waiting', header: 'Waiting on', hideBelow: 'xl', cell: waitingOn },
+    // Where it is, NAV's way (2026-11-21), and so whose turn it is.
+    { key: 'status', header: 'Status', cell: (row) => <RequisitionStageBadge stage={row.stage} /> },
+    { key: 'waiting', header: 'Waiting on', hideBelow: 'xl', cell: (row) => waitingOn(row, settings) },
   ];
 }
 
@@ -82,6 +84,12 @@ export default function PurchasingPage() {
   const canCode = hasAny('purchasing:request', ...KEEPER_PERMISSIONS);
   // Purchasing Setup (2026-11-20): a system admin or a Purchasing admin.
   const canSetup = has('purchasing:setup');
+  // Requests to Approve (2026-11-21): an approver's requisitions, a purchasing manager's orders.
+  const approvesRequisitions = has('purchasing:approve');
+  const approvesOrders = has('purchasing:approve-orders');
+  const canApprove = approvesRequisitions || approvesOrders;
+  // The codes live in Setup since 2026-11-21: read by anybody in purchasing, changed by each list's keeper.
+  const seesSetup = canSetup || canCode;
   const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = useRequisitions(show);
@@ -89,10 +97,13 @@ export default function PurchasingPage() {
 
   const words = state.q.trim().toLowerCase();
   const rows = (data?.requisitions ?? []).filter(
-    (row) => (state.status === ALL || row.status === state.status) && (!words || `${row.number ?? ''} ${row.summary} ${row.requestedBy.name}`.toLowerCase().includes(words)),
+    (row) =>
+      (state.status === ALL || row.stage === state.status) &&
+      (!words || `${row.number ?? ''} ${row.summary} ${row.requestedBy.name} ${row.department?.code ?? ''}`.toLowerCase().includes(words)),
   );
-  const count = (status: RequisitionStatus) => data?.requisitions.filter((row) => row.status === status).length ?? 0;
-  const statuses = REQUISITION_STATUSES.filter((status) => data?.requisitions.some((row) => row.status === status));
+  const count = (stage: RequisitionStage) => data?.requisitions.filter((row) => row.stage === stage).length ?? 0;
+  const stages = REQUISITION_STAGES.filter((stage) => data?.requisitions.some((row) => row.stage === stage));
+  const tab = state.tab === 'orders' ? 'orders' : state.tab === 'approvals' && canApprove ? 'approvals' : (state.tab === 'setup' || state.tab === 'codes') && seesSetup ? 'setup' : 'requisitions';
 
   return (
     <>
@@ -107,30 +118,42 @@ export default function PurchasingPage() {
         description={data?.seesAll ? "Everyone's purchase requisitions and orders, and yours." : 'Your purchase requisitions, and the orders made from them.'}
         info={
           <>
-            <p>A requisition asks for stock to be bought and says why. An approver approves it, sends it back with a note, or rejects it.</p>
-            <p>It gets its number when it is made. An approver may approve their own, within their limit.</p>
-            <p>A purchaser makes the order from an approved requisition, an approver approves the order, and it goes to the vendor as a PDF.</p>
+            <p>A requisition asks for stock to be bought. It goes Open, Pending Approval, Pending Processing, Pending Order, Ordered, Received, Closed.</p>
+            <p>Pending Approval: an approver of its department and company approves it, sends it back with a note, or rejects it. An approver may approve their own, within their limit.</p>
+            <p>Pending Processing: a purchaser makes the purchase order. Pending Order: the purchasing manager approves the order, and the purchaser sends it to the vendor.</p>
+            <p>Requests to Approve lists what waits for you.</p>
           </>
         }
         infoLabel="About purchase requisitions"
         title="Purchasing"
       />
 
-      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : state.tab === 'codes' && canCode ? 'codes' : state.tab === 'setup' && canSetup ? 'setup' : 'requisitions'}>
+      <Tabs onValueChange={(next) => setState({ tab: next, show: 'open', status: ALL, q: '' })} value={tab}>
         <TabsList>
-          <TabsTrigger value="requisitions">Requisitions</TabsTrigger>
-          <TabsTrigger value="orders">Orders</TabsTrigger>
-          {canCode ? <TabsTrigger value="codes">Codes</TabsTrigger> : null}
-          {canSetup ? <TabsTrigger value="setup">Setup</TabsTrigger> : null}
+          {/* NAV's names (the office, 2026-11-21). */}
+          <TabsTrigger value="requisitions">Purchase Requisitions</TabsTrigger>
+          <TabsTrigger value="orders">Purchase Orders</TabsTrigger>
+          {canApprove ? <TabsTrigger value="approvals">Requests to Approve</TabsTrigger> : null}
+          {seesSetup ? <TabsTrigger value="setup">Setup</TabsTrigger> : null}
         </TabsList>
-        {canSetup ? (
+        {seesSetup ? (
           <TabsContent value="setup">
-            <SetupTab enabled={state.tab === 'setup'} />
+            <div className="grid gap-8">
+              {canSetup ? <SetupTab enabled={tab === 'setup'} /> : null}
+              {canCode ? (
+                <section aria-labelledby="purchasing-codes" className="grid gap-3">
+                  <h2 className="text-heading text-lg font-semibold" id="purchasing-codes">
+                    Codes
+                  </h2>
+                  <CodesTab enabled={tab === 'setup'} />
+                </section>
+              ) : null}
+            </div>
           </TabsContent>
         ) : null}
-        {canCode ? (
-          <TabsContent value="codes">
-            <CodesTab enabled={state.tab === 'codes'} />
+        {canApprove ? (
+          <TabsContent value="approvals">
+            {tab === 'approvals' ? <ApprovalsTab orders={approvesOrders} requisitions={approvesRequisitions} /> : null}
           </TabsContent>
         ) : null}
         <TabsContent value="orders">
@@ -145,9 +168,9 @@ export default function PurchasingPage() {
         <div className="grid gap-4">
           {show === 'open' ? (
             <StatGroup columns="grid-cols-1 sm:grid-cols-3">
-              <Stat label="Waiting for approval" tone={count('SUBMITTED') ? 'warning' : 'default'} value={formatCount(count('SUBMITTED'))} />
-              <Stat label="Approved, not ordered yet" value={formatCount(count('APPROVED'))} />
-              <Stat label="Sent back to the requester" value={formatCount(count('SENT_BACK'))} />
+              <Stat label="Pending Approval" tone={count('PENDING_APPROVAL') ? 'warning' : 'default'} value={formatCount(count('PENDING_APPROVAL'))} />
+              <Stat label="Pending Processing" tone={count('PENDING_PROCESSING') ? 'warning' : 'default'} value={formatCount(count('PENDING_PROCESSING'))} />
+              <Stat label="Pending Order" tone={count('PENDING_ORDER') ? 'warning' : 'default'} value={formatCount(count('PENDING_ORDER'))} />
             </StatGroup>
           ) : null}
 
@@ -160,11 +183,11 @@ export default function PurchasingPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="open">Open requisitions</SelectItem>
-                  <SelectItem value="closed">Ordered, rejected and cancelled</SelectItem>
+                  <SelectItem value="closed">Closed, rejected and cancelled</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {statuses.length > 1 ? (
+            {stages.length > 1 ? (
               <div className="grid gap-1.5">
                 <Label htmlFor="requisitions-status">Status</Label>
                 <Select onValueChange={(status) => setState({ status })} value={state.status}>
@@ -173,9 +196,9 @@ export default function PurchasingPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={ALL}>Every status</SelectItem>
-                    {statuses.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {REQUISITION_STATUS_LABEL[status]}
+                    {stages.map((stage) => (
+                      <SelectItem key={stage} value={stage}>
+                        {REQUISITION_STAGE_LABEL[stage]}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -197,7 +220,7 @@ export default function PurchasingPage() {
                   ? 'No requisition matches what is chosen above.'
                   : show === 'open'
                     ? 'Ask for stock to be bought with a new requisition. It goes to an approver when you submit it.'
-                    : 'Nothing has been ordered, rejected or cancelled.'
+                    : 'Nothing has been closed, rejected or cancelled.'
               }
               icon={ClipboardListIcon}
               title={data.requisitions.length ? 'Nothing to show' : show === 'open' ? 'No open requisitions' : 'None'}

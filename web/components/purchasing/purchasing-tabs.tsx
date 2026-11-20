@@ -11,14 +11,14 @@ import { cn } from '@/lib/utils';
  * (2026-11-20): Requisitions marked, Orders and Codes a click away. Codes only
  * for whoever may keep them.
  */
-export function PurchasingTabs({ current }: { current: 'requisitions' | 'orders' | 'codes' | 'setup' }) {
+export function PurchasingTabs({ current }: { current: 'requisitions' | 'orders' | 'approvals' | 'setup' }) {
   const { has, hasAny } = usePermissions();
+  // NAV's names (the office, 2026-11-21); the codes are in Setup, read by anybody in purchasing.
   const tabs = [
-    { key: 'requisitions', label: 'Requisitions' },
-    { key: 'orders', label: 'Orders' },
-    // Read by anybody in purchasing since Purchasing Setup (2026-11-21); each list is changed by its keeper.
-    ...(hasAny('purchasing:request', ...KEEPER_PERMISSIONS) ? [{ key: 'codes', label: 'Codes' }] : []),
-    ...(has('purchasing:setup') ? [{ key: 'setup', label: 'Setup' }] : []),
+    { key: 'requisitions', label: 'Purchase Requisitions' },
+    { key: 'orders', label: 'Purchase Orders' },
+    ...(hasAny('purchasing:approve', 'purchasing:approve-orders') ? [{ key: 'approvals', label: 'Requests to Approve' }] : []),
+    ...(has('purchasing:setup') || hasAny('purchasing:request', ...KEEPER_PERMISSIONS) ? [{ key: 'setup', label: 'Setup' }] : []),
   ] as const;
   return (
     <nav aria-label="Purchasing" className="mb-3 flex gap-6 border-b">

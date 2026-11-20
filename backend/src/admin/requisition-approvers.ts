@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PurchaseRequisitionStatus as Status } from '@prisma/client';
 import {
   approvalRefusal,
+  departmentRefusal,
   approvalStepFor,
   formatMoney,
   requisitionTotalCents,
@@ -42,6 +43,8 @@ export interface ApprovalAsked {
   totalCents: number;
   companyTenantId: string | null;
   ownCompaniesOnly: boolean;
+  /** Its department: only that department's approvers are asked (2026-11-21). */
+  departmentId?: string | null;
 }
 
 /** The console's address for a link, when the deployment says it. */
@@ -83,7 +86,7 @@ export class RequisitionApproversService {
           },
         },
       }),
-      this.prisma.purchasingPerson.findMany({ where: { organizationId }, select: { userProfileId: true, companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true } }),
+      this.prisma.purchasingPerson.findMany({ where: { organizationId }, select: { userProfileId: true, companyTenantIds: true, departmentIds: true, approvesAnyAmount: true, approvalLimitCents: true } }),
     ]);
     const settingsOf = new Map(rows.map((row) => [row.userProfileId, row]));
     const people = new Map<string, { id: string; email: string; name: string; roles: string[]; permissions: string[] }>();
@@ -98,7 +101,7 @@ export class RequisitionApproversService {
         const held = resolveEffectivePermissions(person.roles, person.permissions);
         if (!PERMISSIONS_TO_APPROVE.every((permission) => held.includes(permission))) return false;
         const standing = standingOf(held, settingsOf.get(person.id) ?? null);
-        return approvalRefusal(standing, asked.steps, asked.totalCents, asked.companyTenantId, asked.ownCompaniesOnly) === null;
+        return departmentRefusal(standing, asked.departmentId ?? null) === null && approvalRefusal(standing, asked.steps, asked.totalCents, asked.companyTenantId, asked.ownCompaniesOnly) === null;
       })
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, MOST_APPROVERS_EMAILED)
@@ -157,6 +160,7 @@ export class RequisitionApproversService {
         requestedById: true,
         requestedBy: { select: { displayName: true } },
         xeroTenantId: true,
+        departmentId: true,
         lines: { select: { quantity: true, estimatedUnitCostCents: true } },
       },
     });
@@ -169,6 +173,7 @@ export class RequisitionApproversService {
       totalCents,
       companyTenantId: requisition.xeroTenantId,
       ownCompaniesOnly: approvals.approverOwnCompaniesOnly,
+      departmentId: requisition.departmentId,
     });
     if (!people.length) return 0;
     const company = requisition.xeroTenantId

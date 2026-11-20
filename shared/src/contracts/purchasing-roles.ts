@@ -19,6 +19,8 @@ export const PURCHASING_ROLES = [
   { key: 'REQUISITIONER', label: 'Requisitioner', permissions: ['purchasing:request'] },
   { key: 'PURCHASER', label: 'Purchaser', permissions: ['purchasing:request', 'purchasing:order'] },
   { key: 'APPROVER', label: 'Approver', permissions: ['purchasing:request', 'purchasing:approve'] },
+  // Approves purchase orders before the purchaser sends them (the office, 2026-11-21); the overall manager may approve any amount.
+  { key: 'PURCHASING_MANAGER', label: 'Purchasing manager', permissions: ['purchasing:request', 'purchasing:approve-orders'] },
   { key: 'STOCK_KEEPER', label: 'Stock keeper', permissions: ['inventory:read', 'inventory:manage', 'inventory:withdraw', 'inventory:count'] },
   { key: 'RECEIVER', label: 'Receiver', permissions: ['purchasing:request', 'purchasing:receive', 'inventory:read'] },
   { key: 'CODE_ADMIN', label: 'Code admin', permissions: ['purchasing:request', 'purchasing:codes'] },
@@ -52,6 +54,8 @@ export interface PurchasingPersonRow {
   you: boolean;
   /** The companies they act for, by Xero tenant; empty is every company. */
   companyTenantIds: string[];
+  /** As an approver, the departments whose requisitions they approve (2026-11-21); empty is every department. */
+  departmentIds: string[];
   /** As an approver: any amount, or up to a limit; neither, the approval steps decide. */
   approvesAnyAmount: boolean;
   approvalLimitCents: number | null;
@@ -72,6 +76,8 @@ export interface PurchasingPeople {
   people: PurchasingPersonRow[];
   roles: PurchasingRoleColumn[];
   companies: { tenantId: string; name: string; purchaserCode: string | null }[];
+  /** The department codes in use, for an approver's departments. */
+  departments: { id: string; code: string; name: string }[];
   /** Active people of the office not on the list yet, for "Add a person". */
   candidates: { id: string; name: string }[];
 }
@@ -82,6 +88,8 @@ export interface SetPurchasingRoleInput {
 
 export interface SavePurchasingPersonInput {
   companyTenantIds: string[];
+  /** Left out, the departments stay as they are. */
+  departmentIds?: string[];
   approvesAnyAmount: boolean;
   approvalLimitCents: number | null;
 }
@@ -94,6 +102,12 @@ export interface AddPurchasingPersonInput {
 export function companiesSaying(tenantIds: readonly string[], companies: readonly { tenantId: string; name: string; purchaserCode: string | null }[]): string {
   if (!tenantIds.length) return 'All';
   return tenantIds.map((tenantId) => companies.find((company) => company.tenantId === tenantId)).map((company) => company?.purchaserCode || company?.name || 'A company no longer connected').join(', ');
+}
+
+/** "MAINT, HVAC", or "All". */
+export function departmentsSaying(ids: readonly string[], departments: readonly { id: string; code: string }[]): string {
+  if (!ids.length) return 'All';
+  return ids.map((id) => departments.find((department) => department.id === id)?.code ?? 'A department no longer in use').join(', ');
 }
 
 /** "any amount", "to $5,000.00", or blank when the steps decide. */
@@ -110,6 +124,8 @@ export function approverLimitSaying(person: Pick<PurchasingPersonRow, 'approvesA
 export interface PurchasingStanding {
   permissions: readonly string[];
   companies: readonly string[] | null;
+  /** As an approver, the departments whose requisitions they approve (2026-11-21); null = every one. */
+  departments?: readonly string[] | null;
   /** May approve any amount: the "Approve any amount" permission, or "any amount" in Setup. */
   anyAmount: boolean;
   /** Never approves above this; null for no limit of their own. */
@@ -126,6 +142,17 @@ export function actsForCompany(standing: Pick<PurchasingStanding, 'companies'>, 
 export function companyRefusal(standing: Pick<PurchasingStanding, 'companies'>, companyTenantId: string | null, what: string): string | null {
   if (actsForCompany(standing, companyTenantId)) return null;
   return companyTenantId === null ? `You ${what} only for your own companies: choose one of them.` : `You ${what} only for your own companies, and this is another company's.`;
+}
+
+/**
+ * Why an approver of some departments cannot approve this requisition (the
+ * office, 2026-11-21: a requisition goes to its department's approvers); null
+ * when they may. One with no department is theirs to choose first.
+ */
+export function departmentRefusal(standing: Pick<PurchasingStanding, 'departments'>, departmentId: string | null): string | null {
+  if (!standing.departments) return null;
+  if (departmentId === null) return 'You approve only for your own departments: its department is to be chosen first.';
+  return standing.departments.includes(departmentId) ? null : 'You approve only for your own departments, and this is another department\'s.';
 }
 
 /**

@@ -111,6 +111,9 @@ function database() {
     deliverTo: requisition.deliverToPlaceId ? { id: STOCKROOM, name: 'Stockroom', code: 'STORE' } : null,
     requestCode: codes.find((code) => code.id === requisition.requestCodeId) ?? null,
     costCenter: codes.find((code) => code.id === requisition.costCenterId) ?? null,
+    department: codes.find((code) => code.id === requisition.departmentId) ?? null,
+    // Its live orders' statuses, for where it is (2026-11-21).
+    orders: liveOrders.filter((order) => order.requisitionId === requisition.id && order.status !== 'CANCELLED').map((order) => ({ status: order.status })),
     lines: lines
       .filter((line) => line.requisitionId === requisition.id)
       .sort((left, right) => (left.position as number) - (right.position as number))
@@ -598,6 +601,7 @@ describe('the requests the page sends', () => {
     const requisition: Required<SaveRequisitionInput> = {
       ...large(),
       requestCodeId: id(51),
+      departmentId: id(53),
       costCenterId: id(52),
       documentDate: '2026-11-19',
       lines: [{ ...line(ALARM, 40, 1530), description: 'Smoke alarm', placeId: STOCKROOM, expectedOn: '2026-11-26', vendorId: HILL, departmentId: id(53), notes: 'Back door' }],
@@ -1053,5 +1057,50 @@ describe('the requisition page Setup keeps (2026-11-21)', () => {
     ] as never);
     const choices = await service.choices(asker);
     expect(choices.vendorStats).toEqual({ [HILL]: { openOrders: 1, openCents: 10825, orderedThisYearCents: 15825, lastOrder: { number: 'PO-0031', on: expect.any(String) } } });
+  });
+});
+
+// 2026-11-21, the office: a requisition is for one department, and goes to that department's approvers.
+describe("a requisition's department and its approvers", () => {
+  const HVAC = id(53);
+  const sent = async (input: Partial<SaveRequisitionInput>) => {
+    const made = database();
+    const draft = await made.service.create(asker, small(input));
+    await made.service.submit(asker, draft.id);
+    return { ...made, requisitionId: draft.id };
+  };
+  const approverOf = (departmentIds: string[]) => ({ organizationId: ORG, userProfileId: manager.id, companyTenantIds: [], departmentIds, approvesAnyAmount: false, approvalLimitCents: null });
+
+  it('is approved by an approver of its department, or of every one, and decided by no approver of another', async () => {
+    const theirs = await sent({ departmentId: HVAC });
+    expect(await theirs.service.detail(manager, theirs.requisitionId)).toMatchObject({ department: { code: 'HVAC' }, stage: 'PENDING_APPROVAL', can: { approve: true } });
+
+    const elsewhere = approverOf([id(57)]);
+    theirs.persons.push(elsewhere);
+    expect((await theirs.service.detail(manager, theirs.requisitionId)).can).toMatchObject({
+      approve: false,
+      sendBack: false,
+      reject: false,
+      approveBlocked: "You approve only for your own departments, and this is another department's.",
+    });
+    await expect(theirs.service.decide(manager, theirs.requisitionId, 'APPROVED', {})).rejects.toMatchObject({ code: 'REQUISITION_DEPARTMENT_NOT_YOURS' });
+    expect(await theirs.service.toApprove(manager)).toEqual([]);
+
+    elsewhere.departmentIds = [HVAC];
+    expect((await theirs.service.toApprove(manager)).map((row) => row.id)).toEqual([theirs.requisitionId]);
+    expect(await theirs.service.decide(manager, theirs.requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', stage: 'PENDING_PROCESSING' });
+  });
+
+  it('with no department, waits for an approver of every department', async () => {
+    const none = await sent({});
+    none.persons.push(approverOf([HVAC]));
+    expect((await none.service.detail(manager, none.requisitionId)).can.approveBlocked).toBe('You approve only for your own departments: its department is to be chosen first.');
+  });
+
+  it("names only one of the office's department codes, and lists nothing to approve for somebody who only asks", async () => {
+    const { service } = database();
+    await expect(service.create(asker, small({ departmentId: id(51) }))).rejects.toMatchObject({ code: 'REQUISITION_CODE_NOT_FOUND' });
+    const asked = await sent({});
+    expect(await asked.service.toApprove(asker)).toEqual([]);
   });
 });

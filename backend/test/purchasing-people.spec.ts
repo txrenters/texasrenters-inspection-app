@@ -67,6 +67,11 @@ function office() {
         for (let index = assignments.length - 1; index >= 0; index -= 1) if (assignments[index]!.userProfileId === where.userProfileId && assignments[index]!.roleId === where.roleId) assignments.splice(index, 1);
       }),
     },
+    // The departments an approver may be given (2026-11-21).
+    purchasingCode: {
+      findMany: jest.fn(async () => [{ id: id(61), code: 'MAINT', name: 'Maintenance' }]),
+      count: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.filter((one) => one === id(61)).length),
+    },
     purchasingPerson: {
       findMany: jest.fn(async () => persons),
       findUnique: jest.fn(async ({ where }: { where: { organizationId_userProfileId: { userProfileId: string } } }) => persons.find((row) => row.userProfileId === where.organizationId_userProfileId.userProfileId) ?? null),
@@ -106,6 +111,7 @@ describe('the roles and who holds them', () => {
       ['Requisitioner', null, true],
       ['Purchaser', null, true],
       ['Approver', null, true],
+      ['Purchasing manager', null, true],
       ['Stock keeper', null, true],
       ['Receiver', null, true],
       ['Code admin', null, true],
@@ -152,12 +158,23 @@ describe('the roles and who holds them', () => {
     expect(roles.at(-1)).toMatchObject({ purchasingRole: 'PURCHASING_ADMIN', permissions: ['purchasing:request', 'purchasing:setup'] });
   });
 
+  // 2026-11-21, the office: an approver approves the requisitions of the departments ticked for them.
+  it("keeps an approver's departments, only of the office's department codes, and leaves them be when a save gives none", async () => {
+    const { service } = office();
+    const seen = await service.savePerson(ADMIN, id(3), { companyTenantIds: [], departmentIds: [id(61)], approvesAnyAmount: false, approvalLimitCents: null });
+    expect(seen.departments).toEqual([{ id: id(61), code: 'MAINT', name: 'Maintenance' }]);
+    expect(seen.people.find((person) => person.id === id(3))).toMatchObject({ departmentIds: [id(61)] });
+    const kept = await service.savePerson(ADMIN, id(3), { companyTenantIds: [THMP], approvesAnyAmount: false, approvalLimitCents: null });
+    expect(kept.people.find((person) => person.id === id(3))).toMatchObject({ departmentIds: [id(61)], companyTenantIds: [THMP] });
+    await expect(service.savePerson(ADMIN, id(3), { companyTenantIds: [], departmentIds: [id(62)], approvesAnyAmount: false, approvalLimitCents: null })).rejects.toMatchObject({ code: 'PURCHASING_PERSON_INVALID' });
+  });
+
   it("keeps a person's companies and limit -- any amount, or up to one, never both -- and audits what they were and became", async () => {
     const { service, persons, audits } = office();
     const input = (over: Partial<SavePurchasingPersonInput> = {}): SavePurchasingPersonInput => ({ companyTenantIds: [THMP], approvesAnyAmount: false, approvalLimitCents: 500000, ...over });
     const seen = await service.savePerson(ADMIN, id(3), input());
     expect(seen.people.find((person) => person.id === id(3))).toMatchObject({ companyTenantIds: [THMP], approvalLimitCents: 500000, approvesAnyAmount: false });
-    expect(audits).toEqual([expect.objectContaining({ metadata: { section: 'people', person: id(3), from: { companyTenantIds: [], approvesAnyAmount: false, approvalLimitCents: null }, to: input() } })]);
+    expect(audits).toEqual([expect.objectContaining({ metadata: { section: 'people', person: id(3), from: { companyTenantIds: [], departmentIds: [], approvesAnyAmount: false, approvalLimitCents: null }, to: { ...input(), departmentIds: [] } } })]);
     await service.savePerson(ADMIN, id(3), input());
     expect(audits).toHaveLength(1);
 
@@ -180,7 +197,7 @@ describe('the people routes', () => {
   const check = (value: unknown, metatype: new () => object) => pipe.transform(value, { type: 'body', metatype });
 
   it('name every field, refuse one they do not know, and need a Purchasing admin', async () => {
-    const person: Required<SavePurchasingPersonInput> = { companyTenantIds: [THMP], approvesAnyAmount: false, approvalLimitCents: 500000 };
+    const person: Required<SavePurchasingPersonInput> = { companyTenantIds: [THMP], departmentIds: [id(61)], approvesAnyAmount: false, approvalLimitCents: 500000 };
     const role: Required<SetPurchasingRoleInput> = { held: true };
     const add: Required<AddPurchasingPersonInput> = { userProfileId: id(4) };
     await expect(check(person, SavePurchasingPersonDto)).resolves.toBeDefined();

@@ -43,6 +43,8 @@ vi.mock('@/lib/vendor-bills-xero-queries', () => ({
 }));
 const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
+// The code lists have their own tests (codes-tab.test.tsx); here, Setup only shows where they are.
+vi.mock('@/components/purchasing/codes-tab', () => ({ CodesTab: () => <p>The code lists</p> }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ permissions: [...account.permissions], has: (permission: string) => account.permissions.has(permission), hasAny: (...permissions: string[]) => permissions.some((permission) => account.permissions.has(permission)) }), useAuth: () => ({ profile: { displayName: 'Sample Purchaser' } }) }));
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: '' }));
@@ -68,6 +70,9 @@ const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
   quoteCount: 0,
   estimatedTotalCents: 18480,
   decisionNote: null,
+  // Where it is, NAV's way (2026-11-21): a row of status SUBMITTED.
+  stage: over.status === 'DRAFT' ? 'OPEN' : over.status === 'APPROVED' ? 'PENDING_PROCESSING' : over.status === 'SENT_BACK' ? 'SENT_BACK' : 'PENDING_APPROVAL',
+  department: null,
   ...over,
 });
 const NO_LINE_CODES = { lineType: null, place: null, expectedOn: null, vendor: null, department: null, notes: null };
@@ -166,8 +171,8 @@ describe('the requisitions list', () => {
     expect(within(table).getByRole('row', { name: /PR-0013/ }).textContent).toContain('Somebody who may approve any amount');
     expect(within(table).getByRole('row', { name: /PR-0011/ }).textContent).toContain('A purchaser, to make the order');
     expect(hooks.usePurchaseOrders).not.toHaveBeenCalled();
-    expect(within(table).getByRole('row', { name: /PR-0010/ }).textContent).toContain('Sent back: “Which model? Add a quote.”');
-    expect(screen.getByText('Waiting for approval', { selector: ':not(span)' }).parentElement?.textContent).toContain('2');
+    expect(within(table).getByRole('row', { name: /PR-0010/ }).textContent).toContain('Sent Back: “Which model? Add a quote.”');
+    expect(screen.getByText('Pending Approval', { selector: ':not(span)' }).parentElement?.textContent).toContain('2');
     expect(hooks.useRequisitions).toHaveBeenCalledWith('open');
   });
 
@@ -179,11 +184,12 @@ describe('the requisitions list', () => {
     expect(screen.getByText('Your purchase requisitions, and the orders made from them.')).toBeTruthy();
   });
 
-  // Purchasing Setup (2026-11-20) replaces the approval limits dialog: a tab for a system admin or Purchasing admin only.
-  it('offers Setup only to a Purchasing admin, even one who may approve any amount', () => {
+  // Purchasing Setup (2026-11-20) replaces the approval limits dialog. Since 2026-11-21 its Codes are read there by anybody in
+  // purchasing; the rest of Setup is a system admin's or a Purchasing admin's. NAV's tab names, with Requests to Approve for an approver.
+  it('names the tabs as NAV does, and offers the rest of Setup only to a Purchasing admin, even beside one who may approve any amount', () => {
     account.permissions = new Set(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
     const first = mount(list([row()]));
-    expect(screen.queryByRole('tab', { name: 'Setup' })).toBeNull();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Purchase Requisitions', 'Purchase Orders', 'Requests to Approve', 'Setup']);
     expect(screen.queryByRole('button', { name: 'Approval limits' })).toBeNull();
     expect(screen.getByRole('link', { name: 'New requisition' }).getAttribute('href')).toBe('/purchasing/requisitions/new');
     first.unmount();
@@ -192,6 +198,7 @@ describe('the requisitions list', () => {
     url.state = { ...url.state, tab: 'setup' };
     mount(list([row()]));
     expect(screen.getByRole('tab', { name: 'Setup', selected: true })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Codes' })).toBeTruthy();
   });
 });
 
@@ -694,7 +701,7 @@ describe('the orders tab', () => {
     const table = screen.getByRole('table', { name: 'Purchase orders' });
     expect(within(table).getByRole('link', { name: /Hill Country Supply/ }).getAttribute('href')).toBe('/purchasing/orders/order-9');
     expect(within(table).getByRole('row', { name: /PO-0009/ }).textContent).toContain('$200.05');
-    expect(within(table).getByRole('row', { name: /PO-0008/ }).textContent).toContain('Sent to the vendor');
+    expect(within(table).getByRole('row', { name: /PO-0008/ }).textContent).toContain('Sent to Vendor');
     expect(hooks.usePurchaseOrders).toHaveBeenCalledWith('open', true);
   });
 });
@@ -814,5 +821,33 @@ describe('who approves a requisition its requester writes', () => {
     write(['purchasing:request']);
     expect(screen.getByText('Once it is sent, an approver decides it.')).toBeTruthy();
     expect(screen.queryByText(/approve it yourself/)).toBeNull();
+  });
+});
+
+// 2026-11-21, the office: a requisition is for one department, whose approvers approve it; each line is for it unless given its own.
+describe("a requisition's department", () => {
+  it("carries General's Department Code to each line that goes with it, never over a line's own, and sends it with the requisition", async () => {
+    const choices: RequisitionChoices = { ...CHOICES, departments: [...(CHOICES.departments ?? []), { id: 'code-maint', code: 'MAINT', name: 'Maintenance' }] };
+    const onSave = vi.fn(async () => undefined);
+    render(<RequisitionForm choices={choices} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={onSave} pending={false} />);
+    choose('Purchaser Code', 'THMP · THMP');
+    fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
+    choose('Department Code', 'HVAC · HVAC');
+    expect(screen.getByLabelText('Department of Filter 20x25x1').textContent).toBe('HVAC');
+    choose('Department of Battery, 9 V', 'MAINT');
+    choose('Department Code', 'MAINT · Maintenance');
+    choose('Department Code', 'HVAC · HVAC');
+    expect(screen.getByLabelText('Department of Filter 20x25x1').textContent).toBe('HVAC');
+    // The battery was given MAINT on its own line, and keeps it.
+    expect(screen.getByLabelText('Department of Battery, 9 V').textContent).toBe('MAINT');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ departmentId: 'code-hvac' }), false));
+  });
+
+  it("shows where a requisition is, NAV's way, and whose turn it is", () => {
+    render(<RequisitionForm choices={CHOICES} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} readOnly requisition={detail({ status: 'ORDERED', stage: 'PENDING_ORDER' })} />);
+    const steps = screen.getByRole('list', { name: 'Where this requisition is' });
+    expect(steps.textContent).toContain('Pending Order');
+    expect(screen.getByText('Status:').parentElement?.textContent).toContain('Pending Order');
   });
 });

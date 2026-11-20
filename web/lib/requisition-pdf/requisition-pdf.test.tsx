@@ -29,6 +29,8 @@ const REQUISITION = {
   quoteCount: 0,
   estimatedTotalCents: 34416,
   decisionNote: null,
+  stage: 'ORDERED',
+  department: null,
   reason: '',
   deliverTo: { id: 'place-store', name: 'Office Storeroom', code: 'STORE' },
   requestCode: { id: 'rc', code: 'RESTOCK', name: 'Restock the storeroom' },

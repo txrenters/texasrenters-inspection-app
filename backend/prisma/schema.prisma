@@ -5978,6 +5978,8 @@ model PurchasingPerson {
   userProfileId      String   @db.Uuid
   /// The Xero tenants they act for; empty is every company.
   companyTenantIds   String[] @default([])
+  /// As an approver, the departments whose requisitions they approve (2026-11-21); empty is every department.
+  departmentIds      String[] @default([]) @db.Uuid
   approvesAnyAmount  Boolean  @default(false)
   /// Never approves above this; null for no limit of their own.
   approvalLimitCents Int?
@@ -6025,6 +6027,8 @@ model PurchaseRequisition {
   requestCodeId    String?                   @db.Uuid
   /// The cost center it is for: one of the office's cost center codes.
   costCenterId     String?                   @db.Uuid
+  /// The department it is for (2026-11-21): its approvers are that department's.
+  departmentId     String?                   @db.Uuid
   /// The day on the paper; the requisition date is `createdAt`.
   documentDate     DateTime?                 @db.Date
   reason           String
@@ -6045,6 +6049,7 @@ model PurchaseRequisition {
   deliverTo        StockPlace?                @relation(fields: [organizationId, deliverToPlaceId], references: [organizationId, id], onDelete: NoAction)
   requestCode      PurchasingCode?           @relation("RequisitionRequestCode", fields: [organizationId, requestCodeId], references: [organizationId, id], onDelete: Restrict)
   costCenter       PurchasingCode?           @relation("RequisitionCostCenter", fields: [organizationId, costCenterId], references: [organizationId, id], onDelete: Restrict)
+  department       PurchasingCode?           @relation("RequisitionDepartment", fields: [organizationId, departmentId], references: [organizationId, id], onDelete: Restrict)
   requestedBy      UserProfile                @relation("RequisitionRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   decidedBy        UserProfile?               @relation("RequisitionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
   lines            PurchaseRequisitionLine[]
@@ -6666,6 +6671,7 @@ model PurchasingCode {
   items          StockItem[]        @relation("StockItemLineType")
   requisitionsOfKind  PurchaseRequisition[]     @relation("RequisitionRequestCode")
   requisitionsOfCostCenter PurchaseRequisition[] @relation("RequisitionCostCenter")
+  requisitionsOfDepartment PurchaseRequisition[] @relation("RequisitionDepartment")
   requisitionLines    PurchaseRequisitionLine[] @relation("RequisitionLineDepartment")
 
   @@unique([organizationId, kind, code])

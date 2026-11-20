@@ -44,6 +44,7 @@ export const PERMISSION_KEYS = [
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:approve-orders',
   'purchasing:order',
   'purchasing:receive',
   'purchasing:bills',
@@ -332,18 +333,24 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'purchasing:approve',
         label: 'Approve requisitions',
         description:
-          "See everyone's requisitions and orders and approve or send them back, up to the office's approval limit. Nobody approves their own.",
+          "See everyone's requisitions and approve, send back or reject those of your departments and companies, up to your approval limit -- your own too, never sending back your own.",
+      },
+      {
+        key: 'purchasing:approve-orders',
+        label: 'Approve purchase orders',
+        description:
+          "The purchasing manager's: see every purchase order and approve it or send it back before the purchaser sends it to the vendor, up to your approval limit, and approve a bill that does not match.",
       },
       {
         key: 'purchasing:approve-any',
         label: 'Approve any amount',
-        description: 'Approve a requisition or order in an approval step that needs somebody who may approve any amount. With "Approve requisitions".',
+        description: 'Approve a requisition or purchase order in an approval step that needs somebody who may approve any amount: the overall manager. With one of the two above.',
       },
       {
         key: 'purchasing:order',
         label: 'Make purchase orders',
         description:
-          "See everyone's submitted requisitions, turn an approved one into a purchase order, send it to the vendor and cancel it. An order is approved by somebody else, with the two above.",
+          "See everyone's submitted requisitions, turn an approved one into a purchase order, send it to the vendor and cancel it. An order is approved by the purchasing manager first.",
       },
       {
         key: 'purchasing:receive',
@@ -472,6 +479,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:approve-orders',
   'purchasing:order',
   'purchasing:receive',
   'purchasing:bills',

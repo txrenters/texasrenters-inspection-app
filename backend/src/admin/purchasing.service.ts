@@ -6,9 +6,11 @@ import {
   actsForCompany,
   approvalRefusal,
   companyRefusal,
+  departmentRefusal,
   averageCostCents,
   orderGroups,
   requisitionerCode,
+  requisitionStage,
   requisitionSubmitProblem,
   orderTotals,
   requisitionTotalCents,
@@ -88,6 +90,10 @@ const ROW = {
   deliverTo: { select: { id: true, name: true, code: true } },
   requestCode: { select: { id: true, code: true, name: true } },
   costCenter: { select: { id: true, code: true, name: true } },
+  departmentId: true,
+  department: { select: { id: true, code: true, name: true } },
+  // Its orders' statuses, for where it is (2026-11-21): a cancelled one counts for nothing.
+  orders: { where: { status: { not: 'CANCELLED' } }, select: { status: true } },
   lines: {
     orderBy: { position: 'asc' },
     select: {
@@ -126,6 +132,8 @@ function row(requisition: Requisition, companies: Companies): RequisitionRow {
     quoteCount: requisition.quotes.length,
     estimatedTotalCents: requisitionTotalCents(requisition.lines),
     decisionNote: requisition.decisionNote,
+    stage: requisitionStage(requisition.status, requisition.orders.map((order) => order.status)),
+    department: requisition.department,
   };
 }
 
@@ -236,13 +244,21 @@ export class PurchasingService {
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
-  private actions(user: AuthenticatedUser, requisition: Pick<Requisition, 'status' | 'requestedById' | 'xeroTenantId'>, totalCents: number, rules: Rules, unordered = false): RequisitionActions {
+  private actions(
+    user: AuthenticatedUser,
+    requisition: Pick<Requisition, 'status' | 'requestedById' | 'xeroTenantId' | 'departmentId'>,
+    totalCents: number,
+    rules: Rules,
+    unordered = false,
+  ): RequisitionActions {
     const mine = requisition.requestedById === user.id;
     const waiting = requisition.status === Status.SUBMITTED && may(user, APPROVE);
+    // It goes to its department's approvers (the office, 2026-11-21): one of other departments decides nothing of it.
+    const otherDepartment = departmentRefusal(rules.standing, requisition.departmentId);
     // An approver limited to some companies decides only theirs, when the office says so (Purchasing Setup, 2026-11-21).
-    const decides = !rules.ownCompaniesOnly || actsForCompany(rules.standing, requisition.xeroTenantId);
-    // An approver approves their own as anybody else's (the office, 2026-11-21): within their limit, the step and their companies.
-    const approveBlocked = !waiting ? null : approvalRefusal(rules.standing, rules.settings.steps, totalCents, requisition.xeroTenantId, rules.ownCompaniesOnly);
+    const decides = (!rules.ownCompaniesOnly || actsForCompany(rules.standing, requisition.xeroTenantId)) && !otherDepartment;
+    // An approver approves their own as anybody else's (the office, 2026-11-21): within their limit, the step, their companies and departments.
+    const approveBlocked = !waiting ? null : (otherDepartment ?? approvalRefusal(rules.standing, rules.settings.steps, totalCents, requisition.xeroTenantId, rules.ownCompaniesOnly));
     return {
       edit: mine && EDITABLE.includes(requisition.status),
       submit: mine && EDITABLE.includes(requisition.status),
@@ -276,6 +292,18 @@ export class PurchasingService {
       this.settings(this.prisma, organizationId),
     ]);
     return { requisitions: requisitions.map((requisition) => row(requisition, companies.names)), settings, seesAll: may(user, APPROVE) || may(user, ORDER) };
+  }
+
+  /** Requests to Approve (the office, 2026-11-21): the requisitions waiting that the caller may approve now, the longest waiting first. */
+  async toApprove(user: AuthenticatedUser): Promise<RequisitionRow[]> {
+    if (!may(user, APPROVE)) return [];
+    const organizationId = user.organizationId;
+    const [requisitions, companies, rules] = await Promise.all([
+      this.prisma.purchaseRequisition.findMany({ where: { organizationId, status: Status.SUBMITTED }, select: ROW, orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }], take: CLOSED_SHOWN }),
+      this.companies(organizationId),
+      this.rules(this.prisma, user),
+    ]);
+    return requisitions.filter((requisition) => this.actions(user, requisition, requisitionTotalCents(requisition.lines), rules).approve).map((requisition) => row(requisition, companies.names));
   }
 
   async detail(user: AuthenticatedUser, requisitionId: string): Promise<RequisitionDetail> {
@@ -490,6 +518,7 @@ export class PurchasingService {
     };
     await code(input.requestCodeId, 'REQUEST', 'request code');
     await code(input.costCenterId, 'COST_CENTER', 'cost center code');
+    await code(input.departmentId, 'DEPARTMENT', 'department code');
     for (const id of new Set(input.lines.flatMap((line) => (line.departmentId ? [line.departmentId] : [])))) await code(id, 'DEPARTMENT', 'department code');
     const linePlaces = [...new Set(input.lines.flatMap((line) => (line.placeId ? [line.placeId] : [])))];
     if (linePlaces.length && (await db.stockPlace.count({ where: { organizationId, id: { in: linePlaces }, active: true } })) !== linePlaces.length)
@@ -507,6 +536,7 @@ export class PurchasingService {
       neededBy: input.neededBy ? dateOf(input.neededBy) : null,
       deliverToPlaceId: input.deliverToPlaceId ?? null,
       requestCodeId: input.requestCodeId ?? null,
+      departmentId: input.departmentId ?? null,
       costCenterId: input.costCenterId ?? null,
       // The day on the paper: the day it was made, unless another is given.
       documentDate: dateOf(input.documentDate || made),
@@ -573,6 +603,7 @@ export class PurchasingService {
         // The fields the office may require (Purchasing Setup, 2026-11-21).
         requestCodeId: true,
         costCenterId: true,
+        departmentId: true,
         documentDate: true,
         createdAt: true,
         neededBy: true,
@@ -706,7 +737,7 @@ export class PurchasingService {
     await this.prisma.$transaction(async (tx) => {
       const requisition = await tx.purchaseRequisition.findFirst({
         where: { id: requisitionId, organizationId, status: { not: Status.DRAFT } },
-        select: { number: true, status: true, requestedById: true, xeroTenantId: true, lines: { select: { quantity: true, estimatedUnitCostCents: true } } },
+        select: { number: true, status: true, requestedById: true, xeroTenantId: true, departmentId: true, lines: { select: { quantity: true, estimatedUnitCostCents: true } } },
       });
       if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
       if (requisition.status !== Status.SUBMITTED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition is no longer waiting for a decision.');
@@ -719,6 +750,8 @@ export class PurchasingService {
         const refused = companyRefusal(rules.standing, requisition.xeroTenantId, 'decide requisitions');
         if (refused) throw new ApplicationError(403, 'REQUISITION_COMPANY_NOT_YOURS', refused);
       }
+      const otherDepartment = departmentRefusal(rules.standing, requisition.departmentId);
+      if (otherDepartment) throw new ApplicationError(403, 'REQUISITION_DEPARTMENT_NOT_YOURS', otherDepartment);
       if (decision === 'APPROVED') {
         const { approveBlocked } = this.actions(user, requisition, totalCents, rules);
         if (approveBlocked) throw new ApplicationError(403, 'REQUISITION_OVER_LIMIT', approveBlocked);

@@ -81,6 +81,7 @@ export class SaveRequisitionDto implements Required<SaveRequisitionInput> {
   @ValidateIf(GIVEN) @IsUUID() deliverToPlaceId!: string | null;
   @IsOptional() @IsUUID() requestCodeId!: string | null;
   @IsOptional() @IsUUID() costCenterId!: string | null;
+  @IsOptional() @IsUUID() departmentId!: string | null;
   @IsOptional() @Matches(DAY) documentDate!: string | null;
   @IsString() @MaxLength(2000) reason!: string;
   @IsArray() @ArrayMaxSize(MOST_REQUISITION_LINES) @ValidateNested({ each: true }) @Type(() => RequisitionLineDto) lines!: RequisitionLineDto[];
@@ -220,6 +221,13 @@ export class PurchasingController {
   @RequirePermissions('purchasing:request')
   list(@Req() request: AuthenticatedRequest, @Query() query: RequisitionListQueryDto) {
     return this.purchasing.list(request.user, query.show ?? 'open');
+  }
+
+  /** Requests to Approve (2026-11-21): the requisitions waiting that the caller may approve. Before the id route, which would take the words for an id. */
+  @Get('requisitions/to-approve')
+  @RequirePermissions('purchasing:request')
+  toApprove(@Req() request: AuthenticatedRequest) {
+    return this.purchasing.toApprove(request.user);
   }
 
   @Get('choices')

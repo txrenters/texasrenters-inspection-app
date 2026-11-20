@@ -22,7 +22,7 @@ const approver = (over: Partial<PurchasingStanding> = {}): PurchasingStanding =>
 
 describe('the purchasing roles', () => {
   it('are made of purchasing and inventory permissions only, which is all Setup hands out', () => {
-    expect(PURCHASING_ROLES.map((role) => role.label)).toEqual(['Requisitioner', 'Purchaser', 'Approver', 'Stock keeper', 'Receiver', 'Code admin', 'Bill payer', 'Purchasing admin']);
+    expect(PURCHASING_ROLES.map((role) => role.label)).toEqual(['Requisitioner', 'Purchaser', 'Approver', 'Purchasing manager', 'Stock keeper', 'Receiver', 'Code admin', 'Bill payer', 'Purchasing admin']);
     expect(PURCHASING_ROLES.every((role) => role.permissions.every(isSetupGrantablePermission))).toBe(true);
     expect(isSetupGrantablePermission('users:manage')).toBe(false);
   });

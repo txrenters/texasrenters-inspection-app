@@ -22,6 +22,7 @@ export const ROLE_PERMISSION: Record<PurchasingRoleKey, string> = {
   REQUISITIONER: 'purchasing:request',
   PURCHASER: 'purchasing:order',
   APPROVER: 'purchasing:approve',
+  PURCHASING_MANAGER: 'purchasing:approve-orders',
   STOCK_KEEPER: 'inventory:manage',
   RECEIVER: 'purchasing:receive',
   CODE_ADMIN: 'purchasing:codes',
@@ -40,6 +41,8 @@ export const KEEPER_PERMISSIONS = KEEPER_ROLES.map((role) => ROLE_PERMISSION[rol
 
 export const REQUISITION_FIELDS = [
   { key: 'REQUEST_CODE', label: 'Request Code', line: false, missing: 'Choose the request code.' },
+  // The department it is for, whose approvers approve it (2026-11-21).
+  { key: 'DEPARTMENT', label: 'Department Code', line: false, missing: 'Choose the department it is for.' },
   { key: 'COST_CENTER', label: 'Cost Center Code', line: false, missing: 'Choose the cost center code.' },
   { key: 'DOCUMENT_DATE', label: 'Document Date', line: false, missing: 'Give the document date.' },
   { key: 'EXPECTED_RECEIPT', label: 'Expected Receipt Date', line: false, missing: 'Give the expected receipt date.' },
@@ -51,7 +54,7 @@ export const REQUISITION_FIELDS = [
 export type RequisitionFieldKey = (typeof REQUISITION_FIELDS)[number]['key'];
 export const REQUISITION_FIELD_KEYS = REQUISITION_FIELDS.map((field) => field.key) as readonly RequisitionFieldKey[];
 /** The fields the board's "The requisition page" lists; Location and Purchaser Code are set from the Codes section. */
-export const PAGE_FIELD_KEYS: readonly RequisitionFieldKey[] = ['REQUEST_CODE', 'COST_CENTER', 'DOCUMENT_DATE', 'EXPECTED_RECEIPT', 'LINE_DEPARTMENT', 'LINE_NOTES'];
+export const PAGE_FIELD_KEYS: readonly RequisitionFieldKey[] = ['REQUEST_CODE', 'DEPARTMENT', 'COST_CENTER', 'DOCUMENT_DATE', 'EXPECTED_RECEIPT', 'LINE_DEPARTMENT', 'LINE_NOTES'];
 
 /**
  * Each code list, who kept it before Setup, and what it is on the
@@ -158,6 +161,7 @@ export function audienceSaying(audience: readonly PurchasingRoleKey[], labels: R
 /** What a requisition holds, as far as its fields go. */
 export interface RequisitionFieldValues {
   requestCodeId?: string | null;
+  departmentId?: string | null;
   costCenterId?: string | null;
   documentDate?: string | null;
   neededBy?: string | null;
@@ -170,6 +174,7 @@ export interface RequisitionFieldValues {
 export function missingFieldProblem(values: RequisitionFieldValues, layout: Pick<RequisitionPageLayout, 'fields'>): string | null {
   const given: Record<RequisitionFieldKey, boolean> = {
     REQUEST_CODE: Boolean(values.requestCodeId),
+    DEPARTMENT: Boolean(values.departmentId),
     COST_CENTER: Boolean(values.costCenterId),
     DOCUMENT_DATE: Boolean(values.documentDate),
     EXPECTED_RECEIPT: Boolean(values.neededBy),

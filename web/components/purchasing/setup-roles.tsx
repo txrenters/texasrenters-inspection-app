@@ -3,6 +3,7 @@
 import {
   approverLimitSaying,
   companiesSaying,
+  departmentsSaying,
   formatMoney,
   parseMoney,
   type PurchasingPeople,
@@ -109,7 +110,7 @@ function PersonRow({ person, data }: { person: PurchasingPersonRow; data: Purcha
   const save = (patch: Partial<SavePurchasingPersonInput>) =>
     savePerson.mutate({
       personId: person.id,
-      input: { companyTenantIds: person.companyTenantIds, approvesAnyAmount: person.approvesAnyAmount, approvalLimitCents: person.approvalLimitCents, ...patch },
+      input: { companyTenantIds: person.companyTenantIds, departmentIds: person.departmentIds, approvesAnyAmount: person.approvesAnyAmount, approvalLimitCents: person.approvalLimitCents, ...patch },
     });
   return (
     <TableRow>
@@ -132,6 +133,10 @@ function PersonRow({ person, data }: { person: PurchasingPersonRow; data: Purcha
                 title={locked ?? undefined}
               />
               {role.key === 'APPROVER' && hold ? <ApproverLimit disabled={fixed} onSave={save} person={person} /> : null}
+              {/* An approver approves the requisitions of the departments ticked here (2026-11-21). */}
+              {role.key === 'APPROVER' && hold ? <Departments data={data} disabled={fixed} onSave={(departmentIds) => save({ departmentIds })} person={person} /> : null}
+              {/* The purchasing manager's limit is the same one, for orders. */}
+              {role.key === 'PURCHASING_MANAGER' && hold && !person.roles.APPROVER ? <ApproverLimit disabled={fixed} onSave={save} person={person} /> : null}
             </span>
           </TableCell>
         );
@@ -214,6 +219,37 @@ function Companies({ person, data, disabled, onSave }: { person: PurchasingPerso
           >
             {company.purchaserCode ? `${company.purchaserCode} · ` : ''}
             {company.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The departments an approver approves (2026-11-21): all, or those ticked. */
+function Departments({ person, data, disabled, onSave }: { person: PurchasingPersonRow; data: PurchasingPeople; disabled: boolean; onSave: (ids: string[]) => void }) {
+  const said = departmentsSaying(person.departmentIds, data.departments ?? []);
+  if (disabled) return <span className="text-muted-foreground text-xs">{said}</span>;
+  const toggle = (id: string, on: boolean) => onSave((data.departments ?? []).map((department) => department.id).filter((one) => (one === id ? on : person.departmentIds.includes(one))));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button aria-label={`${person.name}: departments approved`} className="h-7 gap-1 px-1.5 text-xs font-normal" size="sm" title="The departments whose requisitions they approve" variant="ghost">
+          {said === 'All' ? 'All departments' : said}
+          <ChevronDownIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={() => onSave([])}>All departments</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {(data.departments ?? []).map((department) => (
+          <DropdownMenuCheckboxItem
+            checked={person.departmentIds.includes(department.id)}
+            key={department.id}
+            onCheckedChange={(on) => toggle(department.id, on === true)}
+            onSelect={(event) => event.preventDefault()}
+          >
+            {department.code} · {department.name}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>

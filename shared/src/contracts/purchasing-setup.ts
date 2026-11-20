@@ -78,13 +78,15 @@ export function approvalStepRange(steps: readonly ApprovalStep[], index: number)
   return upTo === null ? `${from} and up` : `${from} to ${formatMoney(upTo)}`;
 }
 
-/** Who approves an amount, as the lists say it. */
-export const approverSaying = (step: ApprovalStep) =>
-  step.approver === 'ANY_AMOUNT'
-    ? 'Somebody who may approve any amount'
+/** Who approves an amount, as the lists say it. An order is the purchasing manager's (2026-11-21). */
+export const approverSaying = (step: ApprovalStep, of: 'requisition' | 'order' = 'requisition') => {
+  const one = of === 'order' ? 'A purchasing manager' : 'An approver';
+  return step.approver === 'ANY_AMOUNT'
+    ? `${of === 'order' ? 'A purchasing manager' : 'Somebody'} who may approve any amount`
     : step.approver === 'APPROVER_LIMIT' && step.upToCents !== null
-      ? `An approver whose own limit is ${formatMoney(step.upToCents)} or more`
-      : 'An approver';
+      ? `${one} whose own limit is ${formatMoney(step.upToCents)} or more`
+      : one;
+};
 
 /** Why these steps cannot be kept, in the office's words; null when they can. */
 export function approvalStepsProblem(steps: readonly ApprovalStep[], mostQuotes: number): string | null {
