@@ -1,4 +1,4 @@
-import { DEFAULT_FILE_RULES, stepsFromLimit, type PurchasingSetup } from '@texasrenters/shared';
+import { CODE_LISTS, DEFAULT_CODE_KEEPERS, DEFAULT_FILE_RULES, DEFAULT_PAGE_LAYOUT, stepsFromLimit, type PurchasingSetup } from '@texasrenters/shared';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,11 +20,15 @@ const SETUP: PurchasingSetup = {
     { kind: 'PO', label: 'Purchase order', prefix: 'PO-', digits: 4, next: 34 },
   ],
   files: DEFAULT_FILE_RULES,
+  // Part 5c (2026-11-21): who keeps each list, and the requisition page. Their own tests: setup-codes-page.test.tsx.
+  codes: CODE_LISTS.map((list) => ({ list: list.key, keeper: DEFAULT_CODE_KEEPERS[list.key], inUse: 3 })),
+  page: DEFAULT_PAGE_LAYOUT,
 };
-let saves: Record<'approvals' | 'files' | 'series', { mutate: ReturnType<typeof vi.fn>; isPending: boolean; error: Error | null }>;
+let saves: Record<'approvals' | 'files' | 'series' | 'codes' | 'page', { mutate: ReturnType<typeof vi.fn>; isPending: boolean; error: Error | null }>;
 
 beforeEach(() => {
-  saves = { approvals: { mutate: vi.fn(), isPending: false, error: null }, files: { mutate: vi.fn(), isPending: false, error: null }, series: { mutate: vi.fn(), isPending: false, error: null } };
+  const save = () => ({ mutate: vi.fn(), isPending: false, error: null });
+  saves = { approvals: save(), files: save(), series: save(), codes: save(), page: save() };
   hooks.usePurchasingSetupEdits.mockReturnValue(saves);
   hooks.usePurchasingSetup.mockReturnValue({ isLoading: false, isError: false, data: SETUP });
 });

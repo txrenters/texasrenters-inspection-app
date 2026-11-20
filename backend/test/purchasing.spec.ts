@@ -1,6 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import { DEFAULT_FILE_RULES, MACHINE_FORBIDDEN_PERMISSIONS, stepsFromLimit, type RequisitionDecisionInput, type SaveRequisitionInput } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, DEFAULT_PAGE_LAYOUT, MACHINE_FORBIDDEN_PERMISSIONS, stepsFromLimit, type RequisitionDecisionInput, type SaveRequisitionInput } from '@texasrenters/shared';
 
 import { AddRequisitionLinkDto, PurchasingController, RequisitionDecisionDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
 import { PurchasingSetupService } from '../src/admin/purchasing-setup.service';
@@ -167,15 +167,17 @@ function database() {
     },
     // Who it is from, for its PDF.
     invoiceSettings: { findUnique: jest.fn(async () => ({ companyName: 'Example Office', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null })) },
-    stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
+    stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))), count: jest.fn(async () => items.length) },
     stockLevel: { groupBy: jest.fn(async () => levels), findMany: jest.fn(async () => placeLevels) },
     stockPlace: {
       findFirst: jest.fn(async ({ where }: { where: Where }) => (where.id === STOCKROOM && where.organizationId === ORG ? { id: STOCKROOM } : null)),
       findMany: jest.fn(async () => [{ id: STOCKROOM, name: 'Stockroom', code: 'STORE' }]),
-      count: jest.fn(async ({ where }: { where: { organizationId: string; id: { in: string[] } } }) => (where.organizationId === ORG ? where.id.in.filter((one) => one === STOCKROOM).length : 0)),
+      // Places named on a requisition, or (Setup's Codes section) all in use.
+      count: jest.fn(async ({ where }: { where: { organizationId: string; id?: { in: string[] } } }) => (where.organizationId !== ORG ? 0 : where.id ? where.id.in.filter((one) => one === STOCKROOM).length : 1)),
     },
-    stockCategory: { findMany: jest.fn(async () => [{ id: id(61), name: 'Filters' }]) },
+    stockCategory: { findMany: jest.fn(async () => [{ id: id(61), name: 'Filters' }]), count: jest.fn(async () => 1) },
     purchasingCode: {
+      groupBy: jest.fn(async () => []),
       findFirst: jest.fn(async ({ where }: { where: Where }) => codes.find((row) => matches(row, where)) ?? null),
       findMany: jest.fn(async ({ where }: { where: Where }) => codes.filter((row) => matches(row, where))),
     },
@@ -191,6 +193,7 @@ function database() {
       findMany: jest.fn(async ({ where }: { where: Where }) => vendors.filter((row) => matches(row, where))),
     },
     xeroOrganisation: {
+      count: jest.fn(async () => 2),
       findMany: jest.fn(async () => [{ xeroTenantId: PEST, name: 'Crystal Creek Pest', status: 'CONNECTED' }, { xeroTenantId: THMP, name: 'THMP', status: 'CONNECTED' }]),
       findFirst: jest.fn(async ({ where }: { where: Where }) => ([THMP, PEST].includes(where.xeroTenantId as string) && where.organizationId === ORG ? { id: 'x' } : null)),
     },
@@ -519,7 +522,7 @@ describe('deciding a requisition', () => {
 describe('the approval steps and the form\'s choices', () => {
   it('start as $500.00 and two quotes above it, every kind of file, until Setup changes them', async () => {
     const { service } = database();
-    expect((await service.list(asker)).settings).toEqual({ steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES });
+    expect((await service.list(asker)).settings).toEqual({ steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT });
   });
 
   // Purchasing Setup, 2026-11-20: the steps replace the one limit.
@@ -991,5 +994,25 @@ describe('companies and approver limits (Purchasing Setup, 2026-11-21)', () => {
     const large2 = await waiting(asker, large());
     large2.persons.push(person(owner, { approvalLimitCents: 50000 }));
     expect((await large2.service.detail(owner, large2.requisitionId)).can.approveBlocked).toBe('At $612.00 it is above your approval limit of $500.00.');
+  });
+});
+
+describe('the requisition page Setup keeps (2026-11-21)', () => {
+  it('refuses to send a requisition missing a field the office requires', async () => {
+    const { service, setup } = database();
+    const draft = await service.create(asker, small());
+    await setup.saveRequisitionPage(owner, { ...DEFAULT_PAGE_LAYOUT, fields: { ...DEFAULT_PAGE_LAYOUT.fields, REQUEST_CODE: { shown: true, required: true } } });
+    expect((await service.detail(asker, draft.id)).settings.page.fields.REQUEST_CODE).toEqual({ shown: true, required: true });
+    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Choose the request code.' });
+  });
+
+  it("tells the form each vendor's open orders, this year's spend and last order", async () => {
+    const { db, service } = database();
+    db.purchaseOrder.findMany.mockImplementationOnce(async () => [
+      { vendorId: HILL, number: 'PO-0031', status: 'SENT', createdAt: new Date(), taxBasisPoints: 825, lines: [{ quantity: 10, unitPriceCents: 1000 }] },
+      { vendorId: HILL, number: 'PO-0029', status: 'CLOSED', createdAt: new Date(Date.now() - 3_600_000), taxBasisPoints: 0, lines: [{ quantity: 1, unitPriceCents: 5000 }] },
+    ] as never);
+    const choices = await service.choices(asker);
+    expect(choices.vendorStats).toEqual({ [HILL]: { openOrders: 1, openCents: 10825, orderedThisYearCents: 15825, lastOrder: { number: 'PO-0031', on: expect.any(String) } } });
   });
 });

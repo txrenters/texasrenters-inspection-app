@@ -1,4 +1,4 @@
-import { DEFAULT_FILE_RULES, stepsFromLimit, type RequisitionChoices, type RequisitionDetail } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, DEFAULT_PAGE_LAYOUT, stepsFromLimit, type RequisitionChoices, type RequisitionDetail } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,7 +22,7 @@ const hooks = vi.hoisted(() => ({
 vi.mock('@/lib/purchasing-queries', () => hooks);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 
-const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES };
+const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT };
 const EXTRAS = { lineTypeId: 'type-item', usualVendorId: null, held: [], onOrder: 0, lastOrdered: null, priceCents: null };
 const CHOICES: RequisitionChoices = {
   items: [

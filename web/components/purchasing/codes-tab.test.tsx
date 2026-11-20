@@ -51,6 +51,19 @@ describe('the lists', () => {
     expect(within(table).getByRole('row', { name: /MAINT/ }).textContent).toContain('Department: Maintenance');
     expect(screen.queryByRole('table', { name: 'Line types' })).toBeNull();
   });
+
+  // Purchasing Setup (2026-11-21): anybody in purchasing reads every list; each is changed by its keeper only.
+  it('reads a list kept by somebody else, with nothing to change in it', () => {
+    hooks.usePurchasingCodes.mockReturnValue({ isError: false, data: { ...DATA, keeps: { LINE_TYPE: false, UNIT: true, REQUEST: true, DEPARTMENT: true, COST_CENTER: true, PURCHASER_CODES: false } } });
+    render(<CodesTab enabled />);
+    expect(within(screen.getByRole('table', { name: 'Line types' })).queryByRole('button', { name: /^Edit/ })).toBeNull();
+    expect(screen.getByText('Line types are kept by somebody else here: Purchasing Setup says who.')).toBeTruthy();
+    expect(screen.queryByLabelText('Purchaser code')).toBeNull();
+    expect(screen.getByText('PEST')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Request codes/ }));
+    expect(within(screen.getByRole('table', { name: 'Request codes' })).getByRole('button', { name: 'Edit RESTOCK' })).toBeTruthy();
+  });
 });
 
 describe('a new code', () => {

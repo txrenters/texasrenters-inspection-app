@@ -1,8 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, PurchasingCodeKind } from '@prisma/client';
 import {
+  CODE_LIST_OF_KIND,
   MOST_PURCHASING_CODE_NAME,
   TRACKED_CODE_KINDS,
+  listsKept,
   normalizePurchasingCode,
   purchasingCodeProblem,
   type PurchasingCodeRow,
@@ -17,6 +19,7 @@ import {
 import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { assertKeeps, readPurchasingSetup } from './purchasing-settings';
 
 /**
  * The codes a NAV-style purchase requisition picks from (2026-11-20, part 1).
@@ -94,7 +97,7 @@ export class PurchasingCodesService {
   async list(user: AuthenticatedUser): Promise<PurchasingCodes> {
     const organizationId = user.organizationId;
     await ensureLineTypes(this.prisma, organizationId);
-    const [codes, companies, typed] = await Promise.all([
+    const [codes, companies, typed, units, setup] = await Promise.all([
       this.prisma.purchasingCode.findMany({
         where: { organizationId },
         select: { id: true, kind: true, code: true, name: true, keepsStock: true, active: true, xeroOptions: { select: { xeroTenantId: true, trackingCategoryId: true, trackingOptionId: true } } },
@@ -106,8 +109,14 @@ export class PurchasingCodesService {
         orderBy: { name: 'asc' },
       }),
       this.prisma.stockItem.groupBy({ by: ['lineTypeId'], where: { organizationId, lineTypeId: { not: null } }, _count: { _all: true } }),
+      // Units are named by items (Purchasing Setup, 2026-11-21): counted by name, whatever its case.
+      this.prisma.stockItem.groupBy({ by: ['unit'], where: { organizationId }, _count: { _all: true } }),
+      readPurchasingSetup(this.prisma, organizationId),
     ]);
     const used = new Map(typed.map((row) => [row.lineTypeId, row._count._all]));
+    const unitUse = new Map<string, number>();
+    for (const row of units) unitUse.set(row.unit.toLowerCase(), (unitUse.get(row.unit.toLowerCase()) ?? 0) + row._count._all);
+    const kept = listsKept(user.permissions, setup.keepers);
     const rows: PurchasingCompanyRow[] = companies.map((company) => ({ xeroTenantId: company.xeroTenantId, name: company.name, purchaserCode: company.purchaserCode, trackingCategories: trackingOf(company.trackingCategories) }));
     const label = (match: XeroOptionMatch) => {
       const company = rows.find((row) => row.xeroTenantId === match.xeroTenantId);
@@ -124,9 +133,17 @@ export class PurchasingCodesService {
         keepsStock: code.keepsStock,
         active: code.active,
         xero: code.xeroOptions.map((match) => ({ xeroTenantId: match.xeroTenantId, trackingCategoryId: match.trackingCategoryId, trackingOptionId: match.trackingOptionId, label: label(match) })),
-        used: used.get(code.id) ?? 0,
+        used: code.kind === PurchasingCodeKind.UNIT ? (unitUse.get(code.name.toLowerCase()) ?? 0) : (used.get(code.id) ?? 0),
       })),
       companies: rows,
+      keeps: {
+        LINE_TYPE: kept.LINE_TYPES,
+        UNIT: kept.UNITS,
+        REQUEST: kept.REQUEST,
+        DEPARTMENT: kept.DEPARTMENT,
+        COST_CENTER: kept.COST_CENTER,
+        PURCHASER_CODES: kept.PURCHASER_CODES,
+      },
     };
   }
 
@@ -134,6 +151,7 @@ export class PurchasingCodesService {
     const organizationId = user.organizationId;
     const kind = input.kind;
     if (!kind) throw new ApplicationError(400, 'PURCHASING_CODE_INCOMPLETE', 'Say which list it goes on.');
+    await assertKeeps(this.prisma, user, CODE_LIST_OF_KIND[kind]);
     const code = this.code(input.code);
     const name = this.name(input.name);
     const xero = input.xero ? await this.matches(organizationId, kind, input.xero) : [];
@@ -155,8 +173,9 @@ export class PurchasingCodesService {
 
   async update(user: AuthenticatedUser, codeId: string, input: SavePurchasingCodeInput): Promise<PurchasingCodes> {
     const organizationId = user.organizationId;
-    const existing = await this.prisma.purchasingCode.findFirst({ where: { id: codeId, organizationId }, select: { kind: true, code: true, keepsStock: true, active: true } });
+    const existing = await this.prisma.purchasingCode.findFirst({ where: { id: codeId, organizationId }, select: { kind: true, code: true, name: true, keepsStock: true, active: true } });
     if (!existing) throw new ApplicationError(404, 'PURCHASING_CODE_NOT_FOUND', 'That code is not on the list.');
+    await assertKeeps(this.prisma, user, CODE_LIST_OF_KIND[existing.kind]);
     if (input.kind !== undefined && input.kind !== existing.kind) throw new ApplicationError(409, 'PURCHASING_CODE_KIND_FIXED', `${existing.code} stays on its list. Make it again on the other one.`);
     const data: Prisma.PurchasingCodeUncheckedUpdateInput = {};
     const changes: string[] = [];
@@ -191,9 +210,12 @@ export class PurchasingCodesService {
     const xero = input.xero !== undefined ? await this.matches(organizationId, existing.kind, input.xero) : null;
     if (xero) changes.push(`Xero tracking (${xero.length})`);
     if (!changes.length) return this.list(user);
+    // A unit is named by its items (Purchasing Setup, 2026-11-21): renamed, they follow it. Its old name, taken before it changes.
+    const renamedUnit = existing.kind === PurchasingCodeKind.UNIT && typeof data.name === 'string' && data.name !== existing.name ? { from: existing.name, to: data.name } : null;
     try {
       await this.prisma.$transaction(async (tx) => {
         if (Object.keys(data).length) await tx.purchasingCode.update({ where: { id: codeId }, data });
+        if (renamedUnit) await tx.stockItem.updateMany({ where: { organizationId, unit: { equals: renamedUnit.from, mode: 'insensitive' } }, data: { unit: renamedUnit.to } });
         if (xero) {
           await tx.purchasingCodeXeroOption.deleteMany({ where: { organizationId, codeId } });
           if (xero.length) await tx.purchasingCodeXeroOption.createMany({ data: xero.map((match) => ({ organizationId, codeId, ...match })) });
@@ -212,6 +234,7 @@ export class PurchasingCodesService {
     const organizationId = user.organizationId;
     const company = await this.prisma.xeroOrganisation.findFirst({ where: { organizationId, xeroTenantId, removedAt: null }, select: { id: true, name: true, purchaserCode: true } });
     if (!company) throw new ApplicationError(404, 'COMPANY_NOT_FOUND', 'That company is not connected to this office.');
+    await assertKeeps(this.prisma, user, 'PURCHASER_CODES');
     const code = input.purchaserCode === null || !input.purchaserCode.trim() ? null : this.code(input.purchaserCode);
     const before = company.purchaserCode;
     if (code === before) return this.list(user);

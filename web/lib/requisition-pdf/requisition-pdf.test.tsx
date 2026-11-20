@@ -6,7 +6,7 @@
  * builds handle differently.
  */
 import { renderToBuffer } from '@react-pdf/renderer';
-import { DEFAULT_FILE_RULES, stepsFromLimit, type RequisitionDetail } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, DEFAULT_PAGE_LAYOUT, stepsFromLimit, type RequisitionDetail } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
 import { requisitionFileName } from './download-requisition';
@@ -66,7 +66,7 @@ const REQUISITION = {
   comments: [],
   links: [],
   can: { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: false, reopen: false },
-  settings: { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES },
+  settings: { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT },
 } satisfies RequisitionDetail;
 
 /** Every page's text, as a reader of the PDF would see it. */

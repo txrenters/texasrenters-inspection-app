@@ -34,6 +34,7 @@ import { ChevronDownIcon, PlusIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
 import { FastTab } from '@/components/purchasing/nav-kit';
+import { CodesSection, PageSection } from '@/components/purchasing/setup-codes-page';
 import { RolesSection } from '@/components/purchasing/setup-roles';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -55,8 +56,9 @@ import { usePurchasingSetup, usePurchasingSetupEdits } from '@/lib/purchasing-qu
  *
  * Saved as you go: a choice saves when it is made, a typed value when its box
  * is left, and only when it is one the office may keep -- the same rules the
- * server checks. The roles and who holds them came with part 5b (2026-11-21);
- * the code lists and the requisition page's own section come in part 5c.
+ * server checks. The roles and who holds them came with part 5b (2026-11-21),
+ * the code lists and the requisition page with part 5c: every section of the
+ * board, in its order.
  */
 export function SetupTab({ enabled }: { enabled: boolean }) {
   const setup = usePurchasingSetup(enabled);
@@ -71,11 +73,12 @@ export function SetupTab({ enabled }: { enabled: boolean }) {
           <span className="text-muted-foreground text-sm">Changes are saved as you go</span>
         </div>
       </div>
-      <p className="text-muted-foreground text-sm">The code lists and the requisition page&rsquo;s fields come with the next part of Setup.</p>
       <RolesSection enabled={enabled} />
       {/* Keyed on what the server holds, so a save from elsewhere starts each section afresh. */}
       <ApprovalsSection approvals={setup.data.approvals} key={JSON.stringify(setup.data.approvals)} />
+      <CodesSection setup={setup.data} />
       <NumbersSection numbers={setup.data.numbers} />
+      <PageSection page={setup.data.page} />
       <FilesSection files={setup.data.files} key={JSON.stringify(setup.data.files)} />
       <p className="text-muted-foreground text-sm">Every change here is written to the audit log: who, when, what it was and what it became.</p>
     </div>

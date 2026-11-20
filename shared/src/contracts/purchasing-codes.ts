@@ -12,11 +12,12 @@ import { normalizeStockCode } from './inventory.js';
  * read from the catalog the console already keeps: nothing calls Xero here.
  */
 
-export const PURCHASING_CODE_KINDS = ['LINE_TYPE', 'REQUEST', 'DEPARTMENT', 'COST_CENTER'] as const;
+export const PURCHASING_CODE_KINDS = ['LINE_TYPE', 'UNIT', 'REQUEST', 'DEPARTMENT', 'COST_CENTER'] as const;
 export type PurchasingCodeKind = (typeof PURCHASING_CODE_KINDS)[number];
 
 export const PURCHASING_CODE_KIND_LABEL: Record<PurchasingCodeKind, string> = {
   LINE_TYPE: 'Line types',
+  UNIT: 'Units of measure',
   REQUEST: 'Request codes',
   DEPARTMENT: 'Department codes',
   COST_CENTER: 'Cost center codes',
@@ -25,6 +26,7 @@ export const PURCHASING_CODE_KIND_LABEL: Record<PurchasingCodeKind, string> = {
 /** What each list is for, as its tab says it. */
 export const PURCHASING_CODE_KIND_ABOUT: Record<PurchasingCodeKind, string> = {
   LINE_TYPE: 'What a line is. An item code belongs to one type; a type that keeps no stock is never received into a place, counted or withdrawn.',
+  UNIT: 'What an item is counted in: EA "each", PK "pack", JOB "job". An item code picks one, by its name (Purchasing Setup, 2026-11-21).',
   REQUEST: 'The kind of request, picked on each requisition: RESTOCK, JOB, URGENT.',
   DEPARTMENT: 'The department each requisition line is for. Match it to a Xero tracking option so the bill reaches Xero coded.',
   COST_CENTER: 'The cost center a requisition is for. Match it to a Xero tracking option so the bill reaches Xero coded.',
@@ -88,7 +90,12 @@ export interface PurchasingCompanyRow {
 export interface PurchasingCodes {
   codes: PurchasingCodeRow[];
   companies: PurchasingCompanyRow[];
+  /** The lists the caller makes and changes here, by the role Purchasing Setup gives each (2026-11-21). */
+  keeps?: Record<PurchasingCodeKind | 'PURCHASER_CODES', boolean>;
 }
+
+/** The Setup code list each kind of purchasing code is. */
+export const CODE_LIST_OF_KIND = { LINE_TYPE: 'LINE_TYPES', UNIT: 'UNITS', REQUEST: 'REQUEST', DEPARTMENT: 'DEPARTMENT', COST_CENTER: 'COST_CENTER' } as const satisfies Record<PurchasingCodeKind, string>;
 
 export interface SavePurchasingCodeInput {
   kind?: PurchasingCodeKind;

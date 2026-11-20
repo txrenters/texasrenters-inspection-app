@@ -1,20 +1,28 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
+  CODE_LISTS,
   FILE_GROUP_KEYS,
   MOST_REQUISITION_QUOTES,
   approvalStepsProblem,
+  codeKeepersProblem,
+  completePageLayout,
   defaultSeries,
   documentSeriesProblem,
   fileRulesProblem,
+  pageLayoutProblem,
+  type CodeKeepers,
+  type CodeListKey,
   type DocumentSeriesKind,
   type DocumentSeriesSetting,
   type PurchasingApprovals,
   type PurchasingSetup,
   type RequisitionFileRules,
+  type SaveCodeKeepersInput,
   type SaveDocumentSeriesInput,
   type SavePurchasingApprovalsInput,
   type SaveRequisitionFileRulesInput,
+  type SaveRequisitionPageInput,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -37,8 +45,71 @@ export class PurchasingSetupService {
 
   async read(user: AuthenticatedUser): Promise<PurchasingSetup> {
     const organizationId = user.organizationId;
-    const [setup, numbers] = await Promise.all([readPurchasingSetup(this.prisma, organizationId), readDocumentSeries(this.prisma, organizationId)]);
-    return { approvals: setup.approvals, numbers, files: setup.settings.files };
+    const [setup, numbers, inUse] = await Promise.all([readPurchasingSetup(this.prisma, organizationId), readDocumentSeries(this.prisma, organizationId), this.inUse(organizationId)]);
+    return {
+      approvals: setup.approvals,
+      numbers,
+      files: setup.settings.files,
+      codes: CODE_LISTS.map((list) => ({ list: list.key, keeper: setup.keepers[list.key], inUse: inUse[list.key] })),
+      page: setup.settings.page,
+    };
+  }
+
+  /** How many of each list are in use, for the Codes section. */
+  private async inUse(organizationId: string): Promise<Record<CodeListKey, number>> {
+    const [items, categories, codes, places, vendors, purchasers] = await Promise.all([
+      this.prisma.stockItem.count({ where: { organizationId, active: true } }),
+      this.prisma.stockCategory.count({ where: { organizationId, active: true } }),
+      this.prisma.purchasingCode.groupBy({ by: ['kind'], where: { organizationId, active: true }, _count: { _all: true } }),
+      this.prisma.stockPlace.count({ where: { organizationId, active: true } }),
+      this.prisma.vendor.count({ where: { organizationId, active: true } }),
+      this.prisma.xeroOrganisation.count({ where: { organizationId, status: 'CONNECTED', purchaserCode: { not: null } } }),
+    ]);
+    const of = (kind: string) => codes.find((row) => row.kind === kind)?._count._all ?? 0;
+    return {
+      ITEMS: items,
+      CATEGORIES: categories,
+      LINE_TYPES: of('LINE_TYPE'),
+      UNITS: of('UNIT'),
+      REQUEST: of('REQUEST'),
+      DEPARTMENT: of('DEPARTMENT'),
+      COST_CENTER: of('COST_CENTER'),
+      PLACES: places,
+      VENDORS: vendors,
+      PURCHASER_CODES: purchasers,
+    };
+  }
+
+  /** Who keeps each code list: enforced everywhere in the console (part 5c, 2026-11-21). */
+  async saveCodeKeepers(user: AuthenticatedUser, input: SaveCodeKeepersInput): Promise<PurchasingSetup> {
+    const problem = codeKeepersProblem(input.keepers);
+    if (problem) throw new ApplicationError(400, 'PURCHASING_KEEPERS_INVALID', problem);
+    const organizationId = user.organizationId;
+    const to = Object.fromEntries(CODE_LISTS.map((list) => [list.key, input.keepers[list.key]])) as CodeKeepers;
+    await this.prisma.$transaction(async (tx) => {
+      const before = (await readPurchasingSetup(tx, organizationId)).keepers;
+      const changed = CODE_LISTS.filter((list) => before[list.key] !== to[list.key]).map((list) => list.key);
+      if (!changed.length) return;
+      await tx.purchasingSettings.upsert({ where: { organizationId }, create: { organizationId, codeKeepers: to }, update: { codeKeepers: to } });
+      await this.audit(tx, user, 'codes', Object.fromEntries(changed.map((list) => [list, before[list]])), Object.fromEntries(changed.map((list) => [list, to[list]])));
+    });
+    return this.read(user);
+  }
+
+  /** The requisition page's fields -- shown, required -- and its FactBoxes, in order, and who sees each. */
+  async saveRequisitionPage(user: AuthenticatedUser, input: SaveRequisitionPageInput): Promise<PurchasingSetup> {
+    const problem = pageLayoutProblem(input);
+    if (problem) throw new ApplicationError(400, 'PURCHASING_PAGE_INVALID', problem);
+    const organizationId = user.organizationId;
+    const to = completePageLayout(input);
+    await this.prisma.$transaction(async (tx) => {
+      const before = (await readPurchasingSetup(tx, organizationId)).settings.page;
+      if (JSON.stringify(before) === JSON.stringify(to)) return;
+      const page = JSON.parse(JSON.stringify(to)) as Prisma.InputJsonObject;
+      await tx.purchasingSettings.upsert({ where: { organizationId }, create: { organizationId, requisitionPage: page }, update: { requisitionPage: page } });
+      await this.audit(tx, user, 'page', before, to);
+    });
+    return this.read(user);
   }
 
   /** The steps, replaced whole, and the two switches beside them. */

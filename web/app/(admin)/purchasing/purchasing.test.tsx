@@ -1,4 +1,4 @@
-import { DEFAULT_FILE_RULES, stepsFromLimit, type PurchaseOrderDetail, type PurchaseOrderRow, type RequisitionChoices, type RequisitionDetail, type RequisitionList, type RequisitionRow } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, DEFAULT_PAGE_LAYOUT, stepsFromLimit, type PurchaseOrderDetail, type PurchaseOrderRow, type RequisitionChoices, type RequisitionDetail, type RequisitionList, type RequisitionRow } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -43,7 +43,7 @@ vi.mock('@/lib/vendor-bills-xero-queries', () => ({
 const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
-vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }), useAuth: () => ({ profile: { displayName: 'Sample Purchaser' } }) }));
+vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ permissions: [...account.permissions], has: (permission: string) => account.permissions.has(permission), hasAny: (...permissions: string[]) => permissions.some((permission) => account.permissions.has(permission)) }), useAuth: () => ({ profile: { displayName: 'Sample Purchaser' } }) }));
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: '' }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12', orderId: 'order-9' }), useRouter: () => router, useSearchParams: () => new URLSearchParams(router.query) }));
 const pdf = vi.hoisted(() => ({ downloadOrder: vi.fn(async () => undefined), orderAttachment: vi.fn(async () => ({ fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' })) }));
@@ -52,7 +52,7 @@ const printed = vi.hoisted(() => ({ downloadRequisition: vi.fn(async () => undef
 vi.mock('@/lib/requisition-pdf/download-requisition', () => printed);
 
 // The office before Purchasing Setup (2026-11-20): $500.00, and two quotes above it, as two steps.
-const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES };
+const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT };
 const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
   id: 'req-12',
   number: 'PR-0012',

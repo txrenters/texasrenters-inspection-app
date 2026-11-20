@@ -23,6 +23,7 @@ import {
   type StockPlaces,
   type VendorRow,
   type Vendors,
+  listsKept,
   normalizePurchasingCode,
   purchasingCodeProblem,
   suggestedPlaceCode,
@@ -34,7 +35,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
 import { defaultLineTypeId, lineTypeOf } from './purchasing-codes.service';
-import { nextDocumentCode } from './purchasing-settings';
+import { assertKeeps, nextDocumentCode, readPurchasingSetup } from './purchasing-settings';
 
 /**
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): the
@@ -151,7 +152,7 @@ export class InventoryService {
   /** Every item with what is on hand: seven reads, whatever the number of items. */
   async stock(user: AuthenticatedUser): Promise<StockList> {
     const organizationId = user.organizationId;
-    const [items, levels, places, organisations, vendors, categories, lineTypes] = await Promise.all([
+    const [items, levels, places, organisations, vendors, categories, lineTypes, units, setup] = await Promise.all([
       this.prisma.stockItem.findMany({ where: { organizationId }, select: ITEM_SELECT, orderBy: [{ active: 'desc' }, { codeKey: 'asc' }] }),
       this.prisma.stockLevel.findMany({ where: { organizationId }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: PLACE_SELECT, orderBy: [{ active: 'desc' }, { kind: 'asc' }, { nameKey: 'asc' }] }),
@@ -163,7 +164,10 @@ export class InventoryService {
         orderBy: [{ active: 'desc' }, { nameKey: 'asc' }],
       }),
       this.prisma.purchasingCode.findMany({ where: { organizationId, kind: 'LINE_TYPE' }, select: { id: true, code: true, name: true, keepsStock: true, active: true }, orderBy: [{ active: 'desc' }, { code: 'asc' }] }),
+      this.prisma.purchasingCode.findMany({ where: { organizationId, kind: 'UNIT', active: true }, select: { code: true, name: true }, orderBy: { name: 'asc' } }),
+      readPurchasingSetup(this.prisma, organizationId),
     ]);
+    const kept = listsKept(user.permissions, setup.keepers);
     const kinds = new Map(places.map((place) => [place.id, place.kind]));
     const names = new Map(organisations.map((row) => [row.xeroTenantId, row.name]));
     const byItem = new Map<string, Level[]>();
@@ -182,7 +186,23 @@ export class InventoryService {
         active: category.active,
       })),
       lineTypes,
+      units,
+      keeps: { items: kept.ITEMS, categories: kept.CATEGORIES, places: kept.PLACES, vendors: kept.VENDORS },
     };
+  }
+
+  /**
+   * The unit an item is counted in: once the office keeps units of measure
+   * (Purchasing Setup, 2026-11-21), one of them by its name, as the list
+   * writes it; before then, any word, "each" if none.
+   */
+  private async unitOf(db: Pick<Prisma.TransactionClient, 'purchasingCode'>, organizationId: string, typed: string | null | undefined): Promise<string> {
+    const unit = text(typed) ?? 'each';
+    const units = await db.purchasingCode.findMany({ where: { organizationId, kind: 'UNIT', active: true }, select: { name: true } });
+    if (!units.length) return unit;
+    const found = units.find((one) => one.name.toLowerCase() === unit.toLowerCase());
+    if (!found) throw new ApplicationError(400, 'ITEM_UNIT_UNKNOWN', `Choose a unit from the units of measure: ${units.map((one) => one.name).join(', ')}.`);
+    return found.name;
   }
 
   /** One item: where it is, what it cost, and its movements, newest first. */
@@ -256,6 +276,7 @@ export class InventoryService {
   }
 
   async createItem(user: AuthenticatedUser, input: SaveStockItemInput): Promise<StockItemDetail> {
+    await assertKeeps(this.prisma, user, 'ITEMS');
     const organizationId = user.organizationId;
     const name = text(input.name);
     const categoryId = input.categoryId;
@@ -277,7 +298,7 @@ export class InventoryService {
             code,
             codeKey: stockKey(code),
             name,
-            unit: text(input.unit) ?? 'each',
+            unit: await this.unitOf(tx, organizationId, input.unit),
             categoryId,
             xeroTenantId: input.xeroTenantId ?? null,
             reorderLevel: input.reorderLevel ?? 0,
@@ -332,6 +353,7 @@ export class InventoryService {
   }
 
   async updateItem(user: AuthenticatedUser, itemId: string, input: SaveStockItemInput): Promise<StockItemDetail> {
+    await assertKeeps(this.prisma, user, 'ITEMS');
     const organizationId = user.organizationId;
     await this.itemChoicesAreOurs(organizationId, input);
     const data: Prisma.StockItemUncheckedUpdateInput = {};
@@ -340,7 +362,7 @@ export class InventoryService {
       if (!name) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a name.');
       data.name = name;
     }
-    if (sent(input, 'unit')) data.unit = text(input.unit) ?? 'each';
+    if (sent(input, 'unit')) data.unit = await this.unitOf(this.prisma, organizationId, input.unit);
     if (sent(input, 'xeroTenantId')) data.xeroTenantId = input.xeroTenantId ?? null;
     if (sent(input, 'reorderLevel')) data.reorderLevel = input.reorderLevel;
     if (sent(input, 'reorderQuantity')) data.reorderQuantity = input.reorderQuantity;
@@ -400,6 +422,7 @@ export class InventoryService {
 
   /** A kind of stock and the prefix its items' codes start with. */
   async createCategory(user: AuthenticatedUser, input: SaveStockCategoryInput): Promise<StockList> {
+    await assertKeeps(this.prisma, user, 'CATEGORIES');
     const organizationId = user.organizationId;
     const name = text(input.name);
     const prefix = input.prefix?.trim().toUpperCase() ?? '';
@@ -421,6 +444,7 @@ export class InventoryService {
   }
 
   async updateCategory(user: AuthenticatedUser, categoryId: string, input: SaveStockCategoryInput): Promise<StockList> {
+    await assertKeeps(this.prisma, user, 'CATEGORIES');
     const organizationId = user.organizationId;
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -630,6 +654,7 @@ export class InventoryService {
   }
 
   async createPlace(user: AuthenticatedUser, input: SaveStockPlaceInput): Promise<StockPlaces> {
+    await assertKeeps(this.prisma, user, 'PLACES');
     const organizationId = user.organizationId;
     const name = text(input.name);
     if (!name) throw new ApplicationError(400, 'STOCK_PLACE_INCOMPLETE', 'A place needs a name.');
@@ -654,6 +679,7 @@ export class InventoryService {
   }
 
   async updatePlace(user: AuthenticatedUser, placeId: string, input: SaveStockPlaceInput): Promise<StockPlaces> {
+    await assertKeeps(this.prisma, user, 'PLACES');
     const organizationId = user.organizationId;
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -726,6 +752,7 @@ export class InventoryService {
   }
 
   async createVendor(user: AuthenticatedUser, input: SaveVendorInput): Promise<Vendors> {
+    await assertKeeps(this.prisma, user, 'VENDORS');
     const organizationId = user.organizationId;
     const name = text(input.name);
     if (!name) throw new ApplicationError(400, 'VENDOR_INCOMPLETE', 'A vendor needs a name.');
@@ -747,6 +774,7 @@ export class InventoryService {
   }
 
   async updateVendor(user: AuthenticatedUser, vendorId: string, input: SaveVendorInput): Promise<Vendors> {
+    await assertKeeps(this.prisma, user, 'VENDORS');
     const organizationId = user.organizationId;
     const data: Prisma.VendorUncheckedUpdateInput = {};
     if (sent(input, 'name')) {

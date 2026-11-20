@@ -112,15 +112,32 @@ export function FastTab({ title, action, defaultOpen = true, children, className
 }
 
 /** "Label:" with its field beside it, as NAV lays a FastTab out. */
-export function FieldRow({ label, htmlFor, children, hint }: { label: string; htmlFor?: string; children: ReactNode; hint?: ReactNode }) {
+/** NAV's red star on a field that must be filled in before a document is sent (Purchasing Setup, 2026-11-21). */
+export function RequiredMark() {
+  return (
+    <>
+      <span aria-hidden="true" className="text-destructive ml-0.5">
+        *
+      </span>
+      <span className="sr-only"> (required)</span>
+    </>
+  );
+}
+
+export function FieldRow({ label, htmlFor, children, hint, required }: { label: string; htmlFor?: string; children: ReactNode; hint?: ReactNode; required?: boolean }) {
+  const mark = required ? <RequiredMark /> : null;
   return (
     <div className="grid grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5 py-1">
       {htmlFor ? (
         <label className="text-sm" htmlFor={htmlFor}>
-          {label}:
+          {label}
+          {mark}:
         </label>
       ) : (
-        <span className="text-sm">{label}:</span>
+        <span className="text-sm">
+          {label}
+          {mark}:
+        </span>
       )}
       <div className="min-w-0">{children}</div>
       {hint ? <div className="text-muted-foreground col-start-2 text-xs">{hint}</div> : null}

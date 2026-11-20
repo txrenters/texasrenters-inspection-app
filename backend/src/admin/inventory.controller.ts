@@ -12,10 +12,12 @@ import {
   type SaveStockPlaceInput,
   type SaveVendorInput,
   type StockPlaceKind,
+  KEEPER_PERMISSIONS,
+  type PermissionKey,
 } from '@texasrenters/shared';
 import { IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
-import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
+import { ApiAuthGuard, PermissionsGuard, RequireAnyPermission, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { InventoryService } from './inventory.service';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -85,6 +87,9 @@ export class SaveVendorDto implements Required<SaveVendorInput> {
  * `inventory:manage`, which no API key may hold. Every change is audited, and
  * a stock movement is only ever added.
  */
+
+/** Whoever may keep any code list: each list's own keeper is checked in the service. */
+const KEEPER_ROUTE_PERMISSIONS = KEEPER_PERMISSIONS as PermissionKey[];
 @ApiTags('Administrator application')
 @ApiBearerAuth()
 @UseGuards(ApiAuthGuard, PermissionsGuard)
@@ -99,7 +104,8 @@ export class InventoryController {
   }
 
   @Post('items')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   createItem(@Req() request: AuthenticatedRequest, @Body() body: SaveStockItemDto) {
     return this.inventory.createItem(request.user, body);
   }
@@ -111,7 +117,8 @@ export class InventoryController {
   }
 
   @Patch('items/:itemId')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   updateItem(@Req() request: AuthenticatedRequest, @Param('itemId', ParseUUIDPipe) itemId: string, @Body() body: SaveStockItemDto) {
     return this.inventory.updateItem(request.user, itemId, body);
   }
@@ -129,13 +136,15 @@ export class InventoryController {
   }
 
   @Post('categories')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   createCategory(@Req() request: AuthenticatedRequest, @Body() body: SaveStockCategoryDto) {
     return this.inventory.createCategory(request.user, body);
   }
 
   @Patch('categories/:categoryId')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   updateCategory(@Req() request: AuthenticatedRequest, @Param('categoryId', ParseUUIDPipe) categoryId: string, @Body() body: SaveStockCategoryDto) {
     return this.inventory.updateCategory(request.user, categoryId, body);
   }
@@ -147,13 +156,15 @@ export class InventoryController {
   }
 
   @Post('places')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   createPlace(@Req() request: AuthenticatedRequest, @Body() body: SaveStockPlaceDto) {
     return this.inventory.createPlace(request.user, body);
   }
 
   @Patch('places/:placeId')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   updatePlace(@Req() request: AuthenticatedRequest, @Param('placeId', ParseUUIDPipe) placeId: string, @Body() body: SaveStockPlaceDto) {
     return this.inventory.updatePlace(request.user, placeId, body);
   }
@@ -165,13 +176,15 @@ export class InventoryController {
   }
 
   @Post('vendors')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   createVendor(@Req() request: AuthenticatedRequest, @Body() body: SaveVendorDto) {
     return this.inventory.createVendor(request.user, body);
   }
 
   @Patch('vendors/:vendorId')
-  @RequirePermissions('inventory:manage')
+  // Kept by the role Purchasing Setup gives this list (2026-11-21); the service checks which.
+  @RequireAnyPermission(...KEEPER_ROUTE_PERMISSIONS)
   updateVendor(@Req() request: AuthenticatedRequest, @Param('vendorId', ParseUUIDPipe) vendorId: string, @Body() body: SaveVendorDto) {
     return this.inventory.updateVendor(request.user, vendorId, body);
   }

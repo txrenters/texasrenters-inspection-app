@@ -21,6 +21,16 @@ import {
   type FileGroup,
   type FileRemoval,
   type PurchasingRoleKey,
+  KEEPER_ROLES,
+  FACT_BOX_KEYS,
+  PURCHASING_ROLE_KEYS as ROLE_KEYS,
+  type FactBoxKey,
+  type FactBoxSetting,
+  type KeeperRole,
+  type RequisitionFieldKey,
+  type RequisitionFieldSetting,
+  type SaveCodeKeepersInput,
+  type SaveRequisitionPageInput,
   type SaveDocumentSeriesInput,
   type SavePurchasingPersonInput,
   type SavePurchasingApprovalsInput,
@@ -66,6 +76,51 @@ export class SaveDocumentSeriesDto implements Required<SaveDocumentSeriesInput> 
   @IsString() @MinLength(1) @MaxLength(MOST_PREFIX_LENGTH) prefix!: string;
   @IsInt() @Min(LEAST_SERIES_DIGITS) @Max(MOST_SERIES_DIGITS) digits!: number;
   @IsInt() @Min(1) @Max(99_999_999) next!: number;
+}
+
+/** Each list's keeper; the service checks every list is named, and with a role the board offers. */
+export class CodeKeepersDto {
+  @IsIn(KEEPER_ROLES) ITEMS!: KeeperRole;
+  @IsIn(KEEPER_ROLES) CATEGORIES!: KeeperRole;
+  @IsIn(KEEPER_ROLES) LINE_TYPES!: KeeperRole;
+  @IsIn(KEEPER_ROLES) UNITS!: KeeperRole;
+  @IsIn(KEEPER_ROLES) REQUEST!: KeeperRole;
+  @IsIn(KEEPER_ROLES) DEPARTMENT!: KeeperRole;
+  @IsIn(KEEPER_ROLES) COST_CENTER!: KeeperRole;
+  @IsIn(KEEPER_ROLES) PLACES!: KeeperRole;
+  @IsIn(KEEPER_ROLES) VENDORS!: KeeperRole;
+  @IsIn(KEEPER_ROLES) PURCHASER_CODES!: KeeperRole;
+}
+
+export class SaveCodeKeepersDto implements Required<SaveCodeKeepersInput> {
+  @ValidateNested() @Type(() => CodeKeepersDto) keepers!: CodeKeepersDto;
+}
+
+export class RequisitionFieldSettingDto implements Required<RequisitionFieldSetting> {
+  @IsBoolean() shown!: boolean;
+  @IsBoolean() required!: boolean;
+}
+
+export class RequisitionFieldsDto implements Record<RequisitionFieldKey, RequisitionFieldSettingDto> {
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) REQUEST_CODE!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) COST_CENTER!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) DOCUMENT_DATE!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) EXPECTED_RECEIPT!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) LINE_DEPARTMENT!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) LINE_NOTES!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) LOCATION!: RequisitionFieldSettingDto;
+  @ValidateNested() @Type(() => RequisitionFieldSettingDto) COMPANY!: RequisitionFieldSettingDto;
+}
+
+export class FactBoxSettingDto implements Required<FactBoxSetting> {
+  @IsIn(FACT_BOX_KEYS) key!: FactBoxKey;
+  @IsBoolean() shown!: boolean;
+  @IsArray() @ArrayMaxSize(ROLE_KEYS.length) @IsIn(ROLE_KEYS, { each: true }) audience!: FactBoxSetting['audience'];
+}
+
+export class SaveRequisitionPageDto implements Required<SaveRequisitionPageInput> {
+  @ValidateNested() @Type(() => RequisitionFieldsDto) fields!: RequisitionFieldsDto;
+  @IsArray() @ArrayMinSize(FACT_BOX_KEYS.length) @ArrayMaxSize(FACT_BOX_KEYS.length) @ValidateNested({ each: true }) @Type(() => FactBoxSettingDto) factBoxes!: FactBoxSettingDto[];
 }
 
 export class SetPurchasingRoleDto implements Required<SetPurchasingRoleInput> {
@@ -145,6 +200,18 @@ export class PurchasingSetupController {
   @RequirePermissions('purchasing:setup')
   saveFiles(@Req() request: AuthenticatedRequest, @Body() body: SaveRequisitionFileRulesDto) {
     return this.setup.saveFiles(request.user, body);
+  }
+
+  @Put('codes')
+  @RequirePermissions('purchasing:setup')
+  saveCodeKeepers(@Req() request: AuthenticatedRequest, @Body() body: SaveCodeKeepersDto) {
+    return this.setup.saveCodeKeepers(request.user, body);
+  }
+
+  @Put('page')
+  @RequirePermissions('purchasing:setup')
+  saveRequisitionPage(@Req() request: AuthenticatedRequest, @Body() body: SaveRequisitionPageDto) {
+    return this.setup.saveRequisitionPage(request.user, body);
   }
 
   @Put('numbers/:kind')

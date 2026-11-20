@@ -2,6 +2,8 @@
 
 import {
   DEFAULT_FILE_RULES,
+  DEFAULT_PAGE_LAYOUT,
+  KEEPER_PERMISSIONS,
   REQUISITION_STATUSES,
   REQUISITION_STATUS_LABEL,
   formatMoney,
@@ -75,9 +77,9 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
 }
 
 export default function PurchasingPage() {
-  const { has } = usePermissions();
-  // The code lists a requisition picks from (2026-11-20): only for whoever may manage them.
-  const canCode = has('purchasing:codes');
+  const { has, hasAny } = usePermissions();
+  // The code lists a requisition picks from (2026-11-20). Read by anybody in purchasing (Purchasing Setup, 2026-11-21); each list is changed by its keeper.
+  const canCode = hasAny('purchasing:request', ...KEEPER_PERMISSIONS);
   // Purchasing Setup (2026-11-20): a system admin or a Purchasing admin.
   const canSetup = has('purchasing:setup');
   const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
@@ -136,7 +138,7 @@ export default function PurchasingPage() {
         </TabsContent>
         <TabsContent value="requisitions">
       {list.isLoading ? (
-        <DataTableSkeleton columns={columns({ steps: stepsFromLimit(0, 0), files: DEFAULT_FILE_RULES })} label="Loading requisitions" rows={6} />
+        <DataTableSkeleton columns={columns({ steps: stepsFromLimit(0, 0), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT })} label="Loading requisitions" rows={6} />
       ) : list.isError || !data ? (
         <ErrorState error={list.error} retry={() => void list.refetch()} />
       ) : (

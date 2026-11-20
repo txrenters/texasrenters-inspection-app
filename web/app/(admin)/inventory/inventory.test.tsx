@@ -223,6 +223,36 @@ describe('the stock list', () => {
     expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
   });
 
+  // Purchasing Setup (2026-11-21): each list is changed by the role the office gives it, as the server says.
+  it('offers each list to whoever keeps it, not to every stock keeper', () => {
+    account.permissions = new Set(['inventory:read', 'inventory:manage']);
+    hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: { ...list(ITEMS), keeps: { items: false, categories: true, places: true, vendors: false } } });
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    unmount();
+
+    url.state = { ...url.state, tab: 'categories' };
+    render(<InventoryPage />);
+    expect(screen.getByRole('button', { name: 'New category' })).toBeTruthy();
+  });
+
+  it('picks what an item is counted in from the units of measure, once there are any', async () => {
+    hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: { ...list(ITEMS), units: [{ code: 'EA', name: 'each' }, { code: 'BOX', name: 'box' }] } });
+    render(<InventoryPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'New item' }));
+    const dialog = screen.getByRole('dialog', { name: 'New item' });
+    expect(within(dialog).getByLabelText('Counted in').tagName).toBe('BUTTON');
+    expect(within(dialog).getByLabelText('Counted in').textContent).toBe('each');
+
+    fireEvent.keyDown(within(dialog).getByLabelText('Counted in'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: 'box' }));
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Gloves' } });
+    fireEvent.keyDown(within(dialog).getByLabelText('Category'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: 'Filters (FLT)' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add item' }));
+    await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ name: 'Gloves', unit: 'box' })));
+  });
+
   it('adds an item under a category, which gives it its code: nowhere to type a code or on hand', async () => {
     render(<InventoryPage />);
     fireEvent.click(screen.getByRole('button', { name: 'New item' }));
@@ -377,6 +407,16 @@ describe('one item', () => {
 
     expect(screen.getByRole('table', { name: 'Movements of Filter 16x25x1' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Edit item' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Enter opening balance' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Reverse/ })).toBeNull();
+  });
+
+  it('lets the keeper of the item codes edit the item, but only a stock keeper enter stock (2026-11-21)', () => {
+    account.permissions = new Set(['inventory:read', 'purchasing:codes']);
+    hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: { ...list(ITEMS), keeps: { items: true, categories: false, places: false, vendors: false } } });
+    mount();
+
+    expect(screen.getByRole('button', { name: 'Edit item' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Enter opening balance' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Reverse/ })).toBeNull();
   });

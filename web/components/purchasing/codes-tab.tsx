@@ -71,10 +71,12 @@ export function CodesTab({ enabled }: { enabled: boolean }) {
   if (!codes.data) return <DataTableSkeleton columns={columns('LINE_TYPE')} label="Loading codes" rows={4} />;
   const { companies } = codes.data;
   const rows = codes.data.codes.filter((row) => row.kind === kind);
+  // Each list is changed by the role Purchasing Setup gives it (2026-11-21); everybody in purchasing reads them.
+  const keeps = codes.data.keeps ?? { LINE_TYPE: true, UNIT: true, REQUEST: true, DEPARTMENT: true, COST_CENTER: true, PURCHASER_CODES: true };
 
   return (
     <div className="grid gap-8">
-      <CompaniesSection companies={companies} />
+      <CompaniesSection canChange={keeps.PURCHASER_CODES} companies={companies} />
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <section aria-labelledby="code-lists-heading" className="grid min-w-0 gap-3">
@@ -92,11 +94,15 @@ export function CodesTab({ enabled }: { enabled: boolean }) {
           <p className="text-muted-foreground text-sm">{PURCHASING_CODE_KIND_ABOUT[kind]}</p>
           {rows.length ? (
             <DataTable
-              actions={(row) => (
-                <Button aria-label={`Edit ${row.code}`} onClick={() => setEditing(row)} size="sm" variant="outline">
-                  Edit
-                </Button>
-              )}
+              actions={
+                keeps[kind]
+                  ? (row) => (
+                      <Button aria-label={`Edit ${row.code}`} onClick={() => setEditing(row)} size="sm" variant="outline">
+                        Edit
+                      </Button>
+                    )
+                  : undefined
+              }
               columns={columns(kind)}
               label={PURCHASING_CODE_KIND_LABEL[kind]}
               rowKey={(row) => row.id}
@@ -106,7 +112,11 @@ export function CodesTab({ enabled }: { enabled: boolean }) {
             <EmptyState description="Add the first one with the form beside this list." icon={TagsIcon} title={`No ${PURCHASING_CODE_KIND_LABEL[kind].toLowerCase()} yet`} />
           )}
         </section>
-        <NewCode companies={companies} key={kind} kind={kind} />
+        {keeps[kind] ? (
+          <NewCode companies={companies} key={kind} kind={kind} />
+        ) : (
+          <p className="text-muted-foreground text-sm">{PURCHASING_CODE_KIND_LABEL[kind]} are kept by somebody else here: Purchasing Setup says who.</p>
+        )}
       </div>
       {editing ? <EditCode code={editing} companies={companies} onClose={() => setEditing(null)} /> : null}
     </div>
@@ -115,7 +125,7 @@ export function CodesTab({ enabled }: { enabled: boolean }) {
 
 // ── Companies ─────────────────────────────────────────────────────────────
 
-function CompaniesSection({ companies }: { companies: readonly PurchasingCompanyRow[] }) {
+function CompaniesSection({ companies, canChange }: { companies: readonly PurchasingCompanyRow[]; canChange: boolean }) {
   return (
     <section aria-labelledby="companies-heading" className="grid gap-3">
       <h2 className="text-base font-semibold" id="companies-heading">
@@ -125,7 +135,14 @@ function CompaniesSection({ companies }: { companies: readonly PurchasingCompany
       {companies.length ? (
         <div className="bg-card divide-y rounded-xl border">
           {companies.map((company) => (
-            <CompanyCode company={company} key={company.xeroTenantId} />
+            canChange ? (
+              <CompanyCode company={company} key={company.xeroTenantId} />
+            ) : (
+              <div className="flex items-center justify-between gap-3 px-4 py-3 text-sm" key={company.xeroTenantId}>
+                <span>{company.name}</span>
+                <span className="font-mono">{company.purchaserCode ?? 'None'}</span>
+              </div>
+            )
           ))}
         </div>
       ) : (
@@ -208,12 +225,12 @@ function CodeFields({ kind, draft, set, companies, prefix }: { kind: PurchasingC
     <>
       <Field>
         <FieldLabel htmlFor={`${prefix}-code`}>Code</FieldLabel>
-        <Input autoCapitalize="characters" autoComplete="off" className="font-mono" id={`${prefix}-code`} maxLength={20} onChange={(event) => set({ code: event.target.value.toUpperCase() })} placeholder={kind === 'LINE_TYPE' ? 'LOT' : kind === 'REQUEST' ? 'RESTOCK' : 'MAINT'} value={draft.code} />
+        <Input autoCapitalize="characters" autoComplete="off" className="font-mono" id={`${prefix}-code`} maxLength={20} onChange={(event) => set({ code: event.target.value.toUpperCase() })} placeholder={kind === 'LINE_TYPE' ? 'LOT' : kind === 'UNIT' ? 'PK' : kind === 'REQUEST' ? 'RESTOCK' : 'MAINT'} value={draft.code} />
         {codeProblem ? <FieldError>{codeProblem}</FieldError> : <FieldDescription>Capitals, digits and dashes. Unique in this list.</FieldDescription>}
       </Field>
       <Field>
         <FieldLabel htmlFor={`${prefix}-name`}>Name</FieldLabel>
-        <Input autoComplete="off" id={`${prefix}-name`} maxLength={120} onChange={(event) => set({ name: event.target.value })} placeholder={{ LINE_TYPE: 'Lot, bought as one batch', REQUEST: 'Restock the storeroom', DEPARTMENT: 'Maintenance', COST_CENTER: 'Operations' }[kind]} value={draft.name} />
+        <Input autoComplete="off" id={`${prefix}-name`} maxLength={120} onChange={(event) => set({ name: event.target.value })} placeholder={{ LINE_TYPE: 'Lot, bought as one batch', UNIT: 'pack', REQUEST: 'Restock the storeroom', DEPARTMENT: 'Maintenance', COST_CENTER: 'Operations' }[kind]} value={draft.name} />
       </Field>
       {kind === 'LINE_TYPE' ? (
         <Field className="flex items-center justify-between gap-3">
