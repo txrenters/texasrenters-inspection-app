@@ -511,6 +511,22 @@ export interface RecordingAction {
   itemId?: string | null;
   /** That item's label when the summary was written, for the console. */
   itemLabel?: string | null;
+  /**
+   * When a person marked it repaired after the walkthrough, and who (the
+   * office, 2026-11-21: the make-ready fixed what the move-in walk found, and
+   * the report must say so rather than still list it as needed). Absent while
+   * it still needs doing. The report prints it as repaired, never as needed.
+   */
+  repairedAt?: string | null;
+  repairedBy?: string | null;
+}
+
+/** Marking one of a room's actions repaired after the walkthrough, or taking the mark back. */
+export interface RecordingActionRepairInput {
+  group: RecordingActionGroup;
+  /** The action's text exactly as the summary holds it. */
+  text: string;
+  repaired: boolean;
 }
 
 /**

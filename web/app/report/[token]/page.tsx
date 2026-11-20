@@ -230,6 +230,7 @@ function Room({ room }: { room: ReportRoomView }) {
                       written in. */}
                   <TableCell className="py-2 align-middle leading-snug whitespace-normal normal-case">
                     {row.comment ? <p className="text-muted-foreground">{row.comment}</p> : null}
+                    {row.repaired ? <p className="text-muted-foreground">{row.repaired}</p> : null}
                     {row.observations.map((observation) => (
                       <p key={`observed-${observation}`}>{observation}</p>
                     ))}

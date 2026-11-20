@@ -486,6 +486,8 @@ const storedSchema = z.object({
           details: z.array(z.string()),
           itemId: z.string().nullable().optional(),
           itemLabel: z.string().nullable().optional(),
+          repairedAt: z.string().nullable().optional(),
+          repairedBy: z.string().nullable().optional(),
         }),
       ),
     }),
@@ -502,6 +504,72 @@ const storedSchema = z.object({
 });
 
 export type StoredRecordingSummary = z.infer<typeof storedSchema>;
+
+/** How an action is known again: its group, its item, and its words. */
+function actionKey(group: string, itemId: string | null | undefined, text: string) {
+  return `${group}|${itemId ?? ''}|${normaliseSpeech(text)}`;
+}
+
+/**
+ * A new summary, keeping what a person marked repaired on the one it replaces.
+ *
+ * A room is summarized again when its recording is transcribed again or the
+ * office asks; a repair the office recorded must not come back as needed
+ * because of it. An action is the same action when its group, its item and
+ * its words are; one the model words differently is new, and prints as needed
+ * until marked again -- the safe way to be wrong.
+ */
+export function carriedRepairs(previous: unknown, next: RecordingSummary): RecordingSummary {
+  const parsed = storedSchema.safeParse(previous);
+  if (!parsed.success) return next;
+  const repaired = new Map<string, { repairedAt: string; repairedBy: string | null }>();
+  for (const group of parsed.data.actions)
+    for (const item of group.items)
+      if (item.repairedAt)
+        repaired.set(actionKey(group.group, item.itemId, item.text), {
+          repairedAt: item.repairedAt,
+          repairedBy: item.repairedBy ?? null,
+        });
+  if (!repaired.size) return next;
+  return {
+    ...next,
+    actions: next.actions.map((group) => ({
+      ...group,
+      items: group.items.map((item) => ({
+        ...item,
+        ...(repaired.get(actionKey(group.group, item.itemId, item.text)) ?? {}),
+      })),
+    })),
+  };
+}
+
+/**
+ * A stored summary with one action marked repaired, or the mark taken back.
+ * Null when the column holds no summary, or no such action: the console asked
+ * about words the summary does not have.
+ */
+export function withRepairMark(
+  stored: unknown,
+  input: { group: string; text: string; repaired: boolean },
+  mark: { at: Date; by: string },
+): StoredRecordingSummary | null {
+  const parsed = storedSchema.safeParse(stored);
+  if (!parsed.success) return null;
+  let found = false;
+  const actions = parsed.data.actions.map((group) => ({
+    ...group,
+    items: group.items.map((item) => {
+      if (group.group !== input.group || item.text !== input.text) return item;
+      found = true;
+      if (input.repaired) return { ...item, repairedAt: mark.at.toISOString(), repairedBy: mark.by };
+      const rest = { ...item };
+      delete rest.repairedAt;
+      delete rest.repairedBy;
+      return rest;
+    }),
+  }));
+  return found ? { ...parsed.data, actions } : null;
+}
 
 /**
  * A stored summary, read back, and whether it is still about the room's

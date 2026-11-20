@@ -15,6 +15,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { usePermissions } from '@/lib/auth';
 import {
   useInspectionRecordingSummaries,
+  useMarkRecordingActionRepaired,
   useSummarizeAreaRecordings,
   useSummarizeInspectionRecordings,
 } from '@/lib/queries';
@@ -111,7 +112,10 @@ function PropertyNeeds({ areas }: { areas: SummaryArea[] }) {
       .filter((area) => area.summary?.current)
       .map((area) => ({
         name: area.name,
-        items: area.summary!.actions.find((entry) => entry.group === group)?.items ?? [],
+        // What was repaired after the walkthrough is not needed any more.
+        items: (area.summary!.actions.find((entry) => entry.group === group)?.items ?? []).filter(
+          (item) => !item.repairedAt,
+        ),
       }))
       .filter((room) => room.items.length > 0),
   })).filter((entry) => entry.rooms.length > 0);
@@ -164,6 +168,7 @@ function AreaSummary({
   inspectionId: string;
 }) {
   const summarize = useSummarizeAreaRecordings(inspectionId, area.inspectionAreaId);
+  const repair = useMarkRecordingActionRepaired(inspectionId, area.inspectionAreaId);
   const state = !area.summary ? 'Not summarized' : area.summary.current ? 'Summarized' : 'Out of date';
   return (
     <Card>
@@ -177,7 +182,11 @@ function AreaSummary({
       </CardHeader>
       <CardContent className="space-y-3">
         {area.summary ? (
-          <RecordingSummaryBody summary={area.summary} />
+          <RecordingSummaryBody
+            onRepairedChange={canManage && area.summary.current ? (input) => repair.mutate(input) : undefined}
+            repairing={repair.isPending}
+            summary={area.summary}
+          />
         ) : (
           <p className="text-muted-foreground text-sm">
             This room’s recordings have not been summarized yet.
@@ -202,8 +211,8 @@ function AreaSummary({
               {summarize.isPending ? <Spinner className="size-3" /> : <SparklesIcon />}
               {area.summary ? 'Summarize again' : 'Summarize this room'}
             </Button>
-            {summarize.error ? (
-              <p className="text-destructive text-xs">{summarize.error.message}</p>
+            {summarize.error ?? repair.error ? (
+              <p className="text-destructive text-xs">{(summarize.error ?? repair.error)!.message}</p>
             ) : null}
           </div>
         ) : null}

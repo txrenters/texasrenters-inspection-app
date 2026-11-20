@@ -163,3 +163,32 @@ describe('a move-in room on the shared report', () => {
     expect(other.textContent).toContain('Fireplace is good');
   });
 });
+
+describe('a row repaired after the walkthrough', () => {
+  it('says it was repaired, with the date, and not what was needed', async () => {
+    const base = reportWith([
+      { id: 'lights', label: 'Lights and power points', isClean: true, isUndamaged: true, isWorking: true, comment: null },
+    ]);
+    report = {
+      ...base,
+      inspection: { ...base.inspection, type: 'MOVE_IN' },
+      rooms: [
+        {
+          ...base.rooms[0]!,
+          actions: [
+            {
+              heading: 'Repairs / Maintenance',
+              items: [{ text: 'Balance the ceiling fan', details: [], itemId: 'lights', repairedAt: '2026-11-21T15:00:00.000Z' }],
+            },
+          ],
+        },
+      ],
+    };
+    render(<ReportPage />);
+
+    const table = (await screen.findAllByRole('table'))[0]!;
+    const row = within(table).getAllByRole('row').find((entry) => entry.textContent?.includes('Lights and power points'))!;
+    expect(row.textContent).toContain('Repaired after the walkthrough (November 21, 2026)');
+    expect(row.textContent).not.toContain('Balance the ceiling fan');
+  });
+});

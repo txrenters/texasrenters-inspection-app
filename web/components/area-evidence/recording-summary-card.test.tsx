@@ -10,7 +10,7 @@ import { RecordingSummaryCard } from './RecordingSummaryCard';
  * the report is printing it or the narration word for word.
  */
 
-const state = vi.hoisted(() => ({ summarizeRoom: vi.fn(), summarizeEvery: vi.fn() }));
+const state = vi.hoisted(() => ({ summarizeRoom: vi.fn(), summarizeEvery: vi.fn(), markRepaired: vi.fn() }));
 
 vi.mock('@/lib/queries', () => ({
   useSummarizeAreaRecordings: () => ({
@@ -25,6 +25,11 @@ vi.mock('@/lib/queries', () => ({
     error: null,
     data: undefined,
     mutate: state.summarizeEvery,
+  }),
+  useMarkRecordingActionRepaired: () => ({
+    isPending: false,
+    error: null,
+    mutate: state.markRepaired,
   }),
 }));
 
@@ -90,6 +95,43 @@ describe('the summary for the report', () => {
   it('shows no such heading for a summary without it', () => {
     render(<RecordingSummaryCard areaId="a" canManage inspectionId="i" summary={SUMMARY} />);
     expect(screen.queryByText('In good order')).toBeNull();
+  });
+
+  it('lets someone who manages inspections mark an action repaired after the walkthrough, and undo it', () => {
+    const withRepairs: AreaRecordingSummaryView = {
+      ...SUMMARY,
+      actions: [
+        {
+          group: 'REPAIRS',
+          items: [
+            { text: 'Balance the ceiling fan', details: [], itemId: 'item-lights', itemLabel: 'Lights and power points' },
+            {
+              text: 'Install a doorstop',
+              details: [],
+              itemId: 'item-doors',
+              itemLabel: 'Doors and locks',
+              repairedAt: '2026-11-21T15:00:00.000Z',
+              repairedBy: 'Office Reviewer',
+            },
+          ],
+        },
+      ],
+    };
+    const { unmount } = render(
+      <RecordingSummaryCard areaId="a" canManage inspectionId="i" summary={withRepairs} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark repaired' }));
+    expect(state.markRepaired).toHaveBeenCalledWith({ group: 'REPAIRS', text: 'Balance the ceiling fan', repaired: true });
+    expect(screen.getByText(/Repaired after the walkthrough, .* by Office Reviewer/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(state.markRepaired).toHaveBeenCalledWith({ group: 'REPAIRS', text: 'Install a doorstop', repaired: false });
+    unmount();
+
+    // Without the permission: what was marked is shown, and nothing can be changed.
+    render(<RecordingSummaryCard areaId="a" canManage={false} inspectionId="i" summary={withRepairs} />);
+    expect(screen.queryByRole('button', { name: 'Mark repaired' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 
   it('says when the report lists nothing for the room: no summary yet, or a stale one', () => {

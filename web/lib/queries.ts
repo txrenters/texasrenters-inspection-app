@@ -69,6 +69,7 @@ import type {
   AreaChecklistEntry,
   AreaChecklistPrefillResult,
   AreaRecordingSummaryView,
+  RecordingActionRepairInput,
   InspectionRecordingSummaries,
   InspectionRecordingSummaryResult,
   InspectionChecklistPrefillResult,
@@ -670,6 +671,26 @@ export const useSummarizeAreaRecordings = (inspectionId: string, areaId: string)
       api<AreaRecordingSummaryView | null>(
         `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/recording-summary`,
         { method: 'POST' },
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });
+      void client.invalidateQueries({ queryKey: keys.recordingSummaries(inspectionId) });
+    },
+  });
+};
+
+/**
+ * Marks one of a room's actions repaired after the walkthrough, or takes the
+ * mark back. The report prints it as repaired from then on; the room's
+ * evidence and the summaries tab are refetched.
+ */
+export const useMarkRecordingActionRepaired = (inspectionId: string, areaId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RecordingActionRepairInput) =>
+      api<AreaRecordingSummaryView>(
+        `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/recording-summary/repaired`,
+        { method: 'PUT', body: JSON.stringify(input) },
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });

@@ -1139,7 +1139,16 @@ export interface PublicInspectionReport {
      */
     actions?: Array<{
       heading: string;
-      items: Array<{ text: string; details: string[]; itemId?: string | null }>;
+      items: Array<{
+        text: string;
+        details: string[];
+        itemId?: string | null;
+        /**
+         * When a person marked it repaired after the walkthrough: printed as
+         * repaired on that date, never as still needed. Absent otherwise.
+         */
+        repairedAt?: string | null;
+      }>;
     }>;
     /**
      * What the inspector said is in good order -- clean, undamaged, working,

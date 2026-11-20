@@ -114,6 +114,7 @@ import {
   UpdateAreaMarkerDto,
   UpdatePropertyAreaDto,
   UploadFloorPlanDto,
+  RecordingActionRepairDto,
 } from './admin.dto';
 import { UpdateProfileDto } from './access.dto';
 import { AdminService } from './admin.service';
@@ -1010,6 +1011,26 @@ export class AdminController {
       inspectionId,
       areaId,
       request.user.id,
+    );
+  }
+  /**
+   * Marks one of the room's actions repaired after the walkthrough, or takes
+   * the mark back. `inspections:manage`: it changes what the report prints.
+   */
+  @Put('inspections/:inspectionId/areas/:areaId/recording-summary/repaired')
+  @RequirePermissions('inspections:manage')
+  markRecordingActionRepaired(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+    @Body() body: RecordingActionRepairDto,
+  ) {
+    return this.summaries().markActionRepaired(
+      request.user.organizationId,
+      inspectionId,
+      areaId,
+      { id: request.user.id, displayName: request.user.displayName },
+      body,
     );
   }
   /**

@@ -24,6 +24,7 @@ vi.mock('@/lib/queries', () => ({
     data: undefined,
     mutate: state.summarizeEvery,
   }),
+  useMarkRecordingActionRepaired: () => ({ isPending: false, error: null, mutate: () => {} }),
   useSummarizeAreaRecordings: () => ({
     isPending: false,
     isSuccess: false,
