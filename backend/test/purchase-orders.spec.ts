@@ -375,9 +375,9 @@ describe('changing an approved order (Purchasing Setup, 2026-11-20)', () => {
     const raised = await service.update(everything, orderId, terms({ lines: [line(FILTER, 40, 390), line(BATTERY, 24, 185)] }));
     expect(raised).toMatchObject({ status: 'AWAITING_APPROVAL', approvedBy: null, number: 'PO-0001' });
     expect(raised.history[0]).toMatchObject({ by: 'Sample Everything', what: 'changed it after it was approved: it goes back for approval' });
-    expect((await service.detail(everything, orderId)).can).toMatchObject({ approve: false, approveBlocked: 'You changed this order after it was approved, so somebody else approves the change.' });
-    await expect(service.decide(everything, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OVER_LIMIT' });
-    expect(await service.decide(manager, orderId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Manager' });
+    // Whoever changed it may approve the change, as an approver (the office, 2026-11-21).
+    expect((await service.detail(everything, orderId)).can).toMatchObject({ approve: true, approveBlocked: null });
+    expect(await service.decide(everything, orderId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Everything' });
   });
 
   it('goes back for approval with another vendor, and for every change when the office says so', async () => {
@@ -401,13 +401,22 @@ describe('changing an approved order (Purchasing Setup, 2026-11-20)', () => {
 });
 
 describe('approving an order', () => {
-  it('is never done by whoever made it, whatever else they may do', async () => {
-    const { service, orderId, orders } = await order('waiting', everything);
+  // 2026-11-21, the office: an approver approves an order they made, as anybody else's.
+  it('is done by whoever made it when they are an approver, audited as their own, but never sent back by them', async () => {
+    const { service, orderId, orders, audits } = await order('waiting', everything);
 
-    expect((await service.detail(everything, orderId)).can).toMatchObject({ approve: false, sendBack: false, approveBlocked: 'You made this order, so somebody else approves it.' });
-    await expect(service.decide(everything, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OWN' });
-    await expect(service.decide(everything, orderId, 'SENT_BACK', { note: 'Mine' })).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OWN' });
+    expect((await service.detail(everything, orderId)).can).toMatchObject({ approve: true, sendBack: false, approveBlocked: null });
+    await expect(service.decide(everything, orderId, 'SENT_BACK', { note: 'Mine' })).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OWN', message: 'You made this order, so somebody else sends it back.' });
     expect(orders[0]).toMatchObject({ status: 'AWAITING_APPROVAL', approvedById: null });
+
+    expect(await service.decide(everything, orderId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Everything' });
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_ORDER_APPROVED', metadata: expect.objectContaining({ ownOrder: true }) });
+  });
+
+  it('is never done by somebody who is not an approver, though the route is passed', async () => {
+    const { service, orderId } = await order('waiting');
+    await expect(service.decide(buyer, orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_NOT_APPROVER' });
+    await expect(service.decide(buyer, orderId, 'SENT_BACK', { note: 'No' })).rejects.toMatchObject({ code: 'PURCHASE_ORDER_NOT_APPROVER' });
   });
 
   it('is done under the limit with Approve requisitions, once', async () => {

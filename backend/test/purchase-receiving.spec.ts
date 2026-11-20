@@ -397,13 +397,23 @@ describe('the vendor\'s bill', () => {
     expect((await new PurchaseOrdersService(database().db as never, {} as never, {} as never).detail(owner, ORDER)).can.overrideBill).toBe(false);
     await expect(service.approveBillAnyway(clerk, ORDER, { reason: 'Vendor will credit it' })).rejects.toMatchObject({ code: 'VENDOR_BILL_OVERRIDE_FORBIDDEN' });
     await expect(service.approveBillAnyway(owner, ORDER, { reason: '  ' })).rejects.toMatchObject({ code: 'VENDOR_BILL_REASON_NEEDED' });
-    await expect(service.approveBillAnyway(boss, ORDER, { reason: 'Vendor will credit it' })).rejects.toMatchObject({ code: 'VENDOR_BILL_OWN' });
     expect(bills[0]).toMatchObject({ status: 'HELD', approvedById: null });
 
     const order = await service.approveBillAnyway(owner, ORDER, { reason: ' Vendor will credit the 4 batteries. ' });
     expect(order.bill).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Owner', overrideReason: 'Vendor will credit the 4 batteries.' });
     expect(audits.at(-1)).toMatchObject({ action: 'VENDOR_BILL_APPROVED_DESPITE_MISMATCH', actorUserId: owner.id, metadata: expect.objectContaining({ note: 'Vendor will credit the 4 batteries.' }) });
     await expect(service.approveBillAnyway(owner, ORDER, { reason: 'Again' })).rejects.toMatchObject({ code: 'VENDOR_BILL_MOVED_ON' });
+  });
+
+  // 2026-11-21, the office: an approver approves their own, the bill they entered too.
+  it('is approved although it does not match by whoever entered it, when they may approve any amount, audited as their own', async () => {
+    const { service, audits } = database();
+    await service.receive(keeper, ORDER, arrival([filters(36), batteries(20)]));
+    expect((await service.saveBill(boss, ORDER, fullBill())).can.overrideBill).toBe(true);
+
+    const order = await service.approveBillAnyway(boss, ORDER, { reason: 'Vendor will credit it' });
+    expect(order.bill).toMatchObject({ status: 'APPROVED', approvedBy: 'Sample Boss' });
+    expect(audits.at(-1)).toMatchObject({ action: 'VENDOR_BILL_APPROVED_DESPITE_MISMATCH', metadata: expect.objectContaining({ ownBill: true }) });
   });
 
   it('shows whoever may approve any amount the held bill somebody else entered', async () => {

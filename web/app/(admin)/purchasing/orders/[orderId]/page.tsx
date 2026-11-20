@@ -356,7 +356,7 @@ function OrderForm({
                 )
                 ? `This change goes back for approval: ${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps)).toLowerCase()} approves it again.`
                 : `This change stays approved${order.status === 'SENT' ? ', and the order is to be sent to the vendor again' : ''}.`
-              : `${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps))} approves it at this amount. You made it, so somebody else approves it.`}
+              : `${approverSaying(approvalStepFor(totals.totalCents, order.approvalSteps))} approves it at this amount. If you may approve it, you may approve your own.`}
           </p>
           {problem ? (
             <p className="text-warning mt-3 text-xs font-medium" role="status">

@@ -366,8 +366,9 @@ export class PurchaseReceivingService {
 
   /**
    * Approves a bill although it does not match -- the vendor will credit the
-   * difference, say. Only somebody who may approve any amount, never whoever
-   * entered the bill, and always with their reason, which is kept.
+   * difference, say. Only somebody who may approve any amount -- whoever
+   * entered the bill too (the office, 2026-11-21), audited as their own --
+   * and always with their reason, which is kept.
    */
   async approveBillAnyway(user: AuthenticatedUser, orderId: string, input: ApproveVendorBillInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
@@ -378,10 +379,9 @@ export class PurchaseReceivingService {
     await this.prisma.$transaction(async (tx) => {
       const bill = await this.billOf(tx, organizationId, orderId);
       if (bill.status !== VendorBillStatus.HELD) throw new ApplicationError(409, 'VENDOR_BILL_MOVED_ON', 'This bill is not held any more.');
-      if (bill.enteredById === user.id) throw new ApplicationError(403, 'VENDOR_BILL_OWN', 'You entered this bill, so somebody else approves it although it does not match.');
       const approved = await tx.vendorBill.updateMany({ where: { id: bill.id, organizationId, status: VendorBillStatus.HELD }, data: { status: VendorBillStatus.APPROVED, approvedById: user.id, approvedAt: new Date(), overrideReason: reason } });
       if (approved.count !== 1) throw new ApplicationError(409, 'VENDOR_BILL_MOVED_ON', 'This bill is not held any more.');
-      await this.audit(tx, user, 'VENDOR_BILL_APPROVED_DESPITE_MISMATCH', orderId, { bill: bill.billNumber, note: reason });
+      await this.audit(tx, user, 'VENDOR_BILL_APPROVED_DESPITE_MISMATCH', orderId, { bill: bill.billNumber, note: reason, ownBill: bill.enteredById === user.id });
     });
     return this.orders.detail(user, orderId);
   }
