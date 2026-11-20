@@ -318,6 +318,56 @@ describe('what is in good order, on a move-in', () => {
   });
 });
 
+/**
+ * What the walkthrough found that the office marked repaired since (2026-11-21):
+ * the report says it was repaired, on that date, never that it is needed.
+ */
+describe('what was repaired after the walkthrough', () => {
+  const FAN = { id: 'item-lights', label: 'Lights and power points', isClean: true, isUndamaged: true, isWorking: true, comment: null };
+  const WALLS = { id: 'item-walls', label: 'Walls and ceilings', isClean: true, isUndamaged: false, isWorking: true, comment: null };
+  const viewWith = (actions: NonNullable<PublicInspectionReport['rooms'][number]['actions']>) =>
+    buildReportView(report({ rooms: [{ ...ROOM, checklist: [FAN, WALLS], actions }] }));
+
+  it('prints the repair and its date on its row, and not what was needed', () => {
+    const view = viewWith([
+      {
+        heading: 'Repairs / Maintenance',
+        items: [
+          { text: 'Balance the ceiling fan', details: [], itemId: 'item-lights', repairedAt: '2026-11-20T20:00:00.000Z' },
+          { text: 'Tighten the fan canopy', details: [], itemId: 'item-lights', repairedAt: '2026-11-21T15:00:00.000Z' },
+          { text: 'Apply touch-up paint to the ceiling stain', details: [], itemId: 'item-walls' },
+        ],
+      },
+    ]);
+
+    const [fan, walls] = view.rooms[0].checklist;
+    // The latest of the row's repairs, in Texas time.
+    expect(fan).toMatchObject({ actions: [], repaired: 'Repaired after the walkthrough (November 21, 2026)' });
+    // Still needed: printed as before.
+    expect(walls).toMatchObject({ actions: ['Apply touch-up paint to the ceiling stain'], repaired: '' });
+    expect(view.disclaimer).toContain('the office recorded the repair on the date shown');
+  });
+
+  it('puts a repair about none of the items on the Other row', () => {
+    const view = viewWith([
+      { heading: 'Cleaning', items: [{ text: 'Remove the trash', details: [], itemId: null, repairedAt: '2026-11-21T15:00:00.000Z' }] },
+    ]);
+
+    expect(view.rooms[0].checklist.at(-1)).toMatchObject({
+      label: 'Other',
+      actions: [],
+      repaired: 'Repaired after the walkthrough (November 21, 2026)',
+    });
+  });
+
+  it('says nothing of repairs on a report that has none', () => {
+    const view = viewWith([{ heading: 'Painting', items: [{ text: 'Repaint wall 4', details: [], itemId: 'item-walls' }] }]);
+
+    expect(view.rooms[0].checklist.every((row) => row.repaired === '')).toBe(true);
+    expect(view.disclaimer).not.toContain('repaired after the walkthrough');
+  });
+});
+
 describe('explaining a failed checklist row', () => {
   type Note = { category: string; title: string };
 

@@ -199,8 +199,26 @@ export interface ReportChecklistRowView {
    * What the room needs that is about this item, from the summary of its
    * recordings, one line each, printed in the Comments cell under the comment
    * (the maintenance team, 2026-10-08: the summary "fits on the last column").
+   * Never one a person marked repaired after the walkthrough.
    */
   actions: string[];
+  /**
+   * "Repaired after the walkthrough (November 20, 2026)" when a person marked
+   * what the recording said this item needed repaired since -- the latest
+   * date when more than one -- and empty otherwise. Printed after the
+   * reviewer's comment (the office, 2026-11-21: the make-ready fixed what the
+   * move-in walk found, and the report must say so, not list it as needed).
+   */
+  repaired: string;
+}
+
+/** The note a row prints for what was repaired after the walkthrough. */
+export function repairedNote(dates: string[] | undefined) {
+  const sorted = [...(dates ?? [])].sort();
+  const latest = sorted[sorted.length - 1];
+  if (!latest) return '';
+  const day = formatReportDay(latest, true);
+  return day ? `Repaired after the walkthrough (${day})` : 'Repaired after the walkthrough';
 }
 
 /** The row that carries what the room needs that is about none of its items. */
@@ -478,13 +496,17 @@ export interface ReportView {
  * left unscored may have been read from that recording by the narration
  * pre-fill (2026-10-07).
  */
-function disclaimer(observed: boolean) {
+function disclaimer(observed: boolean, repaired = false) {
   return (
     'The condition table is as the inspector scored it; rows left unscored on site are read ' +
     "from the inspector's own words in the walkthrough recording. The comments beside the checklist" +
     (observed ? ' -- what the inspector said is in good order, and what needs doing --' : '') +
     " are drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
     "and cleaning listed under each area's photographs are drawn from a summary of that recording. " +
+    (repaired
+      ? 'Where a row says it was repaired after the walkthrough, the walkthrough found work needed there ' +
+        'and the office recorded the repair on the date shown. '
+      : '') +
     'This report is informational: it does ' +
     'not by itself authorize charges or determine responsibility for any condition described.'
   );
@@ -582,10 +604,20 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     const summarized = room.actions !== undefined;
     const actionsByItem = new Map<string, string[]>();
     const unassigned: string[] = [];
+    /** When what each item needed was marked repaired after the walkthrough. */
+    const repairedByItem = new Map<string, string[]>();
+    const repairedElsewhere: string[] = [];
     for (const group of room.actions ?? [])
       for (const action of group.items) {
         const text = action.text.trim();
         if (!text) continue;
+        // Repaired since: the row says so, and never lists it as needed.
+        if (action.repairedAt) {
+          if (action.itemId)
+            repairedByItem.set(action.itemId, [...(repairedByItem.get(action.itemId) ?? []), action.repairedAt]);
+          else repairedElsewhere.push(action.repairedAt);
+          continue;
+        }
         if (action.itemId) actionsByItem.set(action.itemId, [...(actionsByItem.get(action.itemId) ?? []), text]);
         else unassigned.push(text);
       }
@@ -654,6 +686,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
           .join(' '),
         observations: failed ? [] : (observedByItem.get(item.id) ?? []),
         actions: actionsByItem.get(item.id) ?? [],
+        repaired: repairedNote(repairedByItem.get(item.id)),
       };
     });
     // What the room needs, and what is in good order, that is about none of
@@ -664,7 +697,8 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       [...byItem.entries()].filter(([id]) => !rowIds.has(id)).flatMap(([, texts]) => texts);
     const other = [...unassigned, ...elsewhere(actionsByItem)];
     const otherObserved = [...observedElsewhere, ...elsewhere(observedByItem)];
-    if (other.length || otherObserved.length)
+    const otherRepaired = [...repairedElsewhere, ...elsewhere(repairedByItem)];
+    if (other.length || otherObserved.length || otherRepaired.length)
       checklist.push({
         id: `${room.id}-other`,
         label: OTHER_ROW_LABEL,
@@ -676,6 +710,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         comment: '',
         observations: otherObserved,
         actions: other,
+        repaired: repairedNote(otherRepaired),
       });
     return {
       id: room.id,
@@ -746,6 +781,9 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     otherFindings: orphaned.sort(bySeverity),
     allFindings: [...findings].sort(bySeverity),
     generatedLabel: formatDay(report.generatedAt, true) ?? '',
-    disclaimer: disclaimer(rooms.some((room) => room.checklist.some((row) => row.observations.length > 0))),
+    disclaimer: disclaimer(
+      rooms.some((room) => room.checklist.some((row) => row.observations.length > 0)),
+      rooms.some((room) => room.checklist.some((row) => row.repaired !== '')),
+    ),
   };
 }

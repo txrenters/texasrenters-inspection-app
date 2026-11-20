@@ -362,6 +362,18 @@ describe('inspection report shares', () => {
     expect(current.rooms[0].actions).toEqual([
       { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint on the door', details: [], itemId: 'item-1' }] },
     ]);
+    // Repaired after the walkthrough: sent with its date, never as still needed.
+    summary.actions[0].items[0] = { ...summary.actions[0].items[0], repairedAt: '2026-11-21T15:00:00.000Z', repairedBy: 'Office Reviewer' } as never;
+    const repaired = await reportWith([recording('media-1')]);
+    expect(repaired.rooms[0].actions?.[0].items[0]).toEqual({
+      text: 'Touch-up paint on the door',
+      details: [],
+      itemId: 'item-1',
+      repairedAt: '2026-11-21T15:00:00.000Z',
+    });
+    // Who marked it stays in the console and the audit log, not on a public link.
+    expect(JSON.stringify(repaired)).not.toContain('Office Reviewer');
+    summary.actions[0].items[0] = { text: 'Touch-up paint on the door', details: [], itemId: 'item-1', itemLabel: 'Doors and locks' };
     // The recordings' ids decide, and are never printed; nor is the
     // transcript, or the summary's timestamped points.
     expect(JSON.stringify(current)).not.toContain('media-1');

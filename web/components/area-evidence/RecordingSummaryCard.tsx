@@ -3,6 +3,7 @@
 import {
   RECORDING_ACTION_HEADING,
   type AreaRecordingSummaryView,
+  type RecordingActionRepairInput,
 } from '@texasrenters/shared';
 import { SparklesIcon } from 'lucide-react';
 
@@ -12,6 +13,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { formatSeconds } from '@/lib/finding-review';
 import { formatDateTime } from '@/lib/format';
 import {
+  useMarkRecordingActionRepaired,
   useSummarizeAreaRecordings,
   useSummarizeInspectionRecordings,
 } from '@/lib/queries';
@@ -27,11 +29,19 @@ export const OBSERVATIONS_HEADING = 'In good order';
  * show a summary differently.
  */
 export function RecordingSummaryBody({
+  onRepairedChange,
   onSeek,
+  repairing = false,
   summary,
 }: {
+  /**
+   * Marks an action repaired after the walkthrough, or takes the mark back;
+   * given only to someone who may (`inspections:manage`).
+   */
+  onRepairedChange?: (input: RecordingActionRepairInput) => void;
   /** Plays the room's walkthrough from a point's moment, when a player is mounted. */
   onSeek?: (seconds: number) => void;
+  repairing?: boolean;
   summary: AreaRecordingSummaryView;
 }) {
   return (
@@ -82,10 +92,32 @@ export function RecordingSummaryBody({
           <ul className="list-disc space-y-0.5 pl-5">
             {group.items.map((item, index) => (
               <li key={index}>
-                {item.text}
+                <span className={cn(item.repairedAt && 'text-muted-foreground line-through')}>{item.text}</span>
                 {/* The checklist item it prints beside on the report. */}
                 {item.itemLabel ? (
                   <span className="text-muted-foreground"> · {item.itemLabel}</span>
+                ) : null}
+                {/* Repaired after the walkthrough: the report says so, not "needed". */}
+                {item.repairedAt ? (
+                  <span className="text-muted-foreground">
+                    {' '}
+                    · Repaired after the walkthrough, {formatDateTime(item.repairedAt)}
+                    {item.repairedBy ? ` by ${item.repairedBy}` : ''}
+                  </span>
+                ) : null}
+                {onRepairedChange ? (
+                  <Button
+                    className="ml-2 h-6 px-2 text-xs"
+                    disabled={repairing}
+                    onClick={() =>
+                      onRepairedChange({ group: group.group, text: item.text, repaired: !item.repairedAt })
+                    }
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    {item.repairedAt ? 'Undo' : 'Mark repaired'}
+                  </Button>
                 ) : null}
                 {item.details.length ? (
                   <ul className="list-[circle] pl-5">
@@ -129,8 +161,9 @@ export function RecordingSummaryCard({
 }) {
   const room = useSummarizeAreaRecordings(inspectionId, areaId);
   const every = useSummarizeInspectionRecordings(inspectionId);
+  const repair = useMarkRecordingActionRepaired(inspectionId, areaId);
   const busy = room.isPending || every.isPending;
-  const error = room.error ?? every.error;
+  const error = room.error ?? every.error ?? repair.error;
   const status = error
     ? error.message
     : every.data
@@ -159,7 +192,14 @@ export function RecordingSummaryCard({
             : 'Not summarized yet. The report’s Comments come from the findings until it is.'}
         </p>
       </header>
-      {summary ? <RecordingSummaryBody onSeek={onSeek} summary={summary} /> : null}
+      {summary ? (
+        <RecordingSummaryBody
+          onRepairedChange={canManage && summary.current ? (input) => repair.mutate(input) : undefined}
+          onSeek={onSeek}
+          repairing={repair.isPending}
+          summary={summary}
+        />
+      ) : null}
 
       {canManage ? (
         <div className="space-y-2">

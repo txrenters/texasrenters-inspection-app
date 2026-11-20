@@ -451,6 +451,7 @@ function ChecklistTable({ room, last }: { room: ReportRoomView; last: boolean })
               about this item, from the summary of its recordings, one line each. */}
           <View style={[styles.checklistCell, styles.checklistComment]}>
             {row.comment ? <Text style={styles.commentNote}>{row.comment}</Text> : null}
+            {row.repaired ? <Text style={styles.commentNote}>{row.repaired}</Text> : null}
             {row.observations.map((observation) => (
               <Text key={`observed-${observation}`} style={styles.commentAction}>
                 {observation}
@@ -500,7 +501,7 @@ function roomStartHeight(room: ReportRoomView, photos: ReportRoomView['photos'])
     const lines = Math.max(
       1,
       linesOf(first.label, LABEL_CHARS_PER_LINE),
-      [first.comment, ...first.observations, ...first.actions].reduce(
+      [first.comment, first.repaired, ...first.observations, ...first.actions].reduce(
         (sum, text) => sum + linesOf(text, COMMENT_CHARS_PER_LINE),
         0,
       ),

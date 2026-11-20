@@ -8,7 +8,11 @@ import {
   VideoRecordingType,
 } from '@prisma/client';
 import { sortAreasBySequence } from '@texasrenters/shared';
-import type { AreaRecordingSummaryView, InspectionRecordingSummaries } from '@texasrenters/shared';
+import type {
+  AreaRecordingSummaryView,
+  InspectionRecordingSummaries,
+  RecordingActionRepairInput,
+} from '@texasrenters/shared';
 
 import {
   AiProviderSettingsService,
@@ -20,11 +24,13 @@ import { withTenant } from '../database/tenant-context';
 import { askAi } from './ai-text';
 import {
   acceptedSummary,
+  carriedRepairs,
   readStoredSummary,
   summaryPrompt,
   type StoredRecordingSummary,
   STORED_SUMMARY_VERSION,
   type SummaryRecording,
+  withRepairMark,
 } from './recording-summary';
 
 /**
@@ -45,6 +51,9 @@ import {
 
 export type SummaryTrigger = 'REVIEWER' | 'PIPELINE';
 export const SUMMARY_AUDIT_ACTION = 'RECORDING_SUMMARY_GENERATED';
+/** A person marked an action repaired after the walkthrough, or took the mark back. */
+export const ACTION_REPAIRED_AUDIT_ACTION = 'RECORDING_ACTION_REPAIRED';
+export const ACTION_REPAIR_UNDONE_AUDIT_ACTION = 'RECORDING_ACTION_REPAIR_UNDONE';
 const USAGE_OPERATION = 'RECORDING_SUMMARY';
 const CALL_TIMEOUT_MS = 150_000;
 const CONCURRENCY = 3;
@@ -205,6 +214,83 @@ export class RecordingSummaryService {
   }
 
   /**
+   * Marks one of a room's actions repaired after the walkthrough, or takes the
+   * mark back (the office, 2026-11-21: the make-ready fixed what the move-in
+   * walk found). A person's statement, on the record: who, when, and which
+   * action, in the audit log. It changes what the report prints -- "repaired"
+   * in place of "needed" -- and nothing else: not the checklist verdict, which
+   * the office scores itself once it has seen the repair, and not the
+   * recording. Answers with the room's summary as the console shows it.
+   */
+  async markActionRepaired(
+    organizationId: string,
+    inspectionId: string,
+    inspectionAreaId: string,
+    actor: { id: string; displayName: string },
+    input: RecordingActionRepairInput,
+  ): Promise<AreaRecordingSummaryView> {
+    const inspection = await this.inspection(organizationId, inspectionId);
+    const area = await this.prisma.inspectionArea.findFirst({
+      where: { id: inspectionAreaId, inspectionId },
+      select: {
+        id: true,
+        recordingSummary: true,
+        recordingSummaryAt: true,
+        media: {
+          where: { transcriptionJob: { status: TranscriptionStatus.COMPLETED } },
+          select: {
+            id: true,
+            transcriptionJob: {
+              select: { segments: { where: { text: { not: '' } }, take: 5, select: { text: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!area)
+      throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'Inspection area was not found.');
+    const at = new Date();
+    const updated = area.recordingSummaryAt
+      ? withRepairMark(area.recordingSummary, input, { at, by: actor.displayName })
+      : null;
+    if (!updated)
+      throw new ApplicationError(
+        404,
+        'RECORDING_ACTION_NOT_FOUND',
+        'That action is not in this room’s summary. Reload the page: the room may have been summarized again.',
+      );
+    await this.prisma.inspectionArea.update({
+      where: { id: area.id },
+      data: { recordingSummary: updated as never },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        actorUserId: actor.id,
+        action: input.repaired ? ACTION_REPAIRED_AUDIT_ACTION : ACTION_REPAIR_UNDONE_AUDIT_ACTION,
+        entityType: 'Inspection',
+        entityId: inspectionId,
+        metadata: {
+          inspectionAreaId: area.id,
+          group: input.group,
+          text: input.text,
+          afterFinalization: Boolean(inspection.finalizedAt),
+        },
+      },
+    });
+    const spoken = area.media
+      .filter((media) => (media.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()))
+      .map((media) => media.id);
+    const read = readStoredSummary(updated, spoken)!;
+    return {
+      ...read.summary,
+      generatedAt: area.recordingSummaryAt!.toISOString(),
+      current: read.current,
+      staleReason: read.staleReason,
+    };
+  }
+
+  /**
    * Every area's summary, in walk order, for the "Summaries of all areas" tab.
    * A summary is marked stale exactly as the report judges it: a recording
    * transcribed since it was written.
@@ -323,6 +409,8 @@ export class RecordingSummaryService {
       where: { id: inspectionAreaId },
       select: {
         id: true,
+        // What a person marked repaired on it, kept across the new summary.
+        recordingSummary: true,
         propertyArea: {
           select: {
             name: true,
@@ -397,7 +485,10 @@ export class RecordingSummaryService {
     await this.aiSettings
       .recordUsage(organizationId, configuration, USAGE_OPERATION, usage, inspectionAreaId)
       .catch(() => undefined);
-    const summary = acceptedSummary(text, recordings, area.propertyArea.checklistItems, options);
+    const summary = carriedRepairs(
+      area.recordingSummary,
+      acceptedSummary(text, recordings, area.propertyArea.checklistItems, options),
+    );
     const stored: StoredRecordingSummary = {
       version: STORED_SUMMARY_VERSION,
       mediaIds: recordings.map((recording) => recording.mediaId),

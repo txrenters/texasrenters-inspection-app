@@ -43,6 +43,13 @@ import {
 
 import { MAX_GUIDANCE_LENGTH } from './ai-guidance.service';
 
+/** Marking a room's action repaired after the walkthrough; see `RecordingActionRepairInput`. */
+export class RecordingActionRepairDto {
+  @IsIn(['REPAIRS', 'PAINTING', 'CLEANING']) group!: 'REPAIRS' | 'PAINTING' | 'CLEANING';
+  @IsString() @MinLength(1) @MaxLength(400) text!: string;
+  @IsBoolean() repaired!: boolean;
+}
+
 export class PaginationDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;

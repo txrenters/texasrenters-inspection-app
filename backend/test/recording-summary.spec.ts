@@ -2,13 +2,17 @@ import { Prisma } from '@prisma/client';
 
 import {
   acceptedSummary,
+  carriedRepairs,
   grounded,
   printableObservation,
   readStoredSummary,
   summaryPrompt,
   type SummaryRecording,
+  withRepairMark,
 } from '../src/technician/recording-summary';
 import {
+  ACTION_REPAIR_UNDONE_AUDIT_ACTION,
+  ACTION_REPAIRED_AUDIT_ACTION,
   RecordingSummaryService,
   SUMMARY_AUDIT_ACTION,
 } from '../src/technician/recording-summary.service';
@@ -607,5 +611,131 @@ describe('every area’s summary, for the summaries tab', () => {
     await expect(service.listForInspection('org-2', 'inspection-1')).rejects.toMatchObject({
       code: 'INSPECTION_NOT_FOUND',
     });
+  });
+});
+
+/**
+ * What the walkthrough found that was repaired since (the office, 2026-11-21:
+ * the make-ready fixed what the move-in walk found, and the report must say so).
+ * A person marks it, on the record; the summary keeps the mark.
+ */
+describe('an action marked repaired after the walkthrough', () => {
+  const storedWith = (items: Array<Record<string, unknown>>) => ({
+    version: 3,
+    mediaIds: ['media-1'],
+    recordings: [{ mediaId: 'media-1', label: null, lines: [{ start: 0, text: 'Fan wobbles.' }] }],
+    actions: [{ group: 'REPAIRS', items }],
+  });
+  const fan = { text: 'Balance the ceiling fan', details: [], itemId: 'item-lights', itemLabel: 'Lights and power points' };
+
+  it('is marked with who and when, and the mark can be taken back', () => {
+    const at = new Date('2026-11-21T15:00:00Z');
+    const marked = withRepairMark(storedWith([fan]), { group: 'REPAIRS', text: fan.text, repaired: true }, { at, by: 'Office Reviewer' });
+    expect(marked?.actions[0].items[0]).toMatchObject({ repairedAt: at.toISOString(), repairedBy: 'Office Reviewer' });
+
+    const undone = withRepairMark(marked, { group: 'REPAIRS', text: fan.text, repaired: false }, { at, by: 'Office Reviewer' });
+    expect(undone?.actions[0].items[0]).not.toHaveProperty('repairedAt');
+    expect(undone?.actions[0].items[0]).not.toHaveProperty('repairedBy');
+  });
+
+  it('is nothing for words the summary does not hold, in another group, or without a summary', () => {
+    const mark = { at: new Date(), by: 'Office Reviewer' };
+    expect(withRepairMark(storedWith([fan]), { group: 'REPAIRS', text: 'Balance the fan', repaired: true }, mark)).toBeNull();
+    expect(withRepairMark(storedWith([fan]), { group: 'PAINTING', text: fan.text, repaired: true }, mark)).toBeNull();
+    expect(withRepairMark(null, { group: 'REPAIRS', text: fan.text, repaired: true }, mark)).toBeNull();
+  });
+
+  it('is kept when the room is summarized again with the same action, and not for one worded differently', () => {
+    const previous = storedWith([{ ...fan, repairedAt: '2026-11-21T15:00:00.000Z', repairedBy: 'Office Reviewer' }]);
+    const next = {
+      recordings: [],
+      actions: [
+        {
+          group: 'REPAIRS' as const,
+          items: [
+            { text: 'Balance the ceiling fan', details: [], itemId: 'item-lights', itemLabel: 'Lights and power points' },
+            { text: 'Balance the wobbly fan', details: [], itemId: 'item-lights', itemLabel: 'Lights and power points' },
+          ],
+        },
+      ],
+    };
+    const carried = carriedRepairs(previous, next);
+    expect(carried.actions[0].items[0]).toMatchObject({ repairedAt: '2026-11-21T15:00:00.000Z', repairedBy: 'Office Reviewer' });
+    expect(carried.actions[0].items[1]).not.toHaveProperty('repairedAt');
+    expect(carriedRepairs(null, next)).toBe(next);
+  });
+
+  function markHarness(stored: unknown) {
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', inspectionType: 'MOVE_IN', finalizedAt: null }),
+      },
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          recordingSummary: stored,
+          recordingSummaryAt: new Date('2026-11-19T17:06:00Z'),
+          media: [{ id: 'media-1', transcriptionJob: { segments: [{ text: 'Fan wobbles.' }] } }],
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    return { prisma, service: new RecordingSummaryService(prisma as never, {} as never) };
+  }
+  const actor = { id: 'user-1', displayName: 'Office Reviewer' };
+
+  it('is written to the room’s summary and to the audit log, as the person’s', async () => {
+    const { prisma, service } = markHarness(storedWith([fan]));
+
+    const view = await service.markActionRepaired('org-1', 'inspection-1', 'area-1', actor, {
+      group: 'REPAIRS',
+      text: fan.text,
+      repaired: true,
+    });
+
+    const written = prisma.inspectionArea.update.mock.calls[0][0];
+    expect(written.where).toEqual({ id: 'area-1' });
+    expect(written.data.recordingSummary.actions[0].items[0]).toMatchObject({ repairedBy: 'Office Reviewer' });
+    expect(view.actions[0].items[0].repairedAt).toEqual(expect.any(String));
+    expect(view.current).toBe(true);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: ACTION_REPAIRED_AUDIT_ACTION,
+        actorUserId: 'user-1',
+        entityId: 'inspection-1',
+        metadata: { inspectionAreaId: 'area-1', group: 'REPAIRS', text: fan.text, afterFinalization: false },
+      }),
+    });
+  });
+
+  it('records taking the mark back as its own decision', async () => {
+    const { prisma, service } = markHarness(storedWith([{ ...fan, repairedAt: '2026-11-21T15:00:00.000Z', repairedBy: 'Office Reviewer' }]));
+
+    await service.markActionRepaired('org-1', 'inspection-1', 'area-1', actor, { group: 'REPAIRS', text: fan.text, repaired: false });
+
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: ACTION_REPAIR_UNDONE_AUDIT_ACTION }),
+    });
+  });
+
+  it('refuses an action the room’s summary does not hold, and writes nothing', async () => {
+    const { prisma, service } = markHarness(storedWith([fan]));
+
+    await expect(
+      service.markActionRepaired('org-1', 'inspection-1', 'area-1', actor, { group: 'REPAIRS', text: 'Fix the roof', repaired: true }),
+    ).rejects.toMatchObject({ code: 'RECORDING_ACTION_NOT_FOUND' });
+    expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an inspection of another organization as not found', async () => {
+    const { prisma, service } = markHarness(storedWith([fan]));
+    prisma.inspection.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.markActionRepaired('org-2', 'inspection-1', 'area-1', actor, { group: 'REPAIRS', text: fan.text, repaired: true }),
+    ).rejects.toMatchObject({ code: 'INSPECTION_NOT_FOUND' });
+    expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
   });
 });

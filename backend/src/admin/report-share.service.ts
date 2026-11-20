@@ -180,6 +180,8 @@ function roomActions(
       text: item.text,
       details: [...item.details],
       itemId: item.itemId ?? null,
+      // Repaired after the walkthrough: the report says so, never "needed".
+      ...(item.repairedAt ? { repairedAt: item.repairedAt } : {}),
     })),
   }));
 }
