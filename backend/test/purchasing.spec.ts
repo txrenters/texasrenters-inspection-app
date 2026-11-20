@@ -2,10 +2,11 @@ import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { MACHINE_FORBIDDEN_PERMISSIONS, type RequisitionDecisionInput, type SavePurchasingSettingsInput, type SaveRequisitionInput } from '@texasrenters/shared';
 
-import { PurchasingController, RequisitionDecisionDto, SavePurchasingSettingsDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
+import { AddRequisitionLinkDto, PurchasingController, RequisitionDecisionDto, SavePurchasingSettingsDto, SaveRequisitionDto, SetRequisitionFileDto } from '../src/admin/purchasing.controller';
 import { PurchasingService } from '../src/admin/purchasing.service';
 import { sniffRequisitionFile } from '../src/admin/requisition-files';
 import { RequisitionFilesService } from '../src/admin/requisition-files.service';
+import { RequisitionNotesService } from '../src/admin/requisition-notes.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 /**
@@ -88,6 +89,11 @@ function database() {
   const settings: Row[] = [];
   /** Files attached (2026-11-20). */
   const files: Row[] = [];
+  /** Notes, comments and links (2026-11-20). */
+  const notes: Row[] = [];
+  const links: Row[] = [];
+  /** Live orders made from requisitions, by requisition: none unless a test says so. */
+  const liveOrders: Row[] = [];
   let series = 0;
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
@@ -144,7 +150,10 @@ function database() {
       }),
     },
     // No order has been made from any of these.
-    purchaseOrder: { findFirst: jest.fn(async () => null) },
+    purchaseOrder: {
+      findFirst: jest.fn(async () => null),
+      count: jest.fn(async ({ where }: { where: Where }) => liveOrders.filter((row) => row.requisitionId === where.requisitionId).length),
+    },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
     stockLevel: { groupBy: jest.fn(async () => levels), findMany: jest.fn(async () => placeLevels) },
     stockPlace: {
@@ -202,6 +211,36 @@ function database() {
         return { count: before - files.length };
       }),
     },
+    purchaseRequisitionNote: {
+      findMany: jest.fn(async ({ where }: { where: Where }) => notes.filter((row) => matches(row, where)).map((row) => ({ ...row, writtenBy: { id: row.writtenById, displayName: PEOPLE.find((one) => one.id === row.writtenById)!.displayName } }))),
+      findFirst: jest.fn(async ({ where }: { where: Where }) => notes.find((row) => matches(row, where)) ?? null),
+      count: jest.fn(async ({ where }: { where: Where }) => notes.filter((row) => matches(row, where)).length),
+      create: jest.fn(async ({ data }: { data: Row }) => {
+        const row = { id: id(600 + notes.length), writtenAt: new Date((clock += 1000)), ...data };
+        notes.push(row);
+        return row;
+      }),
+      deleteMany: jest.fn(async ({ where }: { where: Where }) => {
+        const before = notes.length;
+        for (let index = notes.length - 1; index >= 0; index -= 1) if (matches(notes[index]!, where)) notes.splice(index, 1);
+        return { count: before - notes.length };
+      }),
+    },
+    purchaseRequisitionLink: {
+      findMany: jest.fn(async ({ where }: { where: Where }) => links.filter((row) => matches(row, where)).map((row) => ({ ...row, addedBy: { id: row.addedById, displayName: PEOPLE.find((one) => one.id === row.addedById)!.displayName } }))),
+      findFirst: jest.fn(async ({ where }: { where: Where }) => links.find((row) => matches(row, where)) ?? null),
+      count: jest.fn(async ({ where }: { where: Where }) => links.filter((row) => matches(row, where)).length),
+      create: jest.fn(async ({ data }: { data: Row }) => {
+        const row = { id: id(650 + links.length), addedAt: new Date((clock += 1000)), ...data };
+        links.push(row);
+        return row;
+      }),
+      deleteMany: jest.fn(async ({ where }: { where: Where }) => {
+        const before = links.length;
+        for (let index = links.length - 1; index >= 0; index -= 1) if (matches(links[index]!, where)) links.splice(index, 1);
+        return { count: before - links.length };
+      }),
+    },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => audits.push({ createdAt: new Date((clock += 1000)), ...data })),
@@ -220,7 +259,7 @@ function database() {
     durable: jest.fn(() => true),
   };
   const service = new PurchasingService(db as never);
-  return { db, requisitions, lines, quotes, audits, codes, files, storage, service, filesService: new RequisitionFilesService(db as never, storage as never, service) };
+  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -707,5 +746,102 @@ describe('files on a requisition (2026-11-20, part 3)', () => {
     await expect(check({ forVendor: true })).resolves.toEqual({ forVendor: true });
     await expect(check({ forVendor: 'yes' })).rejects.toBeDefined();
     await expect(check({})).rejects.toBeDefined();
+  });
+});
+
+describe('Cancel Approval Request and Reopen (2026-11-20, the NAV ribbon)', () => {
+  it('lets the requester take a waiting requisition back to a draft, keeping its number', async () => {
+    const { service, audits } = database();
+    const draft = await service.create(asker, small());
+    await service.submit(asker, draft.id);
+    expect((await service.detail(asker, draft.id)).can).toMatchObject({ recall: true, reopen: false });
+    // Nobody else takes it back: an approver decides it instead.
+    await expect(service.recall(manager, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+
+    const back = await service.recall(asker, draft.id);
+    expect(back).toMatchObject({ status: 'DRAFT', number: draft.number, can: { edit: true, recall: false } });
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_RECALLED' });
+    expect(back.history[0]).toMatchObject({ what: 'took back its approval request' });
+    await expect(service.recall(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_MOVED_ON' });
+  });
+
+  it('reopens an approved requisition with no order, by its requester or an approver, for approval again', async () => {
+    const { service, audits, liveOrders } = database();
+    const draft = await service.create(asker, small());
+    await service.submit(asker, draft.id);
+    await service.decide(manager, draft.id, 'APPROVED', {});
+    expect((await service.detail(asker, draft.id)).can.reopen).toBe(true);
+    // Somebody who neither asked nor approves cannot.
+    await expect(service.reopen(colleague, draft.id, {})).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+
+    const reopened = await service.reopen(manager, draft.id, { note: 'Add the 9 V batteries.' });
+    expect(reopened).toMatchObject({ status: 'SENT_BACK', decidedBy: null, decisionNote: 'Reopened: Add the 9 V batteries.' });
+    expect((await service.detail(asker, draft.id)).can).toMatchObject({ edit: true, submit: true });
+    expect(audits.at(-1)).toMatchObject({ action: 'PURCHASE_REQUISITION_REOPENED', actorUserId: manager.id });
+
+    // Approved again, then ordered: no longer reopened.
+    await service.submit(asker, draft.id);
+    await service.decide(manager, draft.id, 'APPROVED', {});
+    liveOrders.push({ requisitionId: draft.id });
+    await expect(service.reopen(asker, draft.id, {})).rejects.toMatchObject({ code: 'REQUISITION_ORDERED' });
+  });
+});
+
+describe('notes, comments and links (2026-11-20, Show Attached)', () => {
+  it('writes notes and comments, each in its own list, and lists them oldest first with who and when', async () => {
+    const { service, notesService, audits } = database();
+    const draft = await service.create(asker, small());
+    await notesService.write(asker, draft.id, 'NOTE', { text: '  Ask for the 20-pack.  ' });
+    await service.submit(asker, draft.id);
+    await notesService.write(manager, draft.id, 'COMMENT', { text: 'Is the 16x25 still needed?' });
+    const detail = await notesService.write(asker, draft.id, 'COMMENT', { text: 'Yes, for the HVAC visits.' });
+
+    expect(detail.notes).toEqual([{ id: expect.any(String), text: 'Ask for the 20-pack.', by: { id: asker.id, name: 'Sample Requester', code: 'SREQUESTER' }, at: expect.any(String), canRemove: true }]);
+    expect(detail.comments.map((comment) => [comment.by.name, comment.text, comment.canRemove])).toEqual([
+      ['Sample Manager', 'Is the 16x25 still needed?', false],
+      ['Sample Requester', 'Yes, for the HVAC visits.', false],
+    ]);
+    expect(audits.map((audit) => audit.action)).toEqual(expect.arrayContaining(['PURCHASE_REQUISITION_NOTE_ADDED', 'PURCHASE_REQUISITION_COMMENTED']));
+    expect(detail.history[0]).toMatchObject({ by: 'Sample Requester', what: 'commented: Yes, for the HVAC visits.' });
+    await expect(notesService.write(asker, draft.id, 'NOTE', { text: '   ' })).rejects.toMatchObject({ code: 'REQUISITION_NOTE_INVALID' });
+  });
+
+  it('takes a note off only by its writer, and never a comment', async () => {
+    const { service, notesService } = database();
+    const draft = await service.create(asker, small());
+    const noted = await notesService.write(asker, draft.id, 'NOTE', { text: 'Wrong vendor in mind.' });
+    const commented = await notesService.write(asker, draft.id, 'COMMENT', { text: 'A comment.' });
+    await service.submit(asker, draft.id);
+
+    await expect(notesService.removeNote(manager, draft.id, noted.notes[0]!.id)).rejects.toMatchObject({ code: 'REQUISITION_NOTE_NOT_YOURS', status: 403 });
+    await expect(notesService.removeNote(asker, draft.id, commented.comments[0]!.id)).rejects.toMatchObject({ code: 'REQUISITION_COMMENT_KEPT' });
+    expect((await notesService.removeNote(asker, draft.id, noted.notes[0]!.id)).notes).toEqual([]);
+  });
+
+  it('keeps only http(s) links, titled by the address when given none, and takes one off by whoever added it', async () => {
+    const { service, notesService } = database();
+    const draft = await service.create(asker, small());
+    for (const url of ['javascript:alert(1)', 'data:text/html,hi', 'ftp://example.test/x', 'example.test'])
+      await expect(notesService.addLink(asker, draft.id, { url, title: 'x' })).rejects.toMatchObject({ code: 'REQUISITION_LINK_INVALID' });
+
+    const added = await notesService.addLink(asker, draft.id, { url: ' https://supplier.example/quote/77 ', title: '' });
+    expect(added.links).toEqual([{ id: expect.any(String), url: 'https://supplier.example/quote/77', title: 'supplier.example', by: expect.objectContaining({ name: 'Sample Requester' }), at: expect.any(String), canRemove: true }]);
+    await service.submit(asker, draft.id);
+    await expect(notesService.removeLink(manager, draft.id, added.links[0]!.id)).rejects.toMatchObject({ code: 'REQUISITION_LINK_NOT_YOURS' });
+    expect((await notesService.removeLink(asker, draft.id, added.links[0]!.id)).links).toEqual([]);
+  });
+
+  it('is not there to somebody who cannot see the requisition', async () => {
+    const { service, notesService } = database();
+    const draft = await service.create(asker, small());
+    await expect(notesService.write(colleague, draft.id, 'COMMENT', { text: 'Hello' })).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+    await expect(notesService.addLink(outsider, draft.id, { url: 'https://example.test', title: 'x' })).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+  });
+
+  it('a link names its two fields', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const check = (body: unknown) => pipe.transform(body, { type: 'body', metatype: AddRequisitionLinkDto });
+    await expect(check({ url: 'https://example.test', title: 'Quote' })).resolves.toEqual({ url: 'https://example.test', title: 'Quote' });
+    await expect(check({ url: 'https://example.test' })).rejects.toBeDefined();
   });
 });

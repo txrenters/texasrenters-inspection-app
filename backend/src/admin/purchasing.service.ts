@@ -28,6 +28,7 @@ import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { ATTACHABLE, requisitionFiles } from './requisition-files';
+import { requisitionNotesAndLinks } from './requisition-notes';
 
 /**
  * Purchase requisitions (2026-11-19, phase 2 of the inventory and purchasing
@@ -152,6 +153,13 @@ const STEP: Record<string, string> = {
   PURCHASE_REQUISITION_SENT_BACK: 'sent it back',
   PURCHASE_REQUISITION_REJECTED: 'rejected it',
   PURCHASE_REQUISITION_CANCELLED: 'cancelled it',
+  PURCHASE_REQUISITION_RECALLED: 'took back its approval request',
+  PURCHASE_REQUISITION_REOPENED: 'reopened it',
+  PURCHASE_REQUISITION_NOTE_ADDED: 'wrote a note',
+  PURCHASE_REQUISITION_NOTE_REMOVED: 'took a note off',
+  PURCHASE_REQUISITION_COMMENTED: 'commented',
+  PURCHASE_REQUISITION_LINK_ADDED: 'added a link',
+  PURCHASE_REQUISITION_LINK_REMOVED: 'took a link off',
   PURCHASE_REQUISITION_FILE_ATTACHED: 'attached a file',
   PURCHASE_REQUISITION_FILE_REMOVED: 'took a file off',
   PURCHASE_REQUISITION_FILE_FOR_VENDOR: 'ticked a file to go to the vendor',
@@ -205,6 +213,8 @@ export class PurchasingService {
       approveBlocked,
       // Whoever sees it: their own, or one they decide or order from.
       attach: ATTACHABLE.includes(requisition.status),
+      recall: mine && requisition.status === Status.SUBMITTED,
+      reopen: requisition.status === Status.APPROVED && (mine || may(user, APPROVE)),
     };
   }
 
@@ -232,7 +242,7 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, settings, levels, audits, order, files] = await Promise.all([
+    const [companies, settings, levels, audits, order, files, attached] = await Promise.all([
       this.companies(organizationId),
       this.settings(this.prisma, organizationId),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
@@ -244,6 +254,7 @@ export class PurchasingService {
       // The order made from it, if one stands: a cancelled order frees the requisition for another.
       this.prisma.purchaseOrder.findFirst({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } }, select: { id: true, number: true } }),
       requisitionFiles(this.prisma, user, requisition),
+      requisitionNotesAndLinks(this.prisma, user, requisitionId),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -283,6 +294,7 @@ export class PurchasingService {
       history,
       order,
       files,
+      ...attached,
       can: this.actions(user, requisition, summary.estimatedTotalCents, settings),
       settings,
     };
@@ -534,6 +546,42 @@ export class PurchasingService {
       if (!CANCELLABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has been decided, so it cannot be cancelled.');
       await this.move(tx, user.organizationId, requisitionId, CANCELLABLE, { status: Status.CANCELLED });
       await this.audit(tx, user, 'PURCHASE_REQUISITION_CANCELLED', requisitionId, { number: requisition.number });
+    });
+    return this.detail(user, requisitionId);
+  }
+
+  /**
+   * "Cancel Approval Request" (2026-11-20): its requester takes a submitted
+   * requisition back to a draft while nobody has decided it. It keeps its
+   * number; sending it again asks the approvers again.
+   */
+  async recall(user: AuthenticatedUser, requisitionId: string): Promise<RequisitionDetail> {
+    await this.prisma.$transaction(async (tx) => {
+      const requisition = await this.own(tx, user, requisitionId);
+      if (requisition.status !== Status.SUBMITTED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'Only a requisition waiting for approval can be taken back.');
+      await this.move(tx, user.organizationId, requisitionId, [Status.SUBMITTED], { status: Status.DRAFT });
+      await this.audit(tx, user, 'PURCHASE_REQUISITION_RECALLED', requisitionId, { number: requisition.number });
+    });
+    return this.detail(user, requisitionId);
+  }
+
+  /**
+   * "Reopen" (2026-11-20, NAV's step): an approved requisition with no order
+   * yet goes back to being changed by its requester, and must be approved
+   * again. Its requester or an approver; the approval it had is cleared.
+   */
+  async reopen(user: AuthenticatedUser, requisitionId: string, input: RequisitionDecisionInput): Promise<RequisitionDetail> {
+    const organizationId = user.organizationId;
+    const note = text(input.note);
+    await this.prisma.$transaction(async (tx) => {
+      const requisition = await tx.purchaseRequisition.findFirst({ where: { id: requisitionId, organizationId, AND: [this.visible(user)] }, select: { number: true, status: true, requestedById: true } });
+      if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
+      if (requisition.requestedById !== user.id && !may(user, APPROVE)) throw new ApplicationError(403, 'REQUISITION_NOT_YOURS', 'Its requester or an approver reopens it.');
+      if (requisition.status !== Status.APPROVED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'Only an approved requisition with no order yet can be reopened.');
+      if (await tx.purchaseOrder.count({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } } }))
+        throw new ApplicationError(409, 'REQUISITION_ORDERED', 'An order has been made from it. Cancel the order first.');
+      await this.move(tx, organizationId, requisitionId, [Status.APPROVED], { status: Status.SENT_BACK, decidedById: null, decidedAt: null, decisionNote: note ? `Reopened: ${note}` : 'Reopened' });
+      await this.audit(tx, user, 'PURCHASE_REQUISITION_REOPENED', requisitionId, { number: requisition.number, note });
     });
     return this.detail(user, requisitionId);
   }

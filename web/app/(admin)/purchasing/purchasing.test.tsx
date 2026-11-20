@@ -24,6 +24,10 @@ const hooks = vi.hoisted(() => ({
   // The Attachments FactBox has its own tests (attachments-factbox.test.tsx): here it only draws.
   useRequisitionFiles: vi.fn(),
   openRequisitionFile: vi.fn(),
+  // The ribbon's Show Attached, Previous and Next, and Copy Document (2026-11-20).
+  useRequisitionNotes: vi.fn(),
+  useRequisitionSiblings: vi.fn(),
+  readRequisition: vi.fn(),
 }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 // The bill's Xero card and the bills panel have their own tests (bill-in-xero.test.tsx): here they read nothing.
@@ -77,11 +81,14 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   decidedAt: null,
   order: null,
   files: [],
+  notes: [],
+  comments: [],
+  links: [],
   history: [
     { at: '2026-11-17T15:12:00.000Z', by: 'Sample Requester', what: 'submitted it' },
     { at: '2026-11-17T14:58:00.000Z', by: 'Sample Requester', what: 'started it' },
   ],
-  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, order: false, approveBlocked: null, attach: true },
+  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, order: false, approveBlocked: null, attach: true, recall: false, reopen: false },
   settings: SETTINGS,
   ...over,
 });
@@ -123,6 +130,8 @@ beforeEach(() => {
   edits = { create: mutation(), update: mutation(), step: mutation(), saveSettings: mutation() };
   hooks.usePurchasingEdits.mockReturnValue(edits);
   hooks.useRequisitionFiles.mockReturnValue({ attach: mutation(), setForVendor: { ...mutation(), mutate: vi.fn() }, remove: { ...mutation(), mutate: vi.fn() } });
+  hooks.useRequisitionNotes.mockReturnValue(Object.fromEntries(['addNote', 'removeNote', 'comment', 'addLink', 'removeLink'].map((name) => [name, { ...mutation(), mutate: vi.fn() }])));
+  hooks.useRequisitionSiblings.mockReturnValue(vi.fn(async () => null));
   hooks.useRequisitionChoices.mockReturnValue({ isLoading: false, isError: false, data: CHOICES });
 });
 
@@ -192,9 +201,10 @@ describe('a requisition begun from the Reorder list', () => {
     expect(edits.create!.mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('is an empty requisition when nothing was ticked', () => {
+  it('is an empty requisition, one blank line ready, when nothing was ticked', () => {
     render(<NewRequisitionPage />);
-    expect(screen.queryByLabelText(/^Quantity of/)).toBeNull();
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
+    expect((screen.getByLabelText('Quantity of line 1') as HTMLInputElement).value).toBe('');
     expect(screen.getByLabelText('Purchaser Code').textContent).toContain('THMP');
   });
 });
@@ -229,7 +239,7 @@ describe('filling a requisition in', () => {
     expect((within(table).getByLabelText('Direct unit cost of Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
     expect(within(table).queryByLabelText('Quantity of Smoke alarm')).toBeNull();
     expect(within(table).queryByLabelText('Quantity of Glue boards')).toBeNull();
-    expect(screen.getByText('Estimated Total (USD):').parentElement!.textContent).toContain('$184.80');
+    expect(screen.getByText('Total Incl. Tax (USD):').parentElement!.textContent).toContain('184.80');
 
     // Why it is needed is a note now, not a requirement (2026-11-20).
     expect(screen.queryByRole('status')).toBeNull();
@@ -270,17 +280,23 @@ describe('filling a requisition in', () => {
     expect(submit().disabled).toBe(true);
   });
 
-  it('asks for every line by an item code: nothing is written in words', async () => {
+  it('asks for every line by an item code, and never saves a blank line (2026-11-20)', async () => {
     const onSave = mount();
     expect(screen.queryByRole('button', { name: /not in the list/i })).toBeNull();
-    expect(screen.getByText(/something with no code yet is added on Inventory first/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add New Line' }));
+    expect(screen.getByText(/a blank line is not saved/)).toBeTruthy();
+    // A new one starts with one blank line, ready to type in, as a spreadsheet's next row.
+    expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
     const draft = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(draft.disabled).toBe(false);
+
+    // Something typed on a line with no item code is not a line yet.
+    fireEvent.change(screen.getByLabelText('Notes on line 1'), { target: { value: 'Something' } });
     expect(draft.disabled).toBe(true);
     expect(screen.getByRole('status').textContent).toBe('Finish or delete the lines that are not filled in.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete line 1' }));
+    // Delete Line takes the line the cursor is on.
+    fireEvent.focus(screen.getByLabelText('Notes on line 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Line' }));
     expect(draft.disabled).toBe(false);
     fireEvent.click(draft);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ lines: [], reason: '' }), false));
@@ -358,7 +374,7 @@ describe('filling a requisition in', () => {
   });
 
   it('opens a sent-back requisition with what it asked for', () => {
-    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true } }));
+    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: false, reopen: false } }));
 
     expect((screen.getByLabelText('Why it is needed') as HTMLTextAreaElement).value).toContain('14 inspections');
     expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('24');
@@ -371,59 +387,83 @@ describe('one requisition', () => {
     hooks.useRequisition.mockReturnValue({ isLoading: false, isError: false, data });
     return render(<RequisitionPage />);
   };
+  const ribbon = () => within(screen.getByRole('toolbar', { name: 'Requisition actions' }));
+  const pressed = (name: string) => fireEvent.click(ribbon().getByRole('button', { name }));
 
-  it('lets an approver approve, and send back or reject only with a note', async () => {
+  it('reads as the same NAV page, and lets an approver approve, or send back or reject only with a note', async () => {
     mount(detail());
 
-    expect(screen.getByRole('heading', { name: 'Purchase requisition PR-0012' })).toBeTruthy();
-    expect(within(screen.getByRole('table', { name: 'Lines' })).getByRole('row', { name: /Filter 20x25x1/ }).textContent).toContain('$140.40');
-    // The General FastTab, read as it stands (2026-11-20).
+    expect(screen.getByRole('heading', { name: 'PR-0012' })).toBeTruthy();
+    expect(within(screen.getByRole('table', { name: 'Lines' })).getByRole('row', { name: /FLT-20251/ }).textContent).toContain('$140.40');
+    // The General FastTab, read as it stands, and nothing to type in.
     expect(screen.getByText('SREQUESTER')).toBeTruthy();
     expect(screen.getByText('Requisitioner Name:')).toBeTruthy();
-    const sendBack = screen.getByRole('button', { name: 'Send back with the note' }) as HTMLButtonElement;
-    expect(sendBack.disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText('Item on line 1')).toBeNull();
+    // What it chooses from is read either way, for the FactBoxes.
+    expect(hooks.useRequisitionChoices).toHaveBeenCalledWith(true);
 
-    fireEvent.change(screen.getByLabelText('Note to Sample Requester'), { target: { value: ' Fewer batteries. ' } });
-    fireEvent.click(sendBack);
+    pressed('Send Back');
+    const dialog = screen.getByRole('dialog', { name: 'Send it back' });
+    const send = within(dialog).getByRole('button', { name: 'Send Back' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('Note, needed'), { target: { value: ' Fewer batteries. ' } });
+    fireEvent.click(send);
     await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledWith({ requisitionId: 'req-12', step: 'send-back', input: { note: 'Fewer batteries.' } }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    // Release is NAV's name for approving it.
+    pressed('Release');
     await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ step: 'approve' })));
-    expect(hooks.useRequisitionChoices).toHaveBeenCalledWith(false);
+    pressed('Approve');
+    await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledTimes(3));
   });
 
-  it('says why somebody cannot approve it, and offers no Approve', () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.', attach: true } }));
+  it('greys Approve out, saying why, for somebody who may not approve this much', () => {
+    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.', attach: true, recall: false, reopen: false } }));
 
-    expect(screen.getByText(/above the \$500\.00 approval limit/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Send back with the note' })).toBeTruthy();
+    const approve = ribbon().getByRole('button', { name: 'Approve' }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(approve.title).toMatch(/above the \$500\.00 approval limit/);
+    expect((ribbon().getByRole('button', { name: 'Send Back' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('shows its author a submitted requisition as it stands, with only Cancel to press', async () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true } }));
+  it('shows its author a submitted requisition as it stands: no decision, but Cancel Approval Request and Delete', async () => {
+    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: true, reopen: false } }));
 
-    expect(screen.queryByRole('heading', { name: 'Your decision' })).toBeNull();
+    expect(ribbon().queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(screen.queryByLabelText('Why it is needed')).toBeNull();
     expect(screen.getByText('Sample Requester submitted it')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel this requisition' }));
+
+    pressed('Cancel Approval Request');
+    await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledWith({ requisitionId: 'req-12', step: 'recall', input: {} }));
+
+    pressed('Delete');
+    fireEvent.click(within(screen.getByRole('alertdialog', { name: 'Delete PR-0012?' })).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledWith({ requisitionId: 'req-12', step: 'cancel', input: {} }));
   });
 
-  it('opens the form for its author when it was sent back, with the approver\'s note above it', () => {
+  it('reopens an approved one, with a note if one is given', async () => {
+    mount(detail({ status: 'APPROVED', can: { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: false, reopen: true } }));
+
+    pressed('Reopen');
+    const dialog = screen.getByRole('dialog', { name: 'Reopen PR-0012' });
+    fireEvent.change(within(dialog).getByLabelText('Note'), { target: { value: 'Add the 9 V batteries.' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }));
+    await waitFor(() => expect(edits.step!.mutateAsync).toHaveBeenCalledWith({ requisitionId: 'req-12', step: 'reopen', input: { note: 'Add the 9 V batteries.' } }));
+  });
+
+  it('opens the form for its author when it was sent back, with the approver note above it', () => {
     mount(
       detail({
         status: 'SENT_BACK',
         decidedBy: 'Sample Manager',
         decisionNote: 'Fewer batteries.',
-        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true },
+        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: false, reopen: false },
       }),
     );
 
     expect(screen.getByText(/Sample Manager sent it back: “Fewer batteries\.”/)).toBeTruthy();
     expect(screen.getByLabelText('Why it is needed')).toBeTruthy();
-    expect(hooks.useRequisitionChoices).toHaveBeenCalledWith(true);
+    expect(screen.getByLabelText('Item on line 1')).toBeTruthy();
   });
 });
 
@@ -432,13 +472,14 @@ describe('a requisition and its order', () => {
     hooks.useRequisition.mockReturnValue({ isLoading: false, isError: false, data });
     return render(<RequisitionPage />);
   };
-  const approved = { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, approveBlocked: null, attach: true };
+  const approved = { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, approveBlocked: null, attach: true, recall: false, reopen: false };
+  const makeOrder = () => within(screen.getByRole('toolbar', { name: 'Requisition actions' })).getByRole('button', { name: 'Make Purchase Order' }) as HTMLButtonElement;
 
   it('offers a purchaser the order to make, and opens it once made', async () => {
     orderEdits.create!.mutateAsync.mockResolvedValue({ id: 'order-9' } as never);
     mount(detail({ status: 'APPROVED', can: { ...approved, order: true } }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Make purchase order' }));
+    fireEvent.click(makeOrder());
     await waitFor(() => expect(orderEdits.create!.mutateAsync).toHaveBeenCalledWith('req-12'));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/purchasing/orders/order-9'));
   });
@@ -447,7 +488,7 @@ describe('a requisition and its order', () => {
     mount(detail({ status: 'ORDERED', order: { id: 'order-9', number: 'PO-0009' }, can: { ...approved, order: false } }));
 
     expect(screen.getByRole('link', { name: 'PO-0009' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
-    expect(screen.queryByRole('button', { name: 'Make purchase order' })).toBeNull();
+    expect(makeOrder().disabled).toBe(true);
   });
 });
 

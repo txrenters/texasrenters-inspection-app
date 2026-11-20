@@ -26,6 +26,11 @@ import {
   MOST_STOCK_QUANTITY,
   MOST_UNIT_COST_CENTS,
   REQUISITION_FILE_MAX_BYTES,
+  REQUISITION_LINK_MAX_LENGTH,
+  REQUISITION_LINK_TITLE_MAX_LENGTH,
+  REQUISITION_NOTE_MAX_LENGTH,
+  type AddRequisitionLinkInput,
+  type AddRequisitionNoteInput,
   type RequisitionDecisionInput,
   type RequisitionLineInput,
   type RequisitionQuoteInput,
@@ -39,6 +44,7 @@ import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Is
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { PurchasingService } from './purchasing.service';
 import { RequisitionFilesService, type UploadedRequisitionFile } from './requisition-files.service';
+import { RequisitionNotesService } from './requisition-notes.service';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** Null is "none"; anything else is checked. The form sends the whole requisition, so every field is there. */
@@ -95,6 +101,15 @@ export class SetRequisitionFileDto implements Required<SetRequisitionFileInput> 
   @IsBoolean() forVendor!: boolean;
 }
 
+export class AddRequisitionNoteDto implements Required<AddRequisitionNoteInput> {
+  @IsString() @MaxLength(REQUISITION_NOTE_MAX_LENGTH) text!: string;
+}
+
+export class AddRequisitionLinkDto implements Required<AddRequisitionLinkInput> {
+  @IsString() @MaxLength(REQUISITION_LINK_MAX_LENGTH) url!: string;
+  @IsString() @MaxLength(REQUISITION_LINK_TITLE_MAX_LENGTH) title!: string;
+}
+
 export class RequisitionListQueryDto {
   @IsOptional() @IsIn(['open', 'closed']) show?: 'open' | 'closed';
 }
@@ -114,7 +129,56 @@ export class PurchasingController {
   constructor(
     @Inject(PurchasingService) private readonly purchasing: PurchasingService,
     @Inject(RequisitionFilesService) private readonly files: RequisitionFilesService,
+    @Inject(RequisitionNotesService) private readonly notes: RequisitionNotesService,
   ) {}
+
+  // ── Notes, comments and links (2026-11-20) ──────────────────────────────
+
+  @Post('requisitions/:requisitionId/notes')
+  @RequirePermissions('purchasing:request')
+  addNote(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Body() body: AddRequisitionNoteDto) {
+    return this.notes.write(request.user, requisitionId, 'NOTE', body);
+  }
+
+  @Delete('requisitions/:requisitionId/notes/:noteId')
+  @RequirePermissions('purchasing:request')
+  removeNote(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Param('noteId', ParseUUIDPipe) noteId: string) {
+    return this.notes.removeNote(request.user, requisitionId, noteId);
+  }
+
+  @Post('requisitions/:requisitionId/comments')
+  @RequirePermissions('purchasing:request')
+  comment(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Body() body: AddRequisitionNoteDto) {
+    return this.notes.write(request.user, requisitionId, 'COMMENT', body);
+  }
+
+  @Post('requisitions/:requisitionId/links')
+  @RequirePermissions('purchasing:request')
+  addLink(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Body() body: AddRequisitionLinkDto) {
+    return this.notes.addLink(request.user, requisitionId, body);
+  }
+
+  @Delete('requisitions/:requisitionId/links/:linkId')
+  @RequirePermissions('purchasing:request')
+  removeLink(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Param('linkId', ParseUUIDPipe) linkId: string) {
+    return this.notes.removeLink(request.user, requisitionId, linkId);
+  }
+
+  /** "Cancel Approval Request": its requester takes it back while nobody has decided it. */
+  @Post('requisitions/:requisitionId/recall')
+  @RequirePermissions('purchasing:request')
+  @HttpCode(200)
+  recall(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string) {
+    return this.purchasing.recall(request.user, requisitionId);
+  }
+
+  /** "Reopen": an approved one with no order goes back to be changed, by its requester or an approver. */
+  @Post('requisitions/:requisitionId/reopen')
+  @RequirePermissions('purchasing:request')
+  @HttpCode(200)
+  reopen(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Body() body: RequisitionDecisionDto) {
+    return this.purchasing.reopen(request.user, requisitionId, body);
+  }
 
   // ── Files on a requisition (2026-11-20, part 3) ─────────────────────────
 
