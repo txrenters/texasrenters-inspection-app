@@ -456,6 +456,44 @@ describe('inspection report shares', () => {
     const older = await reportFor('MOVE_IN', summary(2));
     expect(older.rooms[0].observations).toBeUndefined();
     expect(older.rooms[0].actions).toEqual([]);
+
+    // The office, 2026-11-21: a move-in report lists no work, only what was
+    // repaired since the walkthrough. A move-out lists it all, as before.
+    const withWork = {
+      ...observed,
+      actions: [
+        {
+          group: 'REPAIRS',
+          items: [
+            { text: 'Balance the ceiling fan', details: [], itemId: 'item-lights', itemLabel: 'Lights and power points' },
+            {
+              text: 'Install a doorstop',
+              details: [],
+              itemId: 'item-doors',
+              itemLabel: 'Doors and locks',
+              repairedAt: '2026-11-21T15:00:00.000Z',
+              repairedBy: 'Office Reviewer',
+            },
+          ],
+        },
+        { group: 'CLEANING', items: [{ text: 'Remove the trash', details: [], itemId: null, itemLabel: null }] },
+      ],
+    };
+    const moveIn = await reportFor('MOVE_IN', withWork);
+    expect(moveIn.rooms[0].actions).toEqual([
+      {
+        heading: 'Repairs / Maintenance',
+        items: [{ text: 'Install a doorstop', details: [], itemId: 'item-doors', repairedAt: '2026-11-21T15:00:00.000Z' }],
+      },
+    ]);
+    // The work list never reaches a move-in's public link at all.
+    expect(JSON.stringify(moveIn)).not.toMatch(/Balance the ceiling fan|Remove the trash/);
+    const moveOut = await reportFor('MOVE_OUT', withWork);
+    expect(moveOut.rooms[0].actions?.flatMap((group) => group.items.map((item) => item.text))).toEqual([
+      'Balance the ceiling fan',
+      'Install a doorstop',
+      'Remove the trash',
+    ]);
   });
 
   it('prints a move-in room as the tenant receives it: no still of a problem nobody confirmed', async () => {
