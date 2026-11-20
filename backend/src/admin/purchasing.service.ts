@@ -3,14 +3,16 @@ import { PurchaseRequisitionStatus as Status, type Prisma } from '@prisma/client
 import {
   EDITABLE_REQUISITION_STATUSES,
   OPEN_REQUISITION_STATUSES,
-  approvalStepFor,
+  actsForCompany,
+  approvalRefusal,
+  companyRefusal,
   averageCostCents,
-  formatMoney,
   orderGroups,
   requisitionerCode,
   requisitionSubmitProblem,
   requisitionTotalCents,
   type PurchasingSettings,
+  type PurchasingStanding,
   type RequisitionActions,
   type RequisitionChoices,
   type RequisitionDecisionInput,
@@ -25,7 +27,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { nextDocumentCode, readPurchasingSettings } from './purchasing-settings';
+import { nextDocumentCode, readPurchasingSettings, readPurchasingSetup, readStanding } from './purchasing-settings';
 import { RequisitionApproversService } from './requisition-approvers';
 import { ATTACHABLE, requisitionFiles } from './requisition-files';
 import { requisitionNotesAndLinks } from './requisition-notes';
@@ -49,7 +51,6 @@ import { requisitionNotesAndLinks } from './requisition-notes';
 
 const APPROVE = 'purchasing:approve';
 const ORDER = 'purchasing:order';
-const APPROVE_ANY = 'purchasing:approve-any';
 const MAKE_ITEM_CODES = 'inventory:manage';
 const ENTITY = 'PurchaseRequisition';
 /** The requisitions that are finished with, newest first: enough to look back, and no more. */
@@ -58,6 +59,8 @@ const CANCELLABLE: Status[] = [Status.DRAFT, Status.SUBMITTED, Status.SENT_BACK]
 const EDITABLE = EDITABLE_REQUISITION_STATUSES as readonly Status[];
 
 type Db = Prisma.TransactionClient;
+/** What a decision is held to: the steps, whether approvers decide only for their own companies, and the caller's standing. */
+type Rules = { settings: PurchasingSettings; ownCompaniesOnly: boolean; standing: PurchasingStanding };
 const may = (user: AuthenticatedUser, permission: string) => (user.permissions as readonly string[]).includes(permission);
 const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g, ' ') || null;
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
@@ -189,6 +192,12 @@ export class PurchasingService {
     return readPurchasingSettings(db, organizationId);
   }
 
+  /** Everything a decision is held to (Purchasing Setup): the steps, whether approvers approve only for their own companies, and the caller's standing. */
+  private async rules(db: Pick<Db, 'purchasingSettings' | 'purchasingApprovalStep' | 'purchasingPerson'>, user: AuthenticatedUser): Promise<Rules> {
+    const [setup, standing] = await Promise.all([readPurchasingSetup(db, user.organizationId), readStanding(db, user)]);
+    return { settings: setup.settings, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing };
+  }
+
   private async companies(organizationId: string) {
     const rows = await this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, status: true, purchaserCode: true }, orderBy: { name: 'asc' } });
     return {
@@ -202,25 +211,25 @@ export class PurchasingService {
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
-  private actions(user: AuthenticatedUser, requisition: Pick<Requisition, 'status' | 'requestedById'>, totalCents: number, settings: PurchasingSettings, unordered = false): RequisitionActions {
+  private actions(user: AuthenticatedUser, requisition: Pick<Requisition, 'status' | 'requestedById' | 'xeroTenantId'>, totalCents: number, rules: Rules, unordered = false): RequisitionActions {
     const mine = requisition.requestedById === user.id;
     const waiting = requisition.status === Status.SUBMITTED && may(user, APPROVE);
+    // An approver limited to some companies decides only theirs, when the office says so (Purchasing Setup, 2026-11-21).
+    const decides = !rules.ownCompaniesOnly || actsForCompany(rules.standing, requisition.xeroTenantId);
     const approveBlocked = !waiting
       ? null
       : mine
         ? 'You asked for this, so somebody else approves it.'
-        : approvalStepFor(totalCents, settings.steps).approver === 'ANY_AMOUNT' && !may(user, APPROVE_ANY)
-          ? `At ${formatMoney(totalCents)} it needs somebody who may approve any amount.`
-          : null;
+        : approvalRefusal(rules.standing, rules.settings.steps, totalCents, requisition.xeroTenantId, rules.ownCompaniesOnly);
     return {
       edit: mine && EDITABLE.includes(requisition.status),
       submit: mine && EDITABLE.includes(requisition.status),
       cancel: mine && CANCELLABLE.includes(requisition.status),
       approve: waiting && !approveBlocked,
-      sendBack: waiting && !mine,
-      reject: waiting && !mine,
-      // Approved, or Ordered with a vendor still to order from: one whose order was cancelled.
-      order: (requisition.status === Status.APPROVED || (requisition.status === Status.ORDERED && unordered)) && may(user, ORDER),
+      sendBack: waiting && !mine && decides,
+      reject: waiting && !mine && decides,
+      // Approved, or Ordered with a vendor still to order from: one whose order was cancelled. Only for the purchaser's own companies.
+      order: (requisition.status === Status.APPROVED || (requisition.status === Status.ORDERED && unordered)) && may(user, ORDER) && actsForCompany(rules.standing, requisition.xeroTenantId),
       approveBlocked,
       // Whoever sees it: their own, or one they decide or order from.
       attach: ATTACHABLE.includes(requisition.status),
@@ -253,9 +262,9 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, settings, levels, audits, orders, files, attached, office] = await Promise.all([
+    const [companies, rules, levels, audits, orders, files, attached, office] = await Promise.all([
       this.companies(organizationId),
-      this.settings(this.prisma, organizationId),
+      this.rules(this.prisma, user),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
       this.prisma.auditLog.findMany({
         where: { organizationId, entityType: ENTITY, entityId: requisitionId },
@@ -320,8 +329,8 @@ export class PurchasingService {
       },
       files,
       ...attached,
-      can: this.actions(user, requisition, summary.estimatedTotalCents, settings, vendorsUnordered(requisition, orders)),
-      settings,
+      can: this.actions(user, requisition, summary.estimatedTotalCents, rules, vendorsUnordered(requisition, orders)),
+      settings: rules.settings,
     };
   }
 
@@ -332,7 +341,7 @@ export class PurchasingService {
    */
   async choices(user: AuthenticatedUser): Promise<RequisitionChoices> {
     const organizationId = user.organizationId;
-    const [items, levels, places, companies, vendors, settings, codes, categories, ordered] = await Promise.all([
+    const [items, levels, places, companies, vendors, settings, codes, categories, ordered, standing] = await Promise.all([
       this.prisma.stockItem.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true, priceCents: true, lineTypeId: true, categoryId: true, usualVendorId: true },
@@ -352,6 +361,7 @@ export class PurchasingService {
         orderBy: { order: { createdAt: 'desc' } },
         take: 5000,
       }),
+      readStanding(this.prisma, user),
     ]);
     const held = new Map<string, { quantity: number; valueCents: number; places: { placeId: string; quantity: number }[] }>();
     for (const level of levels) {
@@ -391,7 +401,8 @@ export class PurchasingService {
         };
       }),
       places,
-      companies: companies.connected,
+      // A person limited to some companies asks only for theirs (Purchasing Setup, 2026-11-21).
+      companies: companies.connected.filter((company) => actsForCompany(standing, company.tenantId)),
       vendors,
       settings,
       lineTypes: codes.filter((code) => code.kind === 'LINE_TYPE').map(({ id, code, name, keepsStock }) => ({ id, code, name, keepsStock })),
@@ -411,7 +422,10 @@ export class PurchasingService {
    * item by its code, and its items are its company's. The database's keys refuse another office's too; this says so
    * plainly, and holds the rules the keys cannot.
    */
-  private async checked(db: Db, organizationId: string, input: SaveRequisitionInput) {
+  private async checked(db: Db, user: AuthenticatedUser, input: SaveRequisitionInput) {
+    const organizationId = user.organizationId;
+    const refused = companyRefusal(await readStanding(db, user), input.xeroTenantId ?? null, 'ask for stock');
+    if (refused) throw new ApplicationError(403, 'REQUISITION_COMPANY_NOT_YOURS', refused);
     if (input.xeroTenantId && !(await db.xeroOrganisation.findFirst({ where: { organizationId, xeroTenantId: input.xeroTenantId, status: 'CONNECTED' }, select: { id: true } })))
       throw new ApplicationError(400, 'REQUISITION_COMPANY_NOT_FOUND', 'That company is not connected to this office.');
     if (input.deliverToPlaceId && !(await db.stockPlace.findFirst({ where: { organizationId, id: input.deliverToPlaceId, active: true }, select: { id: true } })))
@@ -498,7 +512,7 @@ export class PurchasingService {
   async create(user: AuthenticatedUser, input: SaveRequisitionInput): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
     const created = await this.prisma.$transaction(async (tx) => {
-      await this.checked(tx, organizationId, input);
+      await this.checked(tx, user, input);
       const number = await nextDocumentCode(tx, organizationId, 'PR');
       const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input) }, select: { id: true } });
       await this.writeLinesAndQuotes(tx, organizationId, requisition.id, input);
@@ -543,7 +557,7 @@ export class PurchasingService {
     await this.prisma.$transaction(async (tx) => {
       const requisition = await this.own(tx, user, requisitionId);
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_FIXED', 'A requisition cannot be changed once it is submitted, unless it is sent back.');
-      await this.checked(tx, organizationId, input);
+      await this.checked(tx, user, input);
       await this.move(tx, organizationId, requisitionId, EDITABLE, this.fields(input));
       await tx.purchaseRequisitionLine.deleteMany({ where: { organizationId, requisitionId } });
       await tx.purchaseRequisitionQuote.deleteMany({ where: { organizationId, requisitionId } });
@@ -641,14 +655,19 @@ export class PurchasingService {
     await this.prisma.$transaction(async (tx) => {
       const requisition = await tx.purchaseRequisition.findFirst({
         where: { id: requisitionId, organizationId, status: { not: Status.DRAFT } },
-        select: { number: true, status: true, requestedById: true, lines: { select: { quantity: true, estimatedUnitCostCents: true } } },
+        select: { number: true, status: true, requestedById: true, xeroTenantId: true, lines: { select: { quantity: true, estimatedUnitCostCents: true } } },
       });
       if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
       if (requisition.status !== Status.SUBMITTED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition is no longer waiting for a decision.');
       if (requisition.requestedById === user.id) throw new ApplicationError(403, 'REQUISITION_OWN', 'You asked for this, so somebody else decides it.');
       const totalCents = requisitionTotalCents(requisition.lines);
+      const rules = await this.rules(tx, user);
+      if (rules.ownCompaniesOnly) {
+        const refused = companyRefusal(rules.standing, requisition.xeroTenantId, 'decide requisitions');
+        if (refused) throw new ApplicationError(403, 'REQUISITION_COMPANY_NOT_YOURS', refused);
+      }
       if (decision === 'APPROVED') {
-        const { approveBlocked } = this.actions(user, requisition, totalCents, await this.settings(tx, organizationId));
+        const { approveBlocked } = this.actions(user, requisition, totalCents, rules);
         if (approveBlocked) throw new ApplicationError(403, 'REQUISITION_OVER_LIMIT', approveBlocked);
       }
       await this.move(tx, organizationId, requisitionId, [Status.SUBMITTED], { status: decision, decidedById: user.id, decidedAt: new Date(), decisionNote: note });

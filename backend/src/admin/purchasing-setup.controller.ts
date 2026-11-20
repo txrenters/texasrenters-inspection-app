@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, ParseEnumPipe, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, ParseEnumPipe, ParseUUIDPipe, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   APPROVAL_STEP_APPROVERS,
@@ -13,19 +13,25 @@ import {
   MOST_REQUISITION_QUOTES,
   MOST_SERIES_DIGITS,
   LEAST_SERIES_DIGITS,
+  PURCHASING_ROLE_KEYS,
+  type AddPurchasingPersonInput,
   type ApprovalStep,
   type ApprovalStepApprover,
   type DocumentSeriesKind,
   type FileGroup,
   type FileRemoval,
+  type PurchasingRoleKey,
   type SaveDocumentSeriesInput,
+  type SavePurchasingPersonInput,
   type SavePurchasingApprovalsInput,
   type SaveRequisitionFileRulesInput,
+  type SetPurchasingRoleInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsString, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
+import { PurchasingPeopleService } from './purchasing-people.service';
 import { PurchasingSetupService } from './purchasing-setup.service';
 
 /** The most a step's top may be: a billion dollars, in cents, inside a 32-bit column. */
@@ -43,6 +49,7 @@ export class ApprovalStepDto implements Required<ApprovalStep> {
 
 export class SavePurchasingApprovalsDto implements Required<SavePurchasingApprovalsInput> {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MOST_APPROVAL_STEPS) @ValidateNested({ each: true }) @Type(() => ApprovalStepDto) steps!: ApprovalStepDto[];
+  @IsBoolean() approverOwnCompaniesOnly!: boolean;
   @IsBoolean() emailApprovers!: boolean;
   @IsBoolean() reapproveChangedOrders!: boolean;
 }
@@ -61,6 +68,20 @@ export class SaveDocumentSeriesDto implements Required<SaveDocumentSeriesInput> 
   @IsInt() @Min(1) @Max(99_999_999) next!: number;
 }
 
+export class SetPurchasingRoleDto implements Required<SetPurchasingRoleInput> {
+  @IsBoolean() held!: boolean;
+}
+
+export class SavePurchasingPersonDto implements Required<SavePurchasingPersonInput> {
+  @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(80, { each: true }) companyTenantIds!: string[];
+  @IsBoolean() approvesAnyAmount!: boolean;
+  @ValidateIf(GIVEN) @IsInt() @Min(1) @Max(MOST_CENTS) approvalLimitCents!: number | null;
+}
+
+export class AddPurchasingPersonDto implements Required<AddPurchasingPersonInput> {
+  @IsUUID() userProfileId!: string;
+}
+
 /**
  * Purchasing Setup (2026-11-20, part 5a): only a system admin or a Purchasing
  * admin (`purchasing:setup`) reads or changes it. Each section saves on its
@@ -71,7 +92,42 @@ export class SaveDocumentSeriesDto implements Required<SaveDocumentSeriesInput> 
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin/purchasing/setup')
 export class PurchasingSetupController {
-  constructor(@Inject(PurchasingSetupService) private readonly setup: PurchasingSetupService) {}
+  constructor(
+    @Inject(PurchasingSetupService) private readonly setup: PurchasingSetupService,
+    @Inject(PurchasingPeopleService) private readonly people: PurchasingPeopleService,
+  ) {}
+
+  // ── Roles and who holds them (part 5b, 2026-11-21) ──────────────────────
+
+  @Get('people')
+  @RequirePermissions('purchasing:setup')
+  readPeople(@Req() request: AuthenticatedRequest) {
+    return this.people.people(request.user);
+  }
+
+  @Post('people')
+  @RequirePermissions('purchasing:setup')
+  @HttpCode(200)
+  addPerson(@Req() request: AuthenticatedRequest, @Body() body: AddPurchasingPersonDto) {
+    return this.people.addPerson(request.user, body);
+  }
+
+  @Put('people/:personId')
+  @RequirePermissions('purchasing:setup')
+  savePerson(@Req() request: AuthenticatedRequest, @Param('personId', ParseUUIDPipe) personId: string, @Body() body: SavePurchasingPersonDto) {
+    return this.people.savePerson(request.user, personId, body);
+  }
+
+  @Put('people/:personId/roles/:role')
+  @RequirePermissions('purchasing:setup')
+  setRole(
+    @Req() request: AuthenticatedRequest,
+    @Param('personId', ParseUUIDPipe) personId: string,
+    @Param('role', new ParseEnumPipe(Object.fromEntries(PURCHASING_ROLE_KEYS.map((key) => [key, key])))) role: PurchasingRoleKey,
+    @Body() body: SetPurchasingRoleDto,
+  ) {
+    return this.people.setRole(request.user, personId, role, body.held);
+  }
 
   @Get()
   @RequirePermissions('purchasing:setup')

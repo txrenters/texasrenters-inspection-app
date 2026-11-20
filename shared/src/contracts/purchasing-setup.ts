@@ -15,16 +15,24 @@ import { formatMoney } from './invoices.js';
 // ── Approval steps ───────────────────────────────────────────────────────────
 
 /**
- * Who approves a step: anybody who may approve requisitions, or only somebody
- * who may approve any amount. "An approver whose own limit covers it" comes
- * with each person's limit, in part 5b.
+ * Who approves a step, from the most people to the fewest: anybody who may
+ * approve requisitions; an approver whose own limit reaches the step's top
+ * (part 5b, 2026-11-21: each approver has a limit in Setup); or only somebody
+ * who may approve any amount.
  */
-export const APPROVAL_STEP_APPROVERS = ['ANY_APPROVER', 'ANY_AMOUNT'] as const;
+export const APPROVAL_STEP_APPROVERS = ['ANY_APPROVER', 'APPROVER_LIMIT', 'ANY_AMOUNT'] as const;
 export type ApprovalStepApprover = (typeof APPROVAL_STEP_APPROVERS)[number];
 export const APPROVAL_STEP_APPROVER_LABEL: Record<ApprovalStepApprover, string> = {
   ANY_APPROVER: 'Any Approver',
+  APPROVER_LIMIT: "Approver, to the step's top or more",
   ANY_AMOUNT: 'Approver, any amount',
 };
+/** How many people a step's approver takes in: a higher step never takes in more than a lower one. */
+const APPROVER_REACH: Record<ApprovalStepApprover, number> = { ANY_APPROVER: 0, APPROVER_LIMIT: 1, ANY_AMOUNT: 2 };
+/** The board's words for a step's approver: "Approver, to $5,000.00 or more". */
+export function approverLabel(approver: ApprovalStepApprover, upToCents: number | null): string {
+  return approver === 'APPROVER_LIMIT' && upToCents !== null ? `Approver, to ${formatMoney(upToCents)} or more` : APPROVAL_STEP_APPROVER_LABEL[approver];
+}
 
 /** One step: requisitions and orders up to `upToCents` (the last has none) need this approver and this many quotes. */
 export interface ApprovalStep {
@@ -70,22 +78,31 @@ export function approvalStepRange(steps: readonly ApprovalStep[], index: number)
 }
 
 /** Who approves an amount, as the lists say it. */
-export const approverSaying = (step: ApprovalStep) => (step.approver === 'ANY_AMOUNT' ? 'Somebody who may approve any amount' : 'An approver');
+export const approverSaying = (step: ApprovalStep) =>
+  step.approver === 'ANY_AMOUNT'
+    ? 'Somebody who may approve any amount'
+    : step.approver === 'APPROVER_LIMIT' && step.upToCents !== null
+      ? `An approver whose own limit is ${formatMoney(step.upToCents)} or more`
+      : 'An approver';
 
 /** Why these steps cannot be kept, in the office's words; null when they can. */
 export function approvalStepsProblem(steps: readonly ApprovalStep[], mostQuotes: number): string | null {
   if (!steps.length) return 'Keep at least one step.';
   if (steps.length > MOST_APPROVAL_STEPS) return `At most ${MOST_APPROVAL_STEPS} steps.`;
   let below = 0;
-  let anyAmount = false;
+  let reach = 0;
   for (const [index, step] of steps.entries()) {
     const last = index === steps.length - 1;
     if (last ? step.upToCents !== null : step.upToCents === null) return last ? 'The last step has no top: it takes every larger amount.' : 'Only the last step can be without a top.';
     if (step.upToCents !== null && (!Number.isSafeInteger(step.upToCents) || step.upToCents <= below)) return `Each step goes higher than the one before it: ${approvalStepRange(steps, index)} does not.`;
     if (!APPROVAL_STEP_APPROVERS.includes(step.approver)) return 'Choose who approves each step.';
+    if (last && step.approver === 'APPROVER_LIMIT') return 'The last step has no top, so it cannot ask for an approver whose limit reaches it.';
     // A larger amount is never approved by more people than a smaller one.
-    if (anyAmount && step.approver !== 'ANY_AMOUNT') return 'Once a step needs somebody who may approve any amount, every higher step does too.';
-    anyAmount ||= step.approver === 'ANY_AMOUNT';
+    if (APPROVER_REACH[step.approver] < reach)
+      return reach === APPROVER_REACH.ANY_AMOUNT
+        ? 'Once a step needs somebody who may approve any amount, every higher step does too.'
+        : "Once a step needs an approver whose own limit reaches it, no higher step takes in any approver.";
+    reach = APPROVER_REACH[step.approver];
     if (!Number.isInteger(step.quotesNeeded) || step.quotesNeeded < 0 || step.quotesNeeded > mostQuotes) return `Quotes needed is a whole number from 0 to ${mostQuotes}.`;
     if (step.reminderDays !== null && (!Number.isInteger(step.reminderDays) || step.reminderDays < 1 || step.reminderDays > MOST_REMINDER_DAYS))
       return `A reminder is after 1 to ${MOST_REMINDER_DAYS} days, or none.`;
@@ -203,6 +220,8 @@ export function fileRulesProblem(rules: RequisitionFileRules): string | null {
 
 export interface PurchasingApprovals {
   steps: ApprovalStep[];
+  /** An approver approves only for the companies Setup gives them (part 5b, 2026-11-21); off, for every company. */
+  approverOwnCompaniesOnly: boolean;
   /** Email the approvers who may approve it when a requisition is sent for approval. */
   emailApprovers: boolean;
   /** Every change to an approved purchase order goes back for approval; off, only a change that raises it or adds a line does. */

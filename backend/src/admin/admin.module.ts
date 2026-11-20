@@ -52,6 +52,7 @@ import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { PurchasingCodesController } from './purchasing-codes.controller';
 import { PurchasingCodesService } from './purchasing-codes.service';
+import { PurchasingPeopleService } from './purchasing-people.service';
 import { PurchasingSetupController } from './purchasing-setup.controller';
 import { PurchasingSetupService } from './purchasing-setup.service';
 import { RequisitionApproversService } from './requisition-approvers';
@@ -196,6 +197,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     StockCountsService,
     PurchasingCodesService,
     PurchasingSetupService,
+    PurchasingPeopleService,
     RequisitionApproversService,
     RequisitionRemindersScheduler,
     InventoryMonitoringService,

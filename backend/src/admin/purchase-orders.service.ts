@@ -6,7 +6,9 @@ import {
   OPEN_PURCHASE_ORDER_STATUSES,
   VENDOR_FILES_MAX_BYTES,
   formatFileSize,
-  approvalStepFor,
+  actsForCompany,
+  approvalRefusal,
+  companyRefusal,
   formatMoney,
   orderChangeNeedsApproval,
   billProblems,
@@ -27,6 +29,7 @@ import {
   type VendorBillView,
   type VendorPaymentMethod,
   type ApprovalStep,
+  type PurchasingStanding,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -36,7 +39,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { PurchasingFileStorageService } from '../common/purchasing-file-storage.service';
 import { MailService } from '../mail/mail.service';
-import { nextDocumentCode, readPurchasingSetup } from './purchasing-settings';
+import { nextDocumentCode, readPurchasingSetup, readStanding } from './purchasing-settings';
 import { vendorFilesOf } from './requisition-files';
 
 /**
@@ -78,6 +81,8 @@ const BILLABLE: Status[] = [...RECEIVABLE, Status.RECEIVED];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Db = Prisma.TransactionClient;
+/** What an order's buttons and approval are held to (Purchasing Setup): the steps, whether approvers decide only for their own companies, and the caller's standing. */
+type OrderRules = { steps: readonly ApprovalStep[]; ownCompaniesOnly: boolean; standing: PurchasingStanding };
 const may = (user: AuthenticatedUser, permission: string) => (user.permissions as readonly string[]).includes(permission);
 const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g, ' ') || null;
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
@@ -220,13 +225,16 @@ export class PurchaseOrdersService {
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
   private actions(
     user: AuthenticatedUser,
-    order: Pick<Order, 'status' | 'createdById'>,
+    order: Pick<Order, 'status' | 'createdById' | 'xeroTenantId'>,
     totalCents: number,
-    steps: readonly ApprovalStep[],
+    rules: OrderRules,
     bill: { status: string; enteredById: string } | null = null,
     changedById: string | null = null,
   ): PurchaseOrderActions {
-    const purchaser = may(user, ORDER);
+    // Only for the companies Setup gives the caller (Purchasing Setup, 2026-11-21): ordering, receiving, bills.
+    const acts = actsForCompany(rules.standing, order.xeroTenantId);
+    const decides = !rules.ownCompaniesOnly || acts;
+    const purchaser = may(user, ORDER) && acts;
     const mine = order.createdById === user.id;
     const waiting = order.status === Status.AWAITING_APPROVAL && may(user, APPROVE);
     const approveBlocked = !waiting
@@ -235,25 +243,23 @@ export class PurchaseOrdersService {
         ? 'You made this order, so somebody else approves it.'
         : changedById === user.id
           ? 'You changed this order after it was approved, so somebody else approves the change.'
-          : approvalStepFor(totalCents, steps).approver === 'ANY_AMOUNT' && !may(user, APPROVE_ANY)
-            ? `At ${formatMoney(totalCents)} it needs somebody who may approve any amount.`
-            : null;
+          : approvalRefusal(rules.standing, rules.steps, totalCents, order.xeroTenantId, rules.ownCompaniesOnly);
     return {
       edit: purchaser && order.status === Status.DRAFT,
       // An approved order nothing has arrived for, and no bill is entered against (Purchasing Setup, 2026-11-20).
       change: purchaser && CHANGEABLE.includes(order.status) && !bill,
       submit: purchaser && order.status === Status.DRAFT,
       approve: waiting && !approveBlocked,
-      sendBack: waiting && !mine,
+      sendBack: waiting && !mine && decides,
       send: purchaser && SENDABLE.includes(order.status),
       cancel: purchaser && CANCELLABLE.includes(order.status),
-      receive: may(user, RECEIVE) && RECEIVABLE.includes(order.status),
-      reverseReceipt: may(user, RECEIVE) && (order.status === Status.PARTLY_RECEIVED || order.status === Status.RECEIVED) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
-      bill: may(user, BILLS) && BILLABLE.includes(order.status) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
-      approveBill: may(user, BILLS) && bill?.status === 'MATCHED',
+      receive: may(user, RECEIVE) && acts && RECEIVABLE.includes(order.status),
+      reverseReceipt: may(user, RECEIVE) && acts && (order.status === Status.PARTLY_RECEIVED || order.status === Status.RECEIVED) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
+      bill: may(user, BILLS) && acts && BILLABLE.includes(order.status) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
+      approveBill: may(user, BILLS) && acts && bill?.status === 'MATCHED',
       // Never whoever entered it: a second person looks at a bill that does not match.
-      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && bill?.status === 'HELD' && bill.enteredById !== user.id,
-      pay: may(user, BILLS) && bill?.status === 'APPROVED',
+      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && acts && bill?.status === 'HELD' && bill.enteredById !== user.id,
+      pay: may(user, BILLS) && acts && bill?.status === 'APPROVED',
       closeShort: purchaser && order.status === Status.PARTLY_RECEIVED,
       approveBlocked,
     };
@@ -280,9 +286,10 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId, AND: [this.visible(user)] }, select: ROW });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
-    const [companies, setup, office, deliveries, audits, receipts, vendorFiles] = await Promise.all([
+    const [companies, setup, standing, office, deliveries, audits, receipts, vendorFiles] = await Promise.all([
       this.companyNames(organizationId),
       readPurchasingSetup(this.prisma, organizationId),
+      readStanding(this.prisma, user),
       this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
       this.prisma.purchaseOrderDelivery.findMany({
         where: { organizationId, orderId },
@@ -395,7 +402,7 @@ export class PurchaseOrdersService {
         const note = (audit.metadata as { note?: string | null } | null)?.note;
         return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${STEP[audit.action] ?? 'changed it'}${note ? `: ${note}` : ''}` };
       }),
-      can: this.actions(user, order, totals.totalCents, setup.settings.steps, order.bill, changedBy(audits)),
+      can: this.actions(user, order, totals.totalCents, { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing }, order.bill, changedBy(audits)),
       approvalSteps: setup.settings.steps,
       reapproveChangedOrders: setup.approvals.reapproveChangedOrders,
     };
@@ -438,6 +445,7 @@ export class PurchaseOrdersService {
         if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
         if (requisition.status !== PurchaseRequisitionStatus.APPROVED && requisition.status !== PurchaseRequisitionStatus.ORDERED)
           throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', 'Orders are made from an approved requisition.');
+        await this.assertActs(tx, user, requisition.xeroTenantId);
         const quoteVendor = requisition.quotes[0]?.vendor;
         const usable = (vendor: typeof quoteVendor | null) => (vendor?.active ? vendor : null);
         const vendors = new Map(requisition.lines.flatMap((line) => (usable(line.vendor) ? [[line.vendor!.id, line.vendor!] as const] : [])));
@@ -501,6 +509,7 @@ export class PurchaseOrdersService {
         createdById: true,
         submittedAt: true,
         taxBasisPoints: true,
+        xeroTenantId: true,
         vendor: { select: { name: true } },
         lines: { select: { itemId: true, quantity: true, unitPriceCents: true } },
         requisition: { select: { number: true, lines: { select: { itemId: true } } } },
@@ -509,6 +518,12 @@ export class PurchaseOrdersService {
     });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
     return order;
+  }
+
+  /** A purchaser, receiver or bill keeper limited to some companies acts only on theirs (Purchasing Setup, 2026-11-21). */
+  private async assertActs(db: Pick<Db, 'purchasingPerson'>, user: AuthenticatedUser, companyTenantId: string | null, what = 'order') {
+    const refused = companyRefusal(await readStanding(db, user), companyTenantId, what);
+    if (refused) throw new ApplicationError(403, 'PURCHASE_ORDER_COMPANY_NOT_YOURS', refused);
   }
 
   /** One status change, made only if the order is still where the caller saw it. */
@@ -531,6 +546,7 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
+      await this.assertActs(tx, user, order.xeroTenantId);
       const changing = CHANGEABLE.includes(order.status);
       if (order.status !== Status.DRAFT && !changing)
         throw new ApplicationError(409, 'PURCHASE_ORDER_FIXED', 'An order cannot be changed while it waits for approval, or once goods have arrived.');
@@ -610,6 +626,7 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
+      await this.assertActs(tx, user, order.xeroTenantId);
       if (order.status !== Status.DRAFT) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order has already been submitted.');
       const problem = orderSubmitProblem(order);
       if (problem) throw new ApplicationError(409, 'PURCHASE_ORDER_NOT_READY', problem);
@@ -632,9 +649,13 @@ export class PurchaseOrdersService {
       if (order.status !== Status.AWAITING_APPROVAL) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order is no longer waiting for a decision.');
       if (order.createdById === user.id) throw new ApplicationError(403, 'PURCHASE_ORDER_OWN', 'You made this order, so somebody else decides it.');
       const totalCents = orderTotals(order.lines, order.taxBasisPoints).totalCents;
+      const [setup, standing] = await Promise.all([readPurchasingSetup(tx, organizationId), readStanding(tx, user)]);
+      if (setup.approvals.approverOwnCompaniesOnly) {
+        const refused = companyRefusal(standing, order.xeroTenantId, 'decide orders');
+        if (refused) throw new ApplicationError(403, 'PURCHASE_ORDER_COMPANY_NOT_YOURS', refused);
+      }
       if (decision === 'APPROVED') {
-        const [{ settings }, audits] = await Promise.all([
-          readPurchasingSetup(tx, organizationId),
+        const [audits] = await Promise.all([
           tx.auditLog.findMany({
             where: { organizationId, entityType: ENTITY, entityId: orderId, action: { in: ['PURCHASE_ORDER_APPROVED', 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL'] } },
             select: { action: true, actorUserId: true, metadata: true },
@@ -642,7 +663,8 @@ export class PurchaseOrdersService {
             take: 1,
           }),
         ]);
-        const { approveBlocked } = this.actions(user, order, totalCents, settings.steps, null, changedBy(audits));
+        const rules = { steps: setup.settings.steps, ownCompaniesOnly: setup.approvals.approverOwnCompaniesOnly, standing };
+        const { approveBlocked } = this.actions(user, order, totalCents, rules, null, changedBy(audits));
         if (approveBlocked) throw new ApplicationError(403, 'PURCHASE_ORDER_OVER_LIMIT', approveBlocked);
         await this.move(tx, organizationId, orderId, [Status.AWAITING_APPROVAL], { status: Status.APPROVED, approvedById: user.id, approvedAt: new Date(), decisionNote: note });
       } else {
@@ -664,6 +686,7 @@ export class PurchaseOrdersService {
     if (!reason) throw new ApplicationError(400, 'PURCHASE_ORDER_REASON_NEEDED', 'Say why it is cancelled.');
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
+      await this.assertActs(tx, user, order.xeroTenantId);
       if (!CANCELLABLE.includes(order.status)) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order is already cancelled.');
       await this.move(tx, organizationId, orderId, CANCELLABLE, { status: Status.CANCELLED, cancelledById: user.id, cancelledAt: new Date(), cancelReason: reason });
       // One order a vendor (2026-11-20): the requisition is approved again only once none of its orders is left;
@@ -697,6 +720,7 @@ export class PurchaseOrdersService {
       return this.detail(user, orderId);
     }
     const order = await this.found(this.prisma, user, orderId);
+    await this.assertActs(this.prisma, user, order.xeroTenantId);
     if (!SENDABLE.includes(order.status)) throw new ApplicationError(409, 'PURCHASE_ORDER_NOT_SENDABLE', 'An order is sent to the vendor once it is approved.');
 
     // The requisition's files ticked for the vendor go too (2026-11-20). Read

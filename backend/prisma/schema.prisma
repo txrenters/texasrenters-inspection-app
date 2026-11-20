@@ -419,6 +419,7 @@ model Organization {
   documentSeries DocumentSeries[]
   purchasingSettings PurchasingSettings?
   purchasingApprovalSteps PurchasingApprovalStep[]
+  purchasingPeople PurchasingPerson[]
   purchasingCodes      PurchasingCode[]
   purchasingCodeXeroOptions PurchasingCodeXeroOption[]
   purchaseRequisitions PurchaseRequisition[]
@@ -511,6 +512,8 @@ model Role {
   name           String
   description    String?
   permissions    String[]             @default([])
+  /// Which purchasing role this is, when it is one (Purchasing Setup, 2026-11-21): one Role an office for each.
+  purchasingRole String?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -658,6 +661,7 @@ model UserProfile {
   requisitionsDecided        PurchaseRequisition[] @relation("RequisitionDecidedBy")
   requisitionFilesAttached   PurchaseRequisitionFile[] @relation("RequisitionFileAttachedBy")
   requisitionNotesWritten    PurchaseRequisitionNote[] @relation("RequisitionNoteWrittenBy")
+  purchasingPerson           PurchasingPerson[]
   requisitionLinksAdded      PurchaseRequisitionLink[] @relation("RequisitionLinkAddedBy")
   purchaseOrdersMade         PurchaseOrder[]       @relation("PurchaseOrderMadeBy")
   purchaseOrdersApproved     PurchaseOrder[]       @relation("PurchaseOrderApprovedBy")
@@ -5956,9 +5960,29 @@ model PurchasingSettings {
   filesMax               Int      @default(20)
   quoteFileAboveCents    Int?
   fileRemoval            String   @default("UNTIL_SENT")
+  /// An approver approves only for their own companies (Purchasing Setup, 2026-11-21).
+  approverOwnCompaniesOnly Boolean @default(true)
   updatedAt          DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// A person's companies and approver limit in purchasing (Purchasing Setup, 2026-11-21).
+/// With no row, they act for every company with no limit of their own.
+model PurchasingPerson {
+  organizationId     String   @db.Uuid
+  userProfileId      String   @db.Uuid
+  /// The Xero tenants they act for; empty is every company.
+  companyTenantIds   String[] @default([])
+  approvesAnyAmount  Boolean  @default(false)
+  /// Never approves above this; null for no limit of their own.
+  approvalLimitCents Int?
+  updatedAt          DateTime @default(now()) @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userProfile  UserProfile  @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, userProfileId])
 }
 
 /// One approval step by amount (Purchasing Setup, 2026-11-20). With none saved,

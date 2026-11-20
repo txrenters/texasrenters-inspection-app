@@ -9,11 +9,12 @@ import { SetupTab } from './setup-tab';
  * the office may keep. Every figure invented.
  */
 
-const hooks = vi.hoisted(() => ({ usePurchasingSetup: vi.fn(), usePurchasingSetupEdits: vi.fn() }));
+// The roles section has its own tests (setup-roles.test.tsx): here it only waits.
+const hooks = vi.hoisted(() => ({ usePurchasingSetup: vi.fn(), usePurchasingSetupEdits: vi.fn(), usePurchasingPeople: vi.fn(() => ({ isLoading: true })), usePurchasingPeopleEdits: vi.fn(() => ({ setRole: { error: null }, savePerson: { error: null }, addPerson: { error: null } })) }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 
 const SETUP: PurchasingSetup = {
-  approvals: { steps: stepsFromLimit(50000, 2), emailApprovers: false, reapproveChangedOrders: false },
+  approvals: { steps: stepsFromLimit(50000, 2), approverOwnCompaniesOnly: true, emailApprovers: false, reapproveChangedOrders: false },
   numbers: [
     { kind: 'PR', label: 'Purchase requisition', prefix: 'PR-', digits: 5, next: 43 },
     { kind: 'PO', label: 'Purchase order', prefix: 'PO-', digits: 4, next: 34 },
@@ -52,7 +53,7 @@ describe('Purchasing Setup', () => {
   it('saves a step as soon as a choice is made, and a typed top when its box is left', () => {
     render(<SetupTab enabled />);
     pick('Step 1: reminder', 'After 1 day');
-    expect(saves.approvals.mutate).toHaveBeenLastCalledWith({ steps: [{ ...SETUP.approvals.steps[0], reminderDays: 1 }, SETUP.approvals.steps[1]], emailApprovers: false, reapproveChangedOrders: false });
+    expect(saves.approvals.mutate).toHaveBeenLastCalledWith({ steps: [{ ...SETUP.approvals.steps[0], reminderDays: 1 }, SETUP.approvals.steps[1]], approverOwnCompaniesOnly: true, emailApprovers: false, reapproveChangedOrders: false });
 
     const top = screen.getByLabelText('Step 1: up to, in dollars');
     fireEvent.change(top, { target: { value: '1,000.00' } });

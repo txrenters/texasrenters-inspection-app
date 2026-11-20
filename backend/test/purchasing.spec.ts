@@ -90,6 +90,8 @@ function database() {
   const audits: Row[] = [];
   const settings: Row[] = [];
   /** Approval steps saved in Purchasing Setup (2026-11-20): none until a test saves some. */
+  /** People's companies and limits (2026-11-21). */
+  const persons: Row[] = [];
   const steps: Row[] = [];
   /** Files attached (2026-11-20). */
   const files: Row[] = [];
@@ -198,8 +200,12 @@ function database() {
         const found = settings.find((row) => row.organizationId === create.organizationId);
         if (found) Object.assign(found, update);
         // The columns' own defaults, as the migration gives them.
-        else settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', ...create });
+        else settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', approverOwnCompaniesOnly: true, ...create });
       }),
+    },
+    // Setup's people (2026-11-21): a test gives somebody companies or a limit by pushing a row.
+    purchasingPerson: {
+      findUnique: jest.fn(async ({ where }: { where: { organizationId_userProfileId: { userProfileId: string } } }) => persons.find((row) => row.userProfileId === where.organizationId_userProfileId.userProfileId) ?? null),
     },
     // Setup's numbers, read back after a save: none changed here.
     documentSeries: { findMany: jest.fn(async () => []) },
@@ -282,7 +288,7 @@ function database() {
   // The approvers are asked by email after a submit (2026-11-20): counted here, sent nowhere.
   const approvers = { ask: jest.fn(async () => 0) };
   const service = new PurchasingService(db as never, approvers as never);
-  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, approvers, steps, setup: new PurchasingSetupService(db as never), filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
+  return { db, requisitions, lines, quotes, audits, codes, files, notes, links, liveOrders, storage, service, approvers, steps, persons, setup: new PurchasingSetupService(db as never), filesService: new RequisitionFilesService(db as never, storage as never, service), notesService: new RequisitionNotesService(db as never, service) };
 }
 
 const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
@@ -520,7 +526,7 @@ describe('the approval steps and the form\'s choices', () => {
   it('move what a manager may approve, by the step its amount falls in', async () => {
     const { service, setup } = database();
     const draft = await service.create(asker, large());
-    await setup.saveApprovals(owner, { steps: [{ ...stepsFromLimit(100000, 2)[0]!, quotesNeeded: 0 }, stepsFromLimit(100000, 2)[1]!], emailApprovers: false, reapproveChangedOrders: false });
+    await setup.saveApprovals(owner, { steps: [{ ...stepsFromLimit(100000, 2)[0]!, quotesNeeded: 0 }, stepsFromLimit(100000, 2)[1]!], approverOwnCompaniesOnly: true, emailApprovers: false, reapproveChangedOrders: false });
     await service.submit(asker, draft.id);
     expect(await service.decide(manager, draft.id, 'APPROVED', {})).toMatchObject({ status: 'APPROVED' });
   });
@@ -919,5 +925,71 @@ describe('the orders made from a requisition (2026-11-20, one a vendor)', () => 
     const { service } = database();
     const draft = await service.create(asker, small());
     expect((await service.detail(asker, draft.id)).from).toEqual({ name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null });
+  });
+});
+
+describe('companies and approver limits (Purchasing Setup, 2026-11-21)', () => {
+  const waiting = async (who: AuthenticatedUser, input: SaveRequisitionInput) => {
+    const made = database();
+    const draft = await made.service.create(who, input);
+    await made.service.submit(who, draft.id);
+    return { ...made, requisitionId: draft.id };
+  };
+  const person = (who: AuthenticatedUser, over: Record<string, unknown>) => ({ organizationId: ORG, userProfileId: who.id, companyTenantIds: [], approvesAnyAmount: false, approvalLimitCents: null, ...over });
+
+  it('lets somebody limited to one company ask only for it, and offers them only it', async () => {
+    const { service, persons } = database();
+    persons.push(person(asker, { companyTenantIds: [PEST] }));
+    await expect(service.create(asker, small())).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS', message: "You ask for stock only for your own companies, and this is another company's." });
+    await expect(service.create(asker, small({ xeroTenantId: null, lines: [] }))).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS' });
+    expect((await service.choices(asker)).companies.map((company) => company.tenantId)).toEqual([PEST]);
+  });
+
+  it('lets an approver decide only for their own companies while the office says so', async () => {
+    const { service, persons, setup, requisitionId } = await waiting(asker, small());
+    persons.push(person(manager, { companyTenantIds: [PEST] }));
+    expect((await service.detail(manager, requisitionId)).can).toMatchObject({
+      approve: false,
+      sendBack: false,
+      reject: false,
+      approveBlocked: "You approve only for your own companies, and this is another company's.",
+    });
+    await expect(service.decide(manager, requisitionId, 'SENT_BACK', { note: 'Which one?' })).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS' });
+
+    const steps = (await service.detail(asker, requisitionId)).settings.steps;
+    await setup.saveApprovals(owner, { steps, approverOwnCompaniesOnly: false, emailApprovers: false, reapproveChangedOrders: false });
+    expect(await service.decide(manager, requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED' });
+  });
+
+  it('never lets an approver above their own limit, and a step can ask for an approver whose limit reaches its top', async () => {
+    // $184.80 asked for.
+    const { service, persons, setup, requisitionId } = await waiting(asker, small());
+    persons.push(person(manager, { approvalLimitCents: 10000 }));
+    expect((await service.detail(manager, requisitionId)).can.approveBlocked).toBe('At $184.80 it is above your approval limit of $100.00.');
+    await expect(service.decide(manager, requisitionId, 'APPROVED', {})).rejects.toMatchObject({ code: 'REQUISITION_OVER_LIMIT' });
+
+    await setup.saveApprovals(owner, {
+      steps: [
+        { upToCents: 20000, approver: 'APPROVER_LIMIT', quotesNeeded: 0, reminderDays: null },
+        { upToCents: null, approver: 'ANY_AMOUNT', quotesNeeded: 2, reminderDays: null },
+      ],
+      approverOwnCompaniesOnly: true,
+      emailApprovers: false,
+      reapproveChangedOrders: false,
+    });
+    persons[0]!.approvalLimitCents = 19000;
+    expect((await service.detail(manager, requisitionId)).can.approveBlocked).toBe('At $184.80 it needs an approver whose own limit is $200.00 or more.');
+    persons[0]!.approvalLimitCents = 20000;
+    expect(await service.decide(manager, requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED' });
+  });
+
+  it('gives "any amount" in Setup to an approver without the permission, and lets a limit set there cap one who has it', async () => {
+    const large1 = await waiting(asker, large());
+    large1.persons.push(person(manager, { approvesAnyAmount: true }));
+    expect(await large1.service.decide(manager, large1.requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED' });
+
+    const large2 = await waiting(asker, large());
+    large2.persons.push(person(owner, { approvalLimitCents: 50000 }));
+    expect((await large2.service.detail(owner, large2.requisitionId)).can.approveBlocked).toBe('At $612.00 it is above your approval limit of $500.00.');
   });
 });

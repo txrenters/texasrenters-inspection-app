@@ -199,6 +199,8 @@ function database() {
     purchasingSettings: { findUnique: jest.fn(async () => null) },
     // No approval steps saved: the office's limit reads as two steps (Purchasing Setup, 2026-11-20).
     purchasingApprovalStep: { findMany: jest.fn(async () => []) },
+    // Setup's people (2026-11-21): none set, so everybody acts for every company with no limit of their own.
+    purchasingPerson: { findUnique: jest.fn(async (): Promise<unknown> => null) },
     invoiceSettings: { findUnique: jest.fn(async () => null) },
     purchaseOrderDelivery: { findMany: jest.fn(async () => []) },
     // No file on any requisition here: purchase-orders.spec.ts covers files ticked for the vendor.
@@ -528,5 +530,14 @@ describe('who may do what', () => {
 
   it('never lets an API key receive goods or pay a bill', () => {
     expect(MACHINE_FORBIDDEN_PERMISSIONS).toEqual(expect.arrayContaining(['purchasing:receive', 'purchasing:bills']));
+  });
+});
+
+describe('companies (Purchasing Setup, 2026-11-21)', () => {
+  it('lets a receiver or bill keeper limited to some companies act only on their orders', async () => {
+    const { db, service } = database();
+    db.purchasingPerson.findUnique.mockResolvedValue({ companyTenantIds: ['tenant-elsewhere'], approvesAnyAmount: false, approvalLimitCents: null });
+    await expect(service.receive(keeper, ORDER, arrival([filters(36)]))).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS', message: 'You receive goods only for your own companies: choose one of them.' });
+    await expect(service.approveBill(clerk, ORDER)).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS' });
   });
 });
