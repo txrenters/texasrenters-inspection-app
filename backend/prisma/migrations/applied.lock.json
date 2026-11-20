@@ -172,5 +172,7 @@
   "202611200013_requisition_notes_and_links": "bf3a383243379834",
   "202611200014_orders_per_vendor": "43141d1c1ef79ebb",
   "202611200015_purchasing_setup": "560b61223219ebe0",
-  "202611210001_purchasing_roles": "ec50b701f8dfdac8"
+  "202611210001_purchasing_roles": "ec50b701f8dfdac8",
+  "202611210002_purchasing_page": "6d06b318b241d4ea",
+  "202611210003_units_of_measure": "4e53d25f8b3a7d1c"
 }

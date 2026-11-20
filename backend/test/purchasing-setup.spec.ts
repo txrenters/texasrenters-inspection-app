@@ -1,7 +1,9 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import {
+  DEFAULT_CODE_KEEPERS,
   DEFAULT_FILE_RULES,
+  DEFAULT_PAGE_LAYOUT,
   MACHINE_FORBIDDEN_PERMISSIONS,
   stepsFromLimit,
   type ApprovalStep,
@@ -10,7 +12,14 @@ import {
   type SaveRequisitionFileRulesInput,
 } from '@texasrenters/shared';
 
-import { PurchasingSetupController, SaveDocumentSeriesDto, SavePurchasingApprovalsDto, SaveRequisitionFileRulesDto } from '../src/admin/purchasing-setup.controller';
+import {
+  PurchasingSetupController,
+  SaveCodeKeepersDto,
+  SaveDocumentSeriesDto,
+  SavePurchasingApprovalsDto,
+  SaveRequisitionFileRulesDto,
+  SaveRequisitionPageDto,
+} from '../src/admin/purchasing-setup.controller';
 import { PurchasingSetupService } from '../src/admin/purchasing-setup.service';
 import { nextDocumentCode } from '../src/admin/purchasing-settings';
 import { RequisitionApproversService } from '../src/admin/requisition-approvers';
@@ -49,7 +58,7 @@ function database() {
       upsert: jest.fn(async ({ create, update }: { create: Row; update: Row }) => {
         if (settings[0]) Object.assign(settings[0], update);
         else
-          settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', approverOwnCompaniesOnly: true, ...create });
+          settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', approverOwnCompaniesOnly: true, codeKeepers: {}, requisitionPage: {}, ...create });
       }),
     },
     purchasingApprovalStep: {
@@ -68,6 +77,13 @@ function database() {
     // The series row under its lock.
     $queryRaw: jest.fn(async (_sql: TemplateStringsArray, ...values: unknown[]) => series.filter((row) => row.kind === values[1])),
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
+    // Setup's Codes section counts what is in use (2026-11-21).
+    stockItem: { count: jest.fn(async () => 214) },
+    stockCategory: { count: jest.fn(async () => 9) },
+    purchasingCode: { groupBy: jest.fn(async () => [{ kind: 'LINE_TYPE', _count: { _all: 3 } }, { kind: 'UNIT', _count: { _all: 11 } }]) },
+    stockPlace: { count: jest.fn(async () => 5) },
+    vendor: { count: jest.fn(async () => 18) },
+    xeroOrganisation: { count: jest.fn(async () => 3) },
   };
   const client: unknown = Object.assign(db, { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) });
   return { db, settings, steps, series, audits, service: new PurchasingSetupService(client as never) };
@@ -262,5 +278,63 @@ describe('asking and reminding the approvers', () => {
     await new RequisitionRemindersScheduler(prisma as never, approvers as never).tick(new Date('2026-11-21T15:00:00.000Z'));
     expect(prisma.purchasingApprovalStep.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { reminderDays: { not: null } } }));
     expect(approvers.remind.mock.calls.map(([organizationId]) => organizationId)).toEqual(['office-a', 'office-b']);
+  });
+});
+
+describe('Purchasing Setup, part 5c (2026-11-21): who keeps each code list, and the requisition page', () => {
+  it('shows each list with who keeps it -- as before Setup -- and how many are in use, and the page as it was', async () => {
+    const { service } = database();
+    const setup = await service.read(admin);
+    expect(setup.codes.map((one) => [one.list, one.keeper, one.inUse])).toEqual([
+      ['ITEMS', 'STOCK_KEEPER', 214],
+      ['CATEGORIES', 'STOCK_KEEPER', 9],
+      ['LINE_TYPES', 'CODE_ADMIN', 3],
+      ['UNITS', 'CODE_ADMIN', 11],
+      ['REQUEST', 'CODE_ADMIN', 0],
+      ['DEPARTMENT', 'CODE_ADMIN', 0],
+      ['COST_CENTER', 'CODE_ADMIN', 0],
+      ['PLACES', 'STOCK_KEEPER', 5],
+      ['VENDORS', 'STOCK_KEEPER', 18],
+      ['PURCHASER_CODES', 'CODE_ADMIN', 3],
+    ]);
+    expect(setup.page).toEqual(DEFAULT_PAGE_LAYOUT);
+  });
+
+  it('keeps who keeps each list, auditing only the lists that changed', async () => {
+    const { service, settings, audits } = database();
+    const saved = await service.saveCodeKeepers(admin, { keepers: { ...DEFAULT_CODE_KEEPERS, VENDORS: 'PURCHASER' } });
+    expect(saved.codes.find((one) => one.list === 'VENDORS')).toMatchObject({ keeper: 'PURCHASER' });
+    expect(settings[0]).toMatchObject({ codeKeepers: expect.objectContaining({ VENDORS: 'PURCHASER', ITEMS: 'STOCK_KEEPER' }) });
+    expect(audits).toEqual([expect.objectContaining({ metadata: { section: 'codes', from: { VENDORS: 'STOCK_KEEPER' }, to: { VENDORS: 'PURCHASER' } } })]);
+    await service.saveCodeKeepers(admin, { keepers: { ...DEFAULT_CODE_KEEPERS, VENDORS: 'PURCHASER' } });
+    expect(audits).toHaveLength(1);
+    await expect(service.saveCodeKeepers(admin, { keepers: { ...DEFAULT_CODE_KEEPERS, VENDORS: 'BILL_PAYER' as never } })).rejects.toMatchObject({ code: 'PURCHASING_KEEPERS_INVALID' });
+  });
+
+  it('keeps the page: a field required is shown, every FactBox listed once, in the order given', async () => {
+    const { service, audits } = database();
+    const page = {
+      fields: { ...DEFAULT_PAGE_LAYOUT.fields, REQUEST_CODE: { shown: true, required: true } },
+      factBoxes: [...DEFAULT_PAGE_LAYOUT.factBoxes].reverse().map((box) => (box.key === 'VENDOR_STATISTICS' ? { ...box, shown: true, audience: ['PURCHASER' as const, 'APPROVER' as const] } : box)),
+    };
+    const saved = await service.saveRequisitionPage(admin, page);
+    expect(saved.page.fields.REQUEST_CODE).toEqual({ shown: true, required: true });
+    expect(saved.page.factBoxes.map((box) => box.key)).toEqual(['VENDOR_STATISTICS', 'ITEM_AVAILABILITY', 'LINE_DETAILS', 'ATTACHMENTS', 'STATISTICS']);
+    expect(audits).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ section: 'page' }) })]);
+    await expect(service.saveRequisitionPage(admin, { ...page, fields: { ...page.fields, COST_CENTER: { shown: false, required: true } } })).rejects.toMatchObject({
+      code: 'PURCHASING_PAGE_INVALID',
+      message: 'Cost Center Code is required, so it is shown.',
+    });
+  });
+
+  it('names every field of the two new saves, and needs a Purchasing admin', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const check = (value: unknown, metatype: new () => object) => pipe.transform(value, { type: 'body', metatype });
+    await expect(check({ keepers: DEFAULT_CODE_KEEPERS }, SaveCodeKeepersDto)).resolves.toBeDefined();
+    await expect(check(DEFAULT_PAGE_LAYOUT, SaveRequisitionPageDto)).resolves.toBeDefined();
+    await expect(check({ keepers: { ...DEFAULT_CODE_KEEPERS, VENDORS: 'ANYBODY' } }, SaveCodeKeepersDto)).rejects.toBeDefined();
+    await expect(check({ ...DEFAULT_PAGE_LAYOUT, factBoxes: [{ key: 'GOSSIP', shown: true, audience: [] }] }, SaveRequisitionPageDto)).rejects.toBeDefined();
+    for (const route of ['saveCodeKeepers', 'saveRequisitionPage'])
+      expect(Reflect.getMetadata('permissions', (PurchasingSetupController.prototype as unknown as Record<string, object>)[route]!)).toEqual(['purchasing:setup']);
   });
 });

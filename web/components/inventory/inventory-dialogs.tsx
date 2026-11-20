@@ -157,6 +157,71 @@ function ActiveSwitch({ id, checked, onChange, label }: { id: string; checked: b
   );
 }
 
+type Unit = { code: string; name: string };
+
+/** A new item's unit: the usual word, or nothing chosen yet when the units of measure do not have it. */
+export function firstUnit(units: readonly Unit[] | undefined, usual: string): string {
+  if (!units?.length) return usual;
+  return units.find((unit) => unit.name.toLowerCase() === usual.toLowerCase())?.name ?? '';
+}
+
+/**
+ * What an item is counted in (Purchasing Setup, 2026-11-21): chosen from the
+ * units of measure once Purchasing's Codes tab has any, which the server holds
+ * too; any word before that. An item keeps a unit it had, even one not listed.
+ */
+export function UnitField({
+  id,
+  label,
+  value,
+  onChange,
+  units,
+  saved,
+  description,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  units?: readonly Unit[];
+  /** The item's unit as saved, kept choosable. */
+  saved?: string;
+  description: string;
+  placeholder?: string;
+}) {
+  if (!units?.length) {
+    return (
+      <Field>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <Input autoComplete="off" id={id} maxLength={30} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required value={value} />
+        <FieldDescription>{description}</FieldDescription>
+      </Field>
+    );
+  }
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const names = units.map((unit) => unit.name);
+  const options = saved && !names.some((name) => same(name, saved)) ? [saved, ...names] : names;
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Select onValueChange={onChange} value={options.find((name) => same(name, value)) ?? ''}>
+        <SelectTrigger className="w-full" id={id}>
+          <SelectValue placeholder="Choose a unit" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((name) => (
+            <SelectItem key={name} value={name}>
+              {name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FieldDescription>From the units of measure on Purchasing&apos;s Codes tab.</FieldDescription>
+    </Field>
+  );
+}
+
 // ── Item ──────────────────────────────────────────────────────────────────
 
 export function ItemDialog({
@@ -164,6 +229,7 @@ export function ItemDialog({
   categories,
   companies,
   vendors,
+  units,
   companyFixed = false,
   onSave,
   onClose,
@@ -175,6 +241,8 @@ export function ItemDialog({
   categories: readonly StockCategoryRow[];
   companies: readonly StockCompany[];
   vendors: readonly { id: string; name: string }[];
+  /** The units of measure, once there are any. */
+  units?: readonly Unit[];
   /** It has moved already, so its company stays (the server holds this too). */
   companyFixed?: boolean;
   onSave: (input: SaveStockItemInput) => Promise<unknown>;
@@ -183,7 +251,7 @@ export function ItemDialog({
   error: Error | null;
 }) {
   const [name, setName] = useState(item?.name ?? '');
-  const [unit, setUnit] = useState(item?.unit ?? 'each');
+  const [unit, setUnit] = useState(item?.unit ?? firstUnit(units, 'each'));
   const [category, setCategory] = useState(item?.category?.id ?? NONE);
   const [company, setCompany] = useState(item?.company?.tenantId ?? NONE);
   const [vendor, setVendor] = useState(item?.usualVendor?.id ?? NONE);
@@ -260,11 +328,7 @@ export function ItemDialog({
           <FieldLabel htmlFor="item-name">Name</FieldLabel>
           <Input autoComplete="off" id="item-name" maxLength={160} onChange={(event) => setName(event.target.value)} required value={name} />
         </Field>
-        <Field>
-          <FieldLabel htmlFor="item-unit">Counted in</FieldLabel>
-          <Input autoComplete="off" id="item-unit" maxLength={30} onChange={(event) => setUnit(event.target.value)} required value={unit} />
-          <FieldDescription>each, box, jug.</FieldDescription>
-        </Field>
+        <UnitField description="each, box, jug." id="item-unit" label="Counted in" onChange={setUnit} saved={item?.unit} units={units} value={unit} />
       </div>
       <Choice
         description={companyFixed ? 'This item already has stock movements, so its company stays.' : 'The company whose books this stock belongs to.'}

@@ -145,6 +145,10 @@ export interface StockList {
   categories: StockCategoryRow[];
   /** What an item can be on a line (2026-11-20): Item keeps stock, Service does not. */
   lineTypes: { id: string; code: string; name: string; keepsStock: boolean; active: boolean }[];
+  /** The units an item is counted in, in use (Purchasing Setup, 2026-11-21); none yet, any word. */
+  units?: { code: string; name: string }[];
+  /** The code lists the caller makes and changes here, by the role Setup gives each (2026-11-21). */
+  keeps?: { items: boolean; categories: boolean; places: boolean; vendors: boolean };
 }
 
 /** A new category needs its name and prefix. The prefix can change only until it has numbered an item. */

@@ -2,6 +2,7 @@
 
 import type { ComponentProps, KeyboardEvent, ReactNode } from 'react';
 
+import { RequiredMark } from '@/components/purchasing/nav-kit';
 import { Table, TableBody, TableHeader } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
@@ -19,6 +20,8 @@ export interface SheetColumn {
   numeric?: boolean;
   /** A Tailwind width, e.g. `w-40`. */
   width?: string;
+  /** Filled in on every line before it is sent (Purchasing Setup, 2026-11-21). */
+  required?: boolean;
 }
 
 /** A cell that holds an editor: the editor fills it. */
@@ -53,6 +56,7 @@ export function SheetHead({ columns }: { columns: readonly SheetColumn[] }) {
             scope="col"
           >
             {column.label}
+            {column.required ? <RequiredMark /> : null}
           </th>
         ))}
       </tr>

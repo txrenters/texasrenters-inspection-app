@@ -10,6 +10,7 @@ import {
   orderGroups,
   requisitionerCode,
   requisitionSubmitProblem,
+  orderTotals,
   requisitionTotalCents,
   type PurchasingSettings,
   type PurchasingStanding,
@@ -20,6 +21,7 @@ import {
   type RequisitionHistoryEntry,
   type RequisitionList,
   type RequisitionRow,
+  type VendorStats,
   type SaveRequisitionInput,
 } from '@texasrenters/shared';
 
@@ -139,6 +141,27 @@ export async function nextDocumentNumber(db: Pick<Db, '$queryRaw'>, organization
     ON CONFLICT ("organizationId", "kind") DO UPDATE SET "next" = "DocumentSeries"."next" + 1
     RETURNING "next" - 1 AS taken`;
   return Number(taken!.taken);
+}
+
+/** Orders still to arrive, for Vendor Statistics. */
+const OPEN_ORDER = ['AWAITING_APPROVAL', 'APPROVED', 'SENT', 'PARTLY_RECEIVED'] as const;
+
+/** Each vendor's open orders, this year's spend and last order, from its orders newest first. */
+function vendorStatsOf(orders: { vendorId: string | null; number: string | null; status: string; createdAt: Date; taxBasisPoints: number; lines: { quantity: number; unitPriceCents: number }[] }[]): Record<string, VendorStats> {
+  const year = businessDate().slice(0, 4);
+  const stats: Record<string, VendorStats> = {};
+  for (const order of orders) {
+    if (!order.vendorId) continue;
+    const one = (stats[order.vendorId] ??= { openOrders: 0, openCents: 0, orderedThisYearCents: 0, lastOrder: null });
+    const totalCents = orderTotals(order.lines, order.taxBasisPoints).totalCents;
+    if ((OPEN_ORDER as readonly string[]).includes(order.status)) {
+      one.openOrders += 1;
+      one.openCents += totalCents;
+    }
+    if (businessDate(order.createdAt).startsWith(year)) one.orderedThisYearCents += totalCents;
+    if (!one.lastOrder && order.number) one.lastOrder = { number: order.number, on: businessDate(order.createdAt) };
+  }
+  return stats;
 }
 
 /** The history's words for each audited step. */
@@ -341,7 +364,7 @@ export class PurchasingService {
    */
   async choices(user: AuthenticatedUser): Promise<RequisitionChoices> {
     const organizationId = user.organizationId;
-    const [items, levels, places, companies, vendors, settings, codes, categories, ordered, standing] = await Promise.all([
+    const [items, levels, places, companies, vendors, settings, codes, categories, ordered, standing, vendorOrders] = await Promise.all([
       this.prisma.stockItem.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true, priceCents: true, lineTypeId: true, categoryId: true, usualVendorId: true },
@@ -362,6 +385,18 @@ export class PurchasingService {
         take: 5000,
       }),
       readStanding(this.prisma, user),
+      // Vendor Statistics (2026-11-21): this year's orders and every one still open, newest first.
+      this.prisma.purchaseOrder.findMany({
+        where: {
+          organizationId,
+          vendorId: { not: null },
+          status: { notIn: ['DRAFT', 'CANCELLED'] },
+          OR: [{ createdAt: { gte: dateOf(`${businessDate().slice(0, 4)}-01-01`) } }, { status: { in: [...OPEN_ORDER] } }],
+        },
+        select: { vendorId: true, number: true, status: true, createdAt: true, taxBasisPoints: true, lines: { select: { quantity: true, unitPriceCents: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 3000,
+      }),
     ]);
     const held = new Map<string, { quantity: number; valueCents: number; places: { placeId: string; quantity: number }[] }>();
     for (const level of levels) {
@@ -404,6 +439,7 @@ export class PurchasingService {
       // A person limited to some companies asks only for theirs (Purchasing Setup, 2026-11-21).
       companies: companies.connected.filter((company) => actsForCompany(standing, company.tenantId)),
       vendors,
+      vendorStats: vendorStatsOf(vendorOrders),
       settings,
       lineTypes: codes.filter((code) => code.kind === 'LINE_TYPE').map(({ id, code, name, keepsStock }) => ({ id, code, name, keepsStock })),
       requestCodes: ofKind('REQUEST'),
@@ -532,7 +568,14 @@ export class PurchasingService {
         status: true,
         reason: true,
         submittedAt: true,
-        lines: { select: { quantity: true, estimatedUnitCostCents: true } },
+        // The fields the office may require (Purchasing Setup, 2026-11-21).
+        requestCodeId: true,
+        costCenterId: true,
+        documentDate: true,
+        neededBy: true,
+        deliverToPlaceId: true,
+        xeroTenantId: true,
+        lines: { select: { quantity: true, estimatedUnitCostCents: true, departmentId: true, notes: true } },
         quotes: { select: { chosen: true } },
         // Above the office's amount, a file -- the quote -- must be attached before it is sent.
         files: { select: { id: true } },
@@ -573,7 +616,7 @@ export class PurchasingService {
     await this.prisma.$transaction(async (tx) => {
       const requisition = await this.own(tx, user, requisitionId);
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has already been submitted.');
-      const problem = requisitionSubmitProblem(requisition, await this.settings(tx, organizationId));
+      const problem = requisitionSubmitProblem({ ...requisition, documentDate: dayOf(requisition.documentDate), neededBy: dayOf(requisition.neededBy) }, await this.settings(tx, organizationId));
       if (problem) throw new ApplicationError(409, 'REQUISITION_NOT_READY', problem);
       const number = requisition.number ?? (await nextDocumentCode(tx, organizationId, 'PR'));
       await this.move(tx, organizationId, requisitionId, EDITABLE, {

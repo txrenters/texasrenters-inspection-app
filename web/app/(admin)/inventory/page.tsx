@@ -54,6 +54,8 @@ export default function InventoryPage() {
   const [category, setCategory] = useState<Editing<StockCategoryRow>>(null);
   const stock = useStock();
   const edits = useInventoryEdits();
+  // Who keeps each list is Purchasing Setup's (2026-11-21), answered by the server; before it answers, the stock keeper as before.
+  const keeps = stock.data?.keeps ?? { items: canManage, categories: canManage, places: canManage, vendors: canManage };
 
   const add =
     state.tab === 'categories' ? (
@@ -66,7 +68,7 @@ export default function InventoryPage() {
   return (
     <>
       <PageHeader
-        actions={canManage ? add : undefined}
+        actions={(state.tab === 'categories' ? keeps.categories : keeps.items) ? add : undefined}
         description="What the office stocks, where it is, and who it is bought from."
         info={
           <>
@@ -97,7 +99,7 @@ export default function InventoryPage() {
           ) : stock.isError || !stock.data ? (
             <ErrorState error={stock.error} retry={() => void stock.refetch()} />
           ) : (
-            <StockTab canManage={canManage} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
+            <StockTab canManage={keeps.items} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
           )}
         </TabsContent>
         <TabsContent value="codes">
@@ -106,7 +108,7 @@ export default function InventoryPage() {
           ) : !stock.data ? (
             <DataTableSkeleton columns={STOCK_COLUMNS} label="Loading item codes" rows={6} />
           ) : (
-            <ItemCodesTab canManage={canManage} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} lineTypes={stock.data.lineTypes} />
+            <ItemCodesTab canManage={keeps.items} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} lineTypes={stock.data.lineTypes} units={stock.data.units} />
           )}
         </TabsContent>
         <TabsContent value="withdrawals">
@@ -125,13 +127,13 @@ export default function InventoryPage() {
             <DataTableSkeleton columns={CATEGORY_COLUMNS} label="Loading categories" rows={3} />
           ) : !stock.data.categories.length ? (
             <EmptyState
-              description={canManage ? 'Add a category for each kind of stock, with the prefix its codes start with. Items are then numbered by the console.' : 'No category has been added yet.'}
+              description={keeps.categories ? 'Add a category for each kind of stock, with the prefix its codes start with. Items are then numbered by the console.' : 'No category has been added yet.'}
               icon={TagsIcon}
               title="No categories yet"
             />
           ) : (
             <DataTable
-              actions={canManage ? (row) => <EditButton label={`Edit ${row.name}`} onClick={() => setCategory({ row })} /> : undefined}
+              actions={keeps.categories ? (row) => <EditButton label={`Edit ${row.name}`} onClick={() => setCategory({ row })} /> : undefined}
               columns={CATEGORY_COLUMNS}
               label="Categories and their codes"
               rowKey={(row) => row.id}
@@ -140,10 +142,10 @@ export default function InventoryPage() {
           )}
         </TabsContent>
         <TabsContent value="places">
-          <PlacesTab canManage={canManage} enabled={state.tab === 'places'} />
+          <PlacesTab canManage={keeps.places} enabled={state.tab === 'places'} />
         </TabsContent>
         <TabsContent value="vendors">
-          <VendorsTab canManage={canManage} enabled={state.tab === 'vendors'} />
+          <VendorsTab canManage={keeps.vendors} enabled={state.tab === 'vendors'} />
         </TabsContent>
       </Tabs>
 
@@ -151,6 +153,7 @@ export default function InventoryPage() {
         <ItemDialog
           categories={stock.data.categories}
           companies={stock.data.companies}
+          units={stock.data.units}
           error={edits.createItem.error}
           onClose={() => {
             setItem(false);

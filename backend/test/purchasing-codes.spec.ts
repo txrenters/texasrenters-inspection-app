@@ -54,6 +54,9 @@ function database(start: { lineTypes?: boolean } = {}) {
   const inOrg = (row: Row, where: Row) => row.organizationId === where.organizationId;
 
   const db = {
+    // Purchasing Setup (2026-11-21): nothing saved, so every list is kept as before Setup.
+    purchasingSettings: { findUnique: jest.fn(async (): Promise<unknown> => null) },
+    purchasingApprovalStep: { findMany: jest.fn(async () => []) },
     purchasingCode: {
       findFirst: jest.fn(async ({ where }: { where: Row }) => codes.find((row) => inOrg(row, where) && (where.id === undefined || row.id === where.id) && (where.kind === undefined || row.kind === where.kind)) ?? null),
       findMany: jest.fn(async ({ where }: { where: Row }) =>
@@ -93,12 +96,16 @@ function database(start: { lineTypes?: boolean } = {}) {
         return Object.assign(row, data);
       }),
     },
-    stockItem: { groupBy: jest.fn(async () => [{ lineTypeId: id(1), _count: { _all: 12 } }]) },
+    // By line type, or (units of measure, 2026-11-21) by unit.
+    stockItem: {
+      groupBy: jest.fn(async ({ by }: { by: string[] }) => (by.includes('unit') ? [{ unit: 'Each', _count: { _all: 12 } }] : [{ lineTypeId: id(1), _count: { _all: 12 } }])),
+      updateMany: jest.fn(async () => ({ count: 12 })),
+    },
     stockLevel: { findFirst: jest.fn(async ({ where }: { where: { item: { lineTypeId: string } } }) => (stocked.has(where.item.lineTypeId) ? { item: { code: 'FLT-16251' } } : null)) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
   };
   const client: unknown = Object.assign(db, { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>) => work(client)) });
-  return { codes, options, companies, audits, stocked, service: new PurchasingCodesService(client as never) };
+  return { db, codes, options, companies, audits, stocked, service: new PurchasingCodesService(client as never) };
 }
 
 describe('the lists', () => {
@@ -225,9 +232,37 @@ describe('the routes', () => {
     await expect(check({ ...code, kind: 'SOMETHING' }, SavePurchasingCodeDto)).rejects.toBeTruthy();
   });
 
-  it('need "Manage purchasing codes", which no API key may hold', () => {
-    for (const handler of ['list', 'create', 'update', 'setPurchaserCode'] as const)
-      expect(Reflect.getMetadata('permissions', PurchasingCodesController.prototype[handler])).toEqual(['purchasing:codes']);
-    expect(MACHINE_FORBIDDEN_PERMISSIONS).toContain('purchasing:codes');
+  // Purchasing Setup (2026-11-21): read by anybody in purchasing, kept by the role Setup gives each list.
+  it('are read by anybody in purchasing and reached by any keeper, which no API key may be', () => {
+    const anyOf = (handler: 'list' | 'create' | 'update' | 'setPurchaserCode') => Reflect.getMetadata('anyPermissions', PurchasingCodesController.prototype[handler]) as string[];
+    expect(anyOf('list')).toEqual(['purchasing:request', 'inventory:manage', 'purchasing:codes', 'purchasing:order', 'purchasing:setup']);
+    for (const handler of ['create', 'update', 'setPurchaserCode'] as const) expect(anyOf(handler)).toEqual(['inventory:manage', 'purchasing:codes', 'purchasing:order', 'purchasing:setup']);
+    for (const permission of ['inventory:manage', 'purchasing:codes', 'purchasing:order', 'purchasing:setup']) expect(MACHINE_FORBIDDEN_PERMISSIONS).toContain(permission);
   });
 });
+
+describe('who keeps each list, and units of measure (Purchasing Setup, 2026-11-21)', () => {
+  const keeper = { ...admin, id: id(801), roles: [UserRole.PROPERTY_ADMIN], permissions: ['inventory:manage'] } as unknown as AuthenticatedUser;
+
+  it('lets the code admin make units, counted by the items named in them, and says which lists they keep', async () => {
+    const { service } = database();
+    const made = await service.create(admin, { kind: 'UNIT', code: ' ea ', name: 'each' });
+    expect(made.codes.find((code) => code.kind === 'UNIT')).toMatchObject({ code: 'EA', name: 'each', used: 12 });
+    expect(made.keeps).toEqual({ LINE_TYPE: true, UNIT: true, REQUEST: true, DEPARTMENT: true, COST_CENTER: true, PURCHASER_CODES: true });
+  });
+
+  it('refuses a stock keeper a list Setup gives the code admin', async () => {
+    const { service } = database();
+    await expect(service.create(keeper, { kind: 'UNIT', code: 'BX', name: 'box' })).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS', message: 'Units of measure are kept by somebody else here: Purchasing Setup says who.' });
+    await expect(service.setPurchaserCode(keeper, THMP, { purchaserCode: 'THMP' })).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS' });
+  });
+
+  it('carries a unit renamed to every item counted in it', async () => {
+    const { db, service, codes } = database();
+    await service.create(admin, { kind: 'UNIT', code: 'EA', name: 'each' });
+    const unit = codes.find((code) => code.kind === 'UNIT')!;
+    await service.update(admin, unit.id as string, { name: 'Each one' });
+    expect(db.stockItem.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, unit: { equals: 'each', mode: 'insensitive' } }, data: { unit: 'Each one' } });
+  });
+});
+

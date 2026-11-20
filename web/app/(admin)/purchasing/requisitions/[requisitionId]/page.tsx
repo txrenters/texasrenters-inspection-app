@@ -89,6 +89,7 @@ export default function RequisitionPage() {
         choices={choices.data}
         decisions={{ step: act, makeOrder, ordering: orders.create.isPending, error: orders.create.error ?? edits.step.error }}
         error={edits.update.error ?? edits.step.error}
+        permissions={profile?.permissions ?? []}
         // A new page when it changes between being read and being changed: Reopen, Cancel Approval Request.
         key={`${data.id}-${editing ? 'edit' : 'read'}`}
         onDiscard={() => void act('cancel').catch(() => undefined)}

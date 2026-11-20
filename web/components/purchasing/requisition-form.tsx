@@ -4,16 +4,20 @@ import {
   MOST_REQUISITION_LINES,
   MOST_REQUISITION_QUOTES,
   REQUISITION_STATUS_LABEL,
+  FACT_BOXES,
   approvalStepFor,
   approvalStepRange,
+  factBoxesFor,
   formatMoney,
   orderGroups,
   parseMoney,
   requisitionSubmitProblem,
   requisitionTotalCents,
   stockStatus,
+  type FactBoxKey,
   type RequisitionChoices,
   type RequisitionDetail,
+  type RequisitionFieldKey,
   type RequisitionLine,
   type RequisitionLineInput,
   type SaveRequisitionInput,
@@ -21,7 +25,7 @@ import {
 import { ChevronDownIcon, FilterIcon, ListPlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useId, useState, type Dispatch, type SetStateAction } from 'react';
+import { Fragment, useId, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 
 import { ScanField } from '@/components/inventory/scan-field';
 import { AttachmentsFactBox } from '@/components/purchasing/attachments-factbox';
@@ -181,6 +185,7 @@ export function RequisitionForm({
   readOnly = false,
   decisions,
   onPrint,
+  permissions = [],
 }: {
   choices: RequisitionChoices;
   /** The requisition being changed or read; none for a new one. */
@@ -200,6 +205,8 @@ export function RequisitionForm({
   decisions?: RequisitionDecisions;
   /** Print...: the requisition as it was last saved, as a PDF (2026-11-20, part 4). None for a new one. */
   onPrint?: () => void;
+  /** What the person may do: Purchasing Setup can show a FactBox to some roles only (2026-11-21). */
+  permissions?: readonly string[];
 }) {
   const ids = useId();
   const router = useRouter();
@@ -211,6 +218,11 @@ export function RequisitionForm({
   const vendorOf = (vendorId: string | null | undefined) => choices.vendors.find((option) => option.id === vendorId);
   const can = requisition?.can;
   const editing = !readOnly;
+  // The page as Purchasing Setup lays it out (2026-11-21): the fields shown, the fields required, the FactBoxes in order.
+  const page = choices.settings.page;
+  const required = (field: RequisitionFieldKey) => page.fields[field].required;
+  /** A field the office hides still shows what a requisition already holds in it. */
+  const showsField = (field: RequisitionFieldKey, holds: unknown) => page.fields[field].shown || Boolean(holds);
 
   const [changed, setChanged] = useState(false);
   const mark = () => setChanged(true);
@@ -411,6 +423,20 @@ export function RequisitionForm({
   // The vendors it is ordered from, one purchase order each (2026-11-20): a line's own, else the chosen quote's.
   const chosenVendorId = reading ? (reading.quotes.find((quote) => quote.chosen)?.vendor.id ?? null) : (quotes.find((quote) => quote.chosen)?.vendorId || null);
   const vendorsNamed = orderGroups(shownLines, chosenVendorId).filter((group) => group.vendorId).length;
+  const showsDepartment = showsField('LINE_DEPARTMENT', reading ? reading.lines.some((line) => line.department) : lines.some((line) => line.departmentId !== NONE));
+  const showsNotes = showsField('LINE_NOTES', reading ? reading.lines.some((line) => line.notes) : lines.some((line) => line.notes.trim()));
+  const lineColumns = LINE_COLUMNS.flatMap((column) =>
+    column.key === 'department'
+      ? showsDepartment
+        ? [{ ...column, required: required('LINE_DEPARTMENT') }]
+        : []
+      : column.key === 'notes'
+        ? showsNotes
+          ? [{ ...column, required: required('LINE_NOTES') }]
+          : []
+        : [column],
+  );
+  const boxes = factBoxesFor(page, permissions);
 
   const save = (submit: boolean) => {
     if (pending || !complete || (submit && problem)) return;
@@ -441,6 +467,10 @@ export function RequisitionForm({
   const shownItem = highlighted ?? (current ? itemOf.get(current.itemId) : currentRead?.item ? itemOf.get(currentRead.item.id) : undefined);
   const shownPlace = choices.places.find((option) => option.id === (current?.placeId && current.placeId !== NONE ? current.placeId : (currentRead?.place?.id ?? place)));
   const advancedLine = lines.find((line) => line.key === advancedFor);
+  // Vendor Statistics: the current line's vendor, else its item's usual vendor, else the chosen quote's.
+  const lineVendorId = highlighted ? null : current ? chosen(current.vendorId) : (currentRead?.vendor?.id ?? null);
+  const statsVendor = vendorOf(lineVendorId ?? shownItem?.usualVendorId ?? chosenVendorId);
+  const vendorStats = statsVendor ? choices.vendorStats?.[statsVendor.id] : undefined;
 
   // Find and Filter look at what each row shows.
   const viewOf = (line: LineDraft): LineView => {
@@ -492,6 +522,100 @@ export function RequisitionForm({
   const deciding = Boolean(can && (can.approve || can.sendBack || can.reject || can.approveBlocked));
   const title = requisition?.number ?? (requisition ? 'Draft requisition' : 'New Requisition');
   const generalValue = (label: string | null | undefined) => <FieldValue>{label || EMPTY}</FieldValue>;
+
+  // Why it cannot be sent yet: in Requisition Statistics, or above the FactBoxes when the office hides that one.
+  const sendNotes = (
+    <>
+      {editing ? <p className="text-muted-foreground text-xs">You asked for it, so you cannot approve it yourself.</p> : null}
+      {editing && problem ? (
+        <p className="text-warning mt-2 text-xs font-medium" role="status">
+          {problem}
+        </p>
+      ) : null}
+      {error ? (
+        <Alert className="mt-2" variant="destructive">
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+    </>
+  );
+  const openedBoxes = (
+    <>
+      {shown.notes ? <NotesFactBox id={`${ids}-notes`} requisition={requisition} /> : null}
+      {shown.links ? <LinksFactBox id={`${ids}-links`} requisition={requisition} /> : null}
+    </>
+  );
+  const factBox: Record<FactBoxKey, ReactNode> = {
+    STATISTICS: (
+      <FactBox
+        facts={[
+          { label: 'Lines', value: formatCount(shownLines.length) },
+          { label: 'Total (USD)', value: formatMoney(totalCents) },
+          { label: 'Approval Step', value: approvalStepRange(choices.settings.steps, stepIndex) },
+          { label: 'Who Approves', value: approverFor(totalCents, choices.settings) },
+          { label: 'Quotes Needed', value: step.quotesNeeded ? String(step.quotesNeeded) : 'None' },
+          { label: 'Vendors', value: formatCount(vendorsNamed) },
+          // One live order a vendor since 2026-11-20: each one, with the vendor it went to.
+          ...(requisition?.orders ?? []).map((order, index, orders) => ({
+            label: orders.length > 1 ? `Purchase Order ${index + 1}` : 'Purchase Order',
+            value: (
+              <Link className="underline underline-offset-4" href={`/purchasing/orders/${order.id}`}>
+                {order.number ?? 'Draft order'}
+                {order.vendor ? ` · ${order.vendor.number ? `${order.vendor.number} ` : ''}${order.vendor.name}` : ' · vendor to choose'}
+              </Link>
+            ),
+          })),
+        ]}
+        title="Requisition Statistics"
+      >
+        {sendNotes}
+      </FactBox>
+    ),
+    ATTACHMENTS: (
+      <>
+        <AttachmentsFactBox requisition={requisition} />
+        {openedBoxes}
+      </>
+    ),
+    LINE_DETAILS: (
+      <FactBox
+        facts={[
+          { label: 'Item Code', value: shownItem?.code ?? EMPTY },
+          { label: 'Type', value: (shownItem?.lineTypeId && typeOf.get(shownItem.lineTypeId)?.name) || EMPTY },
+          { label: 'Keeps Stock', value: shownItem?.lineTypeId ? (typeOf.get(shownItem.lineTypeId)?.keepsStock === false ? 'No' : 'Yes') : EMPTY },
+          { label: 'Usual Vendor', value: vendorOf(shownItem?.usualVendorId)?.number ?? vendorOf(shownItem?.usualVendorId)?.name ?? EMPTY },
+          { label: 'Usual Price', value: shownItem?.priceCents != null ? formatMoney(shownItem.priceCents) : EMPTY },
+          { label: 'Last Ordered', value: shownItem?.lastOrdered ?? EMPTY },
+        ]}
+        title="Line Details"
+      />
+    ),
+    ITEM_AVAILABILITY: (
+      <FactBox
+        facts={[
+          { label: 'On Hand, All', value: shownItem ? formatCount(shownItem.onHand) : EMPTY },
+          { label: `On Hand, ${shownPlace?.code ?? shownPlace?.name ?? 'here'}`, value: shownItem && shownPlace ? formatCount(shownItem.held.find((level) => level.placeId === shownPlace.id)?.quantity ?? 0) : EMPTY },
+          { label: 'On Open Orders', value: shownItem ? formatCount(shownItem.onOrder) : EMPTY },
+          { label: 'Reorder Level', value: shownItem ? formatCount(shownItem.reorderLevel) : EMPTY },
+        ]}
+        title="Item Availability"
+      />
+    ),
+    VENDOR_STATISTICS: (
+      <FactBox
+        facts={[
+          { label: 'Vendor No.', value: statsVendor ? (statsVendor.number ?? EMPTY) : EMPTY },
+          { label: 'Name', value: statsVendor?.name ?? EMPTY },
+          { label: 'Open Orders', value: statsVendor ? formatCount(vendorStats?.openOrders ?? 0) : EMPTY },
+          { label: 'Open Amount', value: statsVendor ? formatMoney(vendorStats?.openCents ?? 0) : EMPTY },
+          { label: 'Ordered This Year', value: statsVendor ? formatMoney(vendorStats?.orderedThisYearCents ?? 0) : EMPTY },
+          { label: 'Last Order', value: vendorStats?.lastOrder ? `${vendorStats.lastOrder.number} · ${formatDay(vendorStats.lastOrder.on)}` : statsVendor ? 'None yet' : EMPTY },
+        ]}
+        title="Vendor Statistics"
+      />
+    ),
+  };
+  const following = boxes.filter((box) => box === 'LINE_DETAILS' || box === 'ITEM_AVAILABILITY' || box === 'VENDOR_STATISTICS').map((box) => FACT_BOXES.find((one) => one.key === box)!.label);
   const companyLabel = (tenantId: string | null) => {
     const row = choices.companies.find((option) => option.tenantId === tenantId) ?? (requisition?.company?.tenantId === tenantId ? requisition?.company : undefined);
     return row ? (row.purchaserCode ? `${row.purchaserCode} · ${row.name}` : row.name) : 'No company';
@@ -555,7 +679,7 @@ export function RequisitionForm({
                 </FieldRow>
                 <FieldRow label="Requisitioner ID">{generalValue(requisition?.requestedBy.code ?? choices.me?.code)}</FieldRow>
                 <FieldRow label="Requisitioner Name">{generalValue(requisition?.requestedBy.name ?? choices.me?.name)}</FieldRow>
-                <FieldRow htmlFor={editing ? `${ids}-company` : undefined} label="Purchaser Code">
+                <FieldRow htmlFor={editing ? `${ids}-company` : undefined} label="Purchaser Code" required={editing && required('COMPANY')}>
                   {editing ? (
                     <Pick
                       id={`${ids}-company`}
@@ -569,44 +693,58 @@ export function RequisitionForm({
                     generalValue(companyLabel(requisition?.company?.tenantId ?? null))
                   )}
                 </FieldRow>
-                <FieldRow htmlFor={editing ? `${ids}-request` : undefined} label="Request Code">
-                  {editing ? (
-                    <Pick id={`${ids}-request`} label="Request Code" none="None" onChange={setRequestCode} options={(choices.requestCodes ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))} value={requestCode} />
-                  ) : (
-                    generalValue(requisition?.requestCode ? `${requisition.requestCode.code} · ${requisition.requestCode.name}` : null)
-                  )}
-                </FieldRow>
-                <FieldRow hint={editing ? 'Each new line goes here.' : undefined} htmlFor={editing ? `${ids}-place` : undefined} label="Location Code">
+                {showsField('REQUEST_CODE', editing ? requestCode !== NONE : requisition?.requestCode) ? (
+                  <FieldRow htmlFor={editing ? `${ids}-request` : undefined} label="Request Code" required={editing && required('REQUEST_CODE')}>
+                    {editing ? (
+                      <Pick id={`${ids}-request`} label="Request Code" none="None" onChange={setRequestCode} options={(choices.requestCodes ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))} value={requestCode} />
+                    ) : (
+                      generalValue(requisition?.requestCode ? `${requisition.requestCode.code} · ${requisition.requestCode.name}` : null)
+                    )}
+                  </FieldRow>
+                ) : null}
+                <FieldRow hint={editing ? 'Each new line goes here.' : undefined} htmlFor={editing ? `${ids}-place` : undefined} label="Location Code" required={editing && required('LOCATION')}>
                   {editing ? (
                     <Pick id={`${ids}-place`} label="Location Code" none="Not decided" onChange={setPlace} options={choices.places.map((option) => ({ value: option.id, label: option.code ? `${option.code} · ${option.name}` : option.name }))} value={place} />
                   ) : (
                     generalValue(requisition?.deliverTo ? (requisition.deliverTo.code ? `${requisition.deliverTo.code} · ${requisition.deliverTo.name}` : requisition.deliverTo.name) : null)
                   )}
                 </FieldRow>
-                <FieldRow htmlFor={editing ? `${ids}-cost-center` : undefined} label="Cost Center Code">
-                  {editing ? (
-                    <Pick id={`${ids}-cost-center`} label="Cost Center Code" none="None" onChange={setCostCenter} options={(choices.costCenters ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))} value={costCenter} />
-                  ) : (
-                    generalValue(requisition?.costCenter ? `${requisition.costCenter.code} · ${requisition.costCenter.name}` : null)
-                  )}
-                </FieldRow>
+                {showsField('COST_CENTER', editing ? costCenter !== NONE : requisition?.costCenter) ? (
+                  <FieldRow htmlFor={editing ? `${ids}-cost-center` : undefined} label="Cost Center Code" required={editing && required('COST_CENTER')}>
+                    {editing ? (
+                      <Pick id={`${ids}-cost-center`} label="Cost Center Code" none="None" onChange={setCostCenter} options={(choices.costCenters ?? []).map((code) => ({ value: code.id, label: `${code.code} · ${code.name}` }))} value={costCenter} />
+                    ) : (
+                      generalValue(requisition?.costCenter ? `${requisition.costCenter.code} · ${requisition.costCenter.name}` : null)
+                    )}
+                  </FieldRow>
+                ) : null}
               </div>
               <div>
                 <FieldRow label="Requisition Date">{generalValue(formatDay(requisition?.requisitionDate ?? businessToday()))}</FieldRow>
-                <FieldRow htmlFor={editing ? `${ids}-document` : undefined} label="Document Date">
-                  {editing ? (
-                    <Input className="h-8" id={`${ids}-document`} onChange={(event) => setDocumentDate(event.target.value)} type="date" value={documentDate} />
-                  ) : (
-                    generalValue(requisition?.documentDate ? formatDay(requisition.documentDate) : null)
-                  )}
-                </FieldRow>
-                <FieldRow hint={editing ? 'Each new line expects it then.' : undefined} htmlFor={editing ? `${ids}-expected` : undefined} label="Expected Receipt Date">
-                  {editing ? (
-                    <Input aria-label="Expected Receipt Date" className="h-8" id={`${ids}-expected`} onChange={(event) => setNeededBy(event.target.value)} type="date" value={neededBy} />
-                  ) : (
-                    generalValue(requisition?.neededBy ? formatDay(requisition.neededBy) : null)
-                  )}
-                </FieldRow>
+                {/* Hidden, a new one's document date is still today's. */}
+                {showsField('DOCUMENT_DATE', requisition?.documentDate) ? (
+                  <FieldRow htmlFor={editing ? `${ids}-document` : undefined} label="Document Date" required={editing && required('DOCUMENT_DATE')}>
+                    {editing ? (
+                      <Input className="h-8" id={`${ids}-document`} onChange={(event) => setDocumentDate(event.target.value)} type="date" value={documentDate} />
+                    ) : (
+                      generalValue(requisition?.documentDate ? formatDay(requisition.documentDate) : null)
+                    )}
+                  </FieldRow>
+                ) : null}
+                {showsField('EXPECTED_RECEIPT', editing ? neededBy : requisition?.neededBy) ? (
+                  <FieldRow
+                    hint={editing ? 'Each new line expects it then.' : undefined}
+                    htmlFor={editing ? `${ids}-expected` : undefined}
+                    label="Expected Receipt Date"
+                    required={editing && required('EXPECTED_RECEIPT')}
+                  >
+                    {editing ? (
+                      <Input aria-label="Expected Receipt Date" className="h-8" id={`${ids}-expected`} onChange={(event) => setNeededBy(event.target.value)} type="date" value={neededBy} />
+                    ) : (
+                      generalValue(requisition?.neededBy ? formatDay(requisition.neededBy) : null)
+                    )}
+                  </FieldRow>
+                ) : null}
                 <FieldRow label="Status">{generalValue(REQUISITION_STATUS_LABEL[requisition?.status ?? 'DRAFT'])}</FieldRow>
                 <FieldRow label="Approval Step">{generalValue(approvalStepRange(choices.settings.steps, stepIndex))}</FieldRow>
                 <FieldRow label="Approved By">
@@ -737,7 +875,7 @@ export function RequisitionForm({
               ) : null}
 
               <Sheet label="Lines" className="min-w-[96rem]">
-                <SheetHead columns={LINE_COLUMNS} />
+                <SheetHead columns={editing ? lineColumns : lineColumns.map((column) => ({ ...column, required: false }))} />
                 {editing ? (
                   <SheetBody onKeyDown={sheetKeys(() => (lines.at(-1) && !isBlank(lines.at(-1)!) ? addLine() : undefined))}>
                     {lines.map((line, index) => {
@@ -792,12 +930,16 @@ export function RequisitionForm({
                           <td className={cn(CELL, fill('vendor'))}>
                             <Pick cell label={`Vendor of ${name}`} none="None" onChange={(vendorId) => setLine(line.key, { vendorId }, 'vendor')} options={choices.vendors.map((option) => ({ value: option.id, label: option.number ? `${option.number} · ${option.name}` : option.name }))} value={line.vendorId} />
                           </td>
-                          <td className={CELL}>
-                            <input aria-label={`Notes on ${name}`} className={CELL_INPUT} maxLength={1000} onChange={(event) => setLine(line.key, { notes: event.target.value })} value={line.notes} />
-                          </td>
-                          <td className={cn(CELL, fill('department'))}>
-                            <Pick cell label={`Department of ${name}`} none="None" onChange={(departmentId) => setLine(line.key, { departmentId }, 'department')} options={(choices.departments ?? []).map((code) => ({ value: code.id, label: code.code }))} value={line.departmentId} />
-                          </td>
+                          {showsNotes ? (
+                            <td className={CELL}>
+                              <input aria-label={`Notes on ${name}`} className={CELL_INPUT} maxLength={1000} onChange={(event) => setLine(line.key, { notes: event.target.value })} value={line.notes} />
+                            </td>
+                          ) : null}
+                          {showsDepartment ? (
+                            <td className={cn(CELL, fill('department'))}>
+                              <Pick cell label={`Department of ${name}`} none="None" onChange={(departmentId) => setLine(line.key, { departmentId }, 'department')} options={(choices.departments ?? []).map((code) => ({ value: code.id, label: code.code }))} value={line.departmentId} />
+                            </td>
+                          ) : null}
                         </tr>
                       );
                     })}
@@ -818,10 +960,12 @@ export function RequisitionForm({
                           <td className={cn(CELL_TEXT, 'text-right tabular-nums')}>{formatMoney(line.quantity * line.estimatedUnitCostCents)}</td>
                           <td className={CELL_TEXT}>{line.expectedOn ? formatDay(line.expectedOn) : EMPTY}</td>
                           <td className={CELL_TEXT}>{line.vendor ? (line.vendor.number ?? line.vendor.name) : EMPTY}</td>
-                          <td className={cn(CELL_TEXT, 'max-w-56 truncate')} title={line.notes ?? undefined}>
-                            {line.notes ?? ''}
-                          </td>
-                          <td className={CELL_TEXT}>{line.department?.code ?? EMPTY}</td>
+                          {showsNotes ? (
+                            <td className={cn(CELL_TEXT, 'max-w-56 truncate')} title={line.notes ?? undefined}>
+                              {line.notes ?? ''}
+                            </td>
+                          ) : null}
+                          {showsDepartment ? <td className={CELL_TEXT}>{line.department?.code ?? EMPTY}</td> : null}
                         </tr>
                       ) : null,
                     )}
@@ -950,63 +1094,17 @@ export function RequisitionForm({
         </div>
 
         <aside className="grid gap-3">
-          <FactBox
-            facts={[
-              { label: 'Lines', value: formatCount(shownLines.length) },
-              { label: 'Total (USD)', value: formatMoney(totalCents) },
-              { label: 'Approval Step', value: approvalStepRange(choices.settings.steps, stepIndex) },
-              { label: 'Who Approves', value: approverFor(totalCents, choices.settings) },
-              { label: 'Quotes Needed', value: step.quotesNeeded ? String(step.quotesNeeded) : 'None' },
-              { label: 'Vendors', value: formatCount(vendorsNamed) },
-              // One live order a vendor since 2026-11-20: each one, with the vendor it went to.
-              ...(requisition?.orders ?? []).map((order, index, orders) => ({
-                label: orders.length > 1 ? `Purchase Order ${index + 1}` : 'Purchase Order',
-                value: (
-                  <Link className="underline underline-offset-4" href={`/purchasing/orders/${order.id}`}>
-                    {order.number ?? 'Draft order'}
-                    {order.vendor ? ` · ${order.vendor.number ? `${order.vendor.number} ` : ''}${order.vendor.name}` : ' · vendor to choose'}
-                  </Link>
-                ),
-              })),
-            ]}
-            title="Requisition Statistics"
-          >
-            {editing ? <p className="text-muted-foreground text-xs">You asked for it, so you cannot approve it yourself.</p> : null}
-            {editing && problem ? (
-              <p className="text-warning mt-2 text-xs font-medium" role="status">
-                {problem}
-              </p>
-            ) : null}
-            {error ? (
-              <Alert className="mt-2" variant="destructive">
-                <AlertDescription>{error.message}</AlertDescription>
-              </Alert>
-            ) : null}
-          </FactBox>
-          <AttachmentsFactBox requisition={requisition} />
-          {shown.notes ? <NotesFactBox id={`${ids}-notes`} requisition={requisition} /> : null}
-          {shown.links ? <LinksFactBox id={`${ids}-links`} requisition={requisition} /> : null}
-          <FactBox
-            facts={[
-              { label: 'Item Code', value: shownItem?.code ?? EMPTY },
-              { label: 'Type', value: (shownItem?.lineTypeId && typeOf.get(shownItem.lineTypeId)?.name) || EMPTY },
-              { label: 'Keeps Stock', value: shownItem?.lineTypeId ? (typeOf.get(shownItem.lineTypeId)?.keepsStock === false ? 'No' : 'Yes') : EMPTY },
-              { label: 'Usual Vendor', value: vendorOf(shownItem?.usualVendorId)?.number ?? vendorOf(shownItem?.usualVendorId)?.name ?? EMPTY },
-              { label: 'Usual Price', value: shownItem?.priceCents != null ? formatMoney(shownItem.priceCents) : EMPTY },
-              { label: 'Last Ordered', value: shownItem?.lastOrdered ?? EMPTY },
-            ]}
-            title="Line Details"
-          />
-          <FactBox
-            facts={[
-              { label: 'On Hand, All', value: shownItem ? formatCount(shownItem.onHand) : EMPTY },
-              { label: `On Hand, ${shownPlace?.code ?? shownPlace?.name ?? 'here'}`, value: shownItem && shownPlace ? formatCount(shownItem.held.find((level) => level.placeId === shownPlace.id)?.quantity ?? 0) : EMPTY },
-              { label: 'On Open Orders', value: shownItem ? formatCount(shownItem.onOrder) : EMPTY },
-              { label: 'Reorder Level', value: shownItem ? formatCount(shownItem.reorderLevel) : EMPTY },
-            ]}
-            title="Item Availability"
-          />
-          <p className="text-muted-foreground px-1 text-xs">Line Details and Item Availability follow the line the cursor is on, and the item the dropdown is on.</p>
+          {boxes.includes('STATISTICS') ? null : <div className="px-1">{sendNotes}</div>}
+          {boxes.map((box) => (
+            <Fragment key={box}>{factBox[box]}</Fragment>
+          ))}
+          {/* Opened from the ribbon: beside Attachments, or last when the office hides Attachments. */}
+          {boxes.includes('ATTACHMENTS') ? null : openedBoxes}
+          {following.length ? (
+            <p className="text-muted-foreground px-1 text-xs">
+              {following.length === 1 ? `${following[0]} follows` : `${following.slice(0, -1).join(', ')} and ${following.at(-1)} follow`} the line the cursor is on, and the item the dropdown is on.
+            </p>
+          ) : null}
         </aside>
       </div>
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { KEEPER_PERMISSIONS } from '@texasrenters/shared';
 import Link from 'next/link';
 
 import { usePermissions } from '@/lib/auth';
@@ -11,11 +12,12 @@ import { cn } from '@/lib/utils';
  * for whoever may keep them.
  */
 export function PurchasingTabs({ current }: { current: 'requisitions' | 'orders' | 'codes' | 'setup' }) {
-  const { has } = usePermissions();
+  const { has, hasAny } = usePermissions();
   const tabs = [
     { key: 'requisitions', label: 'Requisitions' },
     { key: 'orders', label: 'Orders' },
-    ...(has('purchasing:codes') ? [{ key: 'codes', label: 'Codes' }] : []),
+    // Read by anybody in purchasing since Purchasing Setup (2026-11-21); each list is changed by its keeper.
+    ...(hasAny('purchasing:request', ...KEEPER_PERMISSIONS) ? [{ key: 'codes', label: 'Codes' }] : []),
     ...(has('purchasing:setup') ? [{ key: 'setup', label: 'Setup' }] : []),
   ] as const;
   return (

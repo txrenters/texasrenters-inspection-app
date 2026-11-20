@@ -1,10 +1,18 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PURCHASING_CODE_KINDS, type PurchasingCodeKind, type SavePurchaserCodeInput, type SavePurchasingCodeInput, type XeroOptionMatch } from '@texasrenters/shared';
+import {
+  KEEPER_PERMISSIONS,
+  PURCHASING_CODE_KINDS,
+  type PermissionKey,
+  type PurchasingCodeKind,
+  type SavePurchaserCodeInput,
+  type SavePurchasingCodeInput,
+  type XeroOptionMatch,
+} from '@texasrenters/shared';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 
-import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
+import { ApiAuthGuard, PermissionsGuard, RequireAnyPermission, type AuthenticatedRequest } from '../common/auth';
 import { PurchasingCodesService } from './purchasing-codes.service';
 
 export class XeroOptionMatchDto implements Required<XeroOptionMatch> {
@@ -27,6 +35,9 @@ export class SavePurchasingCodeDto implements Required<SavePurchasingCodeInput> 
   @IsOptional() @IsArray() @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => XeroOptionMatchDto) xero!: XeroOptionMatchDto[];
 }
 
+/** Whoever may keep any list: which list, the service checks against the keeper Setup gives it (2026-11-21). */
+const KEEPERS = KEEPER_PERMISSIONS as PermissionKey[];
+
 /** Null is "take it away". */
 const GIVEN = (_: object, value: unknown) => value !== null;
 
@@ -46,27 +57,28 @@ export class SavePurchaserCodeDto implements Required<SavePurchaserCodeInput> {
 export class PurchasingCodesController {
   constructor(@Inject(PurchasingCodesService) private readonly codes: PurchasingCodesService) {}
 
+  // Read by anybody in purchasing: a requisition picks from them (Purchasing Setup, 2026-11-21).
   @Get('codes')
-  @RequirePermissions('purchasing:codes')
+  @RequireAnyPermission('purchasing:request', ...KEEPERS)
   list(@Req() request: AuthenticatedRequest) {
     return this.codes.list(request.user);
   }
 
   @Post('codes')
-  @RequirePermissions('purchasing:codes')
+  @RequireAnyPermission(...KEEPERS)
   @HttpCode(200)
   create(@Req() request: AuthenticatedRequest, @Body() body: SavePurchasingCodeDto) {
     return this.codes.create(request.user, body);
   }
 
   @Patch('codes/:codeId')
-  @RequirePermissions('purchasing:codes')
+  @RequireAnyPermission(...KEEPERS)
   update(@Req() request: AuthenticatedRequest, @Param('codeId', ParseUUIDPipe) codeId: string, @Body() body: SavePurchasingCodeDto) {
     return this.codes.update(request.user, codeId, body);
   }
 
   @Put('companies/:xeroTenantId/purchaser-code')
-  @RequirePermissions('purchasing:codes')
+  @RequireAnyPermission(...KEEPERS)
   setPurchaserCode(@Req() request: AuthenticatedRequest, @Param('xeroTenantId') xeroTenantId: string, @Body() body: SavePurchaserCodeDto) {
     return this.codes.setPurchaserCode(request.user, xeroTenantId, body);
   }

@@ -11,6 +11,7 @@
  * This file imports nothing from purchasing.ts, which imports it.
  */
 import { formatMoney } from './invoices.js';
+import type { CodeKeepers, CodeListKey, KeeperRole, RequisitionPageLayout } from './purchasing-page.js';
 
 // ── Approval steps ───────────────────────────────────────────────────────────
 
@@ -231,8 +232,25 @@ export interface PurchasingApprovals {
 export type SavePurchasingApprovalsInput = PurchasingApprovals;
 export type SaveRequisitionFileRulesInput = RequisitionFileRules;
 
+/** A code list on Setup's Codes section: who keeps it, and how many are in use. */
+export interface CodeListSetting {
+  list: CodeListKey;
+  keeper: KeeperRole;
+  inUse: number;
+}
+
+export interface SaveCodeKeepersInput {
+  keepers: CodeKeepers;
+}
+
+export type SaveRequisitionPageInput = RequisitionPageLayout;
+
 export interface PurchasingSetup {
   approvals: PurchasingApprovals;
   numbers: DocumentSeriesSetting[];
   files: RequisitionFileRules;
+  /** Who keeps each code list (part 5c, 2026-11-21). */
+  codes: CodeListSetting[];
+  /** The requisition page's fields and FactBoxes (part 5c). */
+  page: RequisitionPageLayout;
 }

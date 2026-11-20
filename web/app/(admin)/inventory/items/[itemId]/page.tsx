@@ -67,19 +67,25 @@ export default function StockItemPage() {
 
   const { item, levels, movements, movementsTotal, averageCostCents } = detail.data;
   const choices = stock.data;
+  // Items are kept by the role Purchasing Setup gives them (2026-11-21); stock moves with inventory:manage.
+  const keepsItems = choices?.keeps?.items ?? canManage;
 
   return (
     <>
       <PageHeader
         actions={
-          canManage ? (
+          canManage || keepsItems ? (
             <>
-              <Button disabled={!choices} onClick={() => setEditing(true)} variant="outline">
-                Edit item
-              </Button>
-              <Button disabled={!choices || !item.active} onClick={() => setOpening(true)}>
-                Enter opening balance
-              </Button>
+              {keepsItems ? (
+                <Button disabled={!choices} onClick={() => setEditing(true)} variant="outline">
+                  Edit item
+                </Button>
+              ) : null}
+              {canManage ? (
+                <Button disabled={!choices || !item.active} onClick={() => setOpening(true)}>
+                  Enter opening balance
+                </Button>
+              ) : null}
             </>
           ) : undefined
         }
@@ -175,6 +181,7 @@ export default function StockItemPage() {
           }}
           onSave={(input) => edits.updateItem.mutateAsync({ itemId, input })}
           pending={edits.updateItem.isPending}
+          units={choices.units}
           vendors={choices.vendors}
         />
       ) : null}

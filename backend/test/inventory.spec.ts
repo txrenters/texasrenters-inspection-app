@@ -120,6 +120,9 @@ function database() {
   });
 
   const db = {
+    // Purchasing Setup (2026-11-21): nothing saved, so every list is kept as before Setup.
+    purchasingSettings: { findUnique: jest.fn(async (): Promise<unknown> => null) },
+    purchasingApprovalStep: { findMany: jest.fn(async () => []) },
     stockItem: table(items, (data) => {
       const category = categories.find((row) => row.id === data.categoryId);
       return { id: id(100 + items.length), active: true, usualVendor: null, category: category ? { id: category.id, name: category.name } : null, ...data };
@@ -606,13 +609,61 @@ describe('the requests the page sends', () => {
 describe('who may do what', () => {
   const permissionsOf = (name: string) => Reflect.getMetadata('permissions', (InventoryController.prototype as unknown as Record<string, object>)[name]!) as string[];
 
-  it('reads with inventory:read and changes with inventory:manage', () => {
+  it('reads with inventory:read, moves stock with inventory:manage, and keeps each list by the role Setup gives it', () => {
     for (const read of ['stock', 'item', 'places', 'vendors']) expect(permissionsOf(read)).toEqual(['inventory:read']);
-    for (const write of ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'])
-      expect(permissionsOf(write)).toEqual(['inventory:manage']);
+    for (const write of ['enterOpeningBalance', 'reverseMovement']) expect(permissionsOf(write)).toEqual(['inventory:manage']);
+    // The code lists (Purchasing Setup, 2026-11-21): any keeper may reach the route; the service checks which keeps that list.
+    const anyOf = (name: string) => Reflect.getMetadata('anyPermissions', (InventoryController.prototype as unknown as Record<string, object>)[name]!) as string[];
+    for (const write of ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor']) {
+      expect(permissionsOf(write)).toBeUndefined();
+      expect(anyOf(write)).toEqual(['inventory:manage', 'purchasing:codes', 'purchasing:order', 'purchasing:setup']);
+    }
   });
 
   it('never lets an API key move stock', () => {
     expect(MACHINE_FORBIDDEN_PERMISSIONS).toContain('inventory:manage');
+  });
+});
+
+describe('who keeps each list, and units of measure (Purchasing Setup, 2026-11-21)', () => {
+  const buyer = { ...office, id: '70000000-0000-4000-8000-000000000010', permissions: ['inventory:read', 'purchasing:request', 'purchasing:order'] } as AuthenticatedUser;
+  const saved = (codeKeepers: Record<string, string>) => ({
+    approvalLimitCents: 50000,
+    quotesAboveLimit: 2,
+    emailApprovers: false,
+    reapproveChangedOrders: false,
+    approverOwnCompaniesOnly: true,
+    fileGroups: ['PDF'],
+    fileMaxBytes: 20_000_000,
+    filesMax: 20,
+    quoteFileAboveCents: null,
+    fileRemoval: 'UNTIL_SENT',
+    codeKeepers,
+    requisitionPage: {},
+  });
+
+  it('keeps vendors by the stock keeper until Setup gives them to the purchaser', async () => {
+    const { db, service } = database();
+    await expect(service.createVendor(buyer, { name: 'Hill Country Supply' })).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS', message: 'Vendor numbers are kept by somebody else here: Purchasing Setup says who.' });
+    expect((await service.stock(office)).keeps).toEqual({ items: true, categories: true, places: true, vendors: true });
+
+    db.purchasingSettings.findUnique.mockResolvedValue(saved({ VENDORS: 'PURCHASER' }) as never);
+    await service.createVendor(buyer, { name: 'Hill Country Supply' });
+    await expect(service.createVendor(office, { name: 'Alamo Trade Parts' })).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS' });
+    expect((await service.stock(office)).keeps).toEqual({ items: true, categories: true, places: true, vendors: false });
+  });
+
+  it('counts an item in any word until the office keeps units of measure, then in one of them', async () => {
+    const { lineTypes, service } = database();
+    expect((await service.createItem(office, { name: 'Glue boards', categoryId: FILTERS, unit: 'tube' })).item.unit).toBe('tube');
+
+    lineTypes.push(
+      { id: id(904), organizationId: ORG, kind: 'UNIT', code: 'EACH', name: 'each', keepsStock: false, active: true },
+      { id: id(905), organizationId: ORG, kind: 'UNIT', code: 'PACK', name: 'pack', keepsStock: false, active: true },
+    );
+    await expect(service.createItem(office, { name: 'Glue traps', categoryId: FILTERS, unit: 'tube' })).rejects.toMatchObject({ code: 'ITEM_UNIT_UNKNOWN', message: 'Choose a unit from the units of measure: each, pack.' });
+    // Matched by name, written as the list writes it.
+    expect((await service.createItem(office, { name: 'Glue traps', categoryId: FILTERS, unit: 'PACK' })).item.unit).toBe('pack');
+    expect((await service.stock(office)).units?.map((unit) => unit.name)).toEqual(['each', 'pack']);
   });
 });

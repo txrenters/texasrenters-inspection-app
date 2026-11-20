@@ -158,6 +158,7 @@ export async function authenticateApplicationUser(
 export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);
 
 export const PERMISSIONS_METADATA_KEY = 'permissions';
+export const ANY_PERMISSIONS_METADATA_KEY = 'anyPermissions';
 /**
  * Requires the authenticated user to hold ALL listed permissions. Enforced by
  * {@link PermissionsGuard}. Permissions are computed per organization from the
@@ -327,6 +328,14 @@ export class RolesGuard implements CanActivate {
  * hold every listed permission (AND semantics). Runs after {@link ApiAuthGuard}
  * so `request.user` is populated.
  */
+/**
+ * Requires the user to hold AT LEAST ONE listed permission: a route's first
+ * check where the service decides the rest -- a code list is kept by the role
+ * the office chose in Purchasing Setup (2026-11-21). Enforced by
+ * {@link PermissionsGuard}, with a password change still required first.
+ */
+export const RequireAnyPermission = (...permissions: PermissionKey[]) => SetMetadata(ANY_PERMISSIONS_METADATA_KEY, permissions);
+
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(@Inject(Reflector) private readonly reflector: Reflector) {}
@@ -336,7 +345,8 @@ export class PermissionsGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (!required?.length) return true;
+    const any = this.reflector.getAllAndOverride<PermissionKey[]>(ANY_PERMISSIONS_METADATA_KEY, [context.getHandler(), context.getClass()]);
+    if (!required?.length && !any?.length) return true;
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (request.user.mustChangePassword)
       throw new ApplicationError(
@@ -345,7 +355,7 @@ export class PermissionsGuard implements CanActivate {
         'A password change is required before using the application.',
       );
     const held = new Set(request.user.permissions);
-    if (required.every((permission) => held.has(permission))) return true;
+    if ((required ?? []).every((permission) => held.has(permission)) && (!any?.length || any.some((permission) => held.has(permission)))) return true;
     throw new ApplicationError(
       403,
       'PERMISSION_DENIED',

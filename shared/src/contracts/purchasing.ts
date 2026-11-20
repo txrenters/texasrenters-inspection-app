@@ -14,6 +14,7 @@
 
 import { formatMoney } from './invoices.js';
 import type { PurchaseOrderFrom, PurchaseOrderStatus } from './purchase-orders.js';
+import { missingFieldProblem, type RequisitionFieldValues, type RequisitionPageLayout } from './purchasing-page.js';
 import { approvalStepFor, type ApprovalStep, type RequisitionFileRules } from './purchasing-setup.js';
 
 export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
@@ -108,6 +109,8 @@ export function requisitionTotalCents(lines: readonly { quantity: number; estima
 export interface PurchasingSettings {
   steps: ApprovalStep[];
   files: RequisitionFileRules;
+  /** The requisition page's fields -- shown, required -- and its FactBoxes (Purchasing Setup, 2026-11-21). */
+  page: RequisitionPageLayout;
 }
 
 /**
@@ -116,11 +119,19 @@ export interface PurchasingSettings {
  * refuses with the same sentence. `files` are those attached so far.
  */
 export function requisitionSubmitProblem(
-  requisition: { reason: string; lines: readonly { quantity: number; estimatedUnitCostCents: number }[]; quotes: readonly { chosen: boolean }[]; files?: readonly unknown[] },
+  requisition: Omit<RequisitionFieldValues, 'lines'> & {
+    reason: string;
+    lines: readonly { quantity: number; estimatedUnitCostCents: number; departmentId?: string | null; notes?: string | null }[];
+    quotes: readonly { chosen: boolean }[];
+    files?: readonly unknown[];
+  },
   settings: PurchasingSettings,
 ): string | null {
   // Why it is needed is a note now (2026-11-20), not a requirement: the request code says what kind of request it is.
   if (!requisition.lines.length) return 'Add at least one item.';
+  // The fields the office requires (Purchasing Setup, 2026-11-21): none until it ticks them.
+  const missing = missingFieldProblem(requisition, settings.page);
+  if (missing) return missing;
   const chosen = requisition.quotes.filter((quote) => quote.chosen).length;
   if (requisition.quotes.length && chosen !== 1) return 'Mark one quote as the chosen one.';
   const totalCents = requisitionTotalCents(requisition.lines);
@@ -397,6 +408,16 @@ export interface RequisitionDetail extends RequisitionRow {
   settings: PurchasingSettings;
 }
 
+/** A vendor's orders, as the Vendor Statistics FactBox says them. Cents include sales tax. */
+export interface VendorStats {
+  /** Orders still open: waiting for approval, approved, sent, partly received. */
+  openOrders: number;
+  openCents: number;
+  /** Ordered this calendar year, in Texas, in orders not cancelled. */
+  orderedThisYearCents: number;
+  lastOrder: { number: string; on: string } | null;
+}
+
 /** What the requisition form chooses from. Its own read, so making a requisition does not need the Inventory page's permission. */
 export interface RequisitionChoices {
   items: {
@@ -426,6 +447,8 @@ export interface RequisitionChoices {
   places: { id: string; name: string; code?: string }[];
   companies: { tenantId: string; name: string; purchaserCode?: string | null }[];
   vendors: { id: string; name: string; number?: string }[];
+  /** Each vendor's orders, for the Vendor Statistics FactBox (Purchasing Setup, 2026-11-21), by vendor id; a vendor never ordered from is not here. */
+  vendorStats?: Record<string, VendorStats>;
   settings: PurchasingSettings;
   /** The codes a requisition picks from (2026-11-20): those in use. */
   lineTypes?: (PurchasingCodeRef & { keepsStock: boolean })[];

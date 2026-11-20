@@ -5962,6 +5962,10 @@ model PurchasingSettings {
   fileRemoval            String   @default("UNTIL_SENT")
   /// An approver approves only for their own companies (Purchasing Setup, 2026-11-21).
   approverOwnCompaniesOnly Boolean @default(true)
+  /// Who makes and changes each code list (Purchasing Setup, 2026-11-21): list -> purchasing role; empty, as before Setup.
+  codeKeepers            Json     @default("{}")
+  /// The requisition page's fields and FactBoxes (Purchasing Setup, 2026-11-21); empty, as before Setup.
+  requisitionPage        Json     @default("{}")
   updatedAt          DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -6634,6 +6638,8 @@ model VendorBillXero {
 enum PurchasingCodeKind {
   /// What a line is: an Item that keeps stock, a Service that does not.
   LINE_TYPE
+  /// Units of measure (Purchasing Setup, 2026-11-21): an item code picks one by its name.
+  UNIT
   /// The kind of request: RESTOCK, JOB, URGENT.
   REQUEST
   /// A requisition line's department.

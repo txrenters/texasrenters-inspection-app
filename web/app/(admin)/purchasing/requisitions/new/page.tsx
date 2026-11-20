@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { PurchasingTabs } from '@/components/purchasing/purchasing-tabs';
 import { RequisitionForm } from '@/components/purchasing/requisition-form';
 import { ErrorState, PageSkeleton } from '@/components/states';
+import { usePermissions } from '@/lib/auth';
 import { usePurchasingEdits, useRequisitionChoices } from '@/lib/purchasing-queries';
 
 /**
@@ -23,6 +24,7 @@ export default function NewRequisitionPage() {
     .flatMap(([itemId, quantity]) => (itemId && /^\d{1,6}$/.test(quantity ?? '') && Number(quantity) > 0 ? [{ itemId, quantity: Number(quantity) }] : []));
   const choices = useRequisitionChoices(true);
   const { create, step } = usePurchasingEdits();
+  const { permissions } = usePermissions();
 
   if (choices.isLoading) return <PageSkeleton />;
   if (choices.isError || !choices.data) return <ErrorState error={choices.error} retry={() => void choices.refetch()} />;
@@ -34,6 +36,7 @@ export default function NewRequisitionPage() {
         choices={choices.data}
         error={create.error ?? step.error}
         onDiscard={() => router.push('/purchasing')}
+        permissions={permissions}
         onSave={async (input, submit) => {
           // Made once: if submitting is refused, the draft is kept and opened, where the reason shows.
           const made = create.data ?? (await create.mutateAsync(input));

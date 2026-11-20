@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
 import { orderGroups, requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
+import { DEFAULT_PAGE_LAYOUT } from '../src/contracts/purchasing-page';
 import { DEFAULT_FILE_RULES, stepsFromLimit } from '../src/contracts/purchasing-setup';
 
 // Purchase requisitions, phase 2 (2026-11-19). Every figure invented.
 // The office before Purchasing Setup: $500.00, and two quotes above it, read as two steps.
-const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES };
+const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: DEFAULT_PAGE_LAYOUT };
 const quotesAbove = (quotes: number) => ({ ...SETTINGS, steps: stepsFromLimit(50000, quotes) });
 const line = (quantity: number, estimatedUnitCostCents: number) => ({ quantity, estimatedUnitCostCents });
 const quote = (chosen: boolean) => ({ chosen });
@@ -61,7 +62,7 @@ describe('whether it can be submitted', () => {
       { upToCents: 500000, approver: 'ANY_APPROVER' as const, quotesNeeded: 1, reminderDays: 1 },
       { upToCents: null, approver: 'ANY_AMOUNT' as const, quotesNeeded: 2, reminderDays: 2 },
     ];
-    const settings = { steps, files: { ...DEFAULT_FILE_RULES, quoteFileAboveCents: 50000 } };
+    const settings = { steps, files: { ...DEFAULT_FILE_RULES, quoteFileAboveCents: 50000 }, page: DEFAULT_PAGE_LAYOUT };
     const middle = { ...ready, lines: [line(10, 10000)] };
     expect(requisitionSubmitProblem(ready, settings)).toBeNull();
     expect(requisitionSubmitProblem(middle, settings)).toBe('At this amount, 1 quote is needed.');

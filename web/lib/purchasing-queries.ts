@@ -25,10 +25,12 @@ import type {
   ReceiveGoodsInput,
   ReverseReceiptInput,
   SavePurchaseOrderInput,
+  SaveCodeKeepersInput,
   SaveDocumentSeriesInput,
   SavePurchasingPersonInput,
   SavePurchasingApprovalsInput,
   SaveRequisitionFileRulesInput,
+  SaveRequisitionPageInput,
   SaveRequisitionInput,
   SaveVendorBillInput,
   SendPurchaseOrderInput,
@@ -105,6 +107,9 @@ export function usePurchasingSetupEdits() {
   return {
     approvals: useMutation({ mutationFn: put<SavePurchasingApprovalsInput>('approvals'), onSuccess: saved }),
     files: useMutation({ mutationFn: put<SaveRequisitionFileRulesInput>('files'), onSuccess: saved }),
+    // Part 5c (2026-11-21): who keeps each code list, and the requisition page.
+    codes: useMutation({ mutationFn: put<SaveCodeKeepersInput>('codes'), onSuccess: saved }),
+    page: useMutation({ mutationFn: put<SaveRequisitionPageInput>('page'), onSuccess: saved }),
     series: useMutation({
       mutationFn: ({ kind, input }: { kind: DocumentSeriesKind; input: SaveDocumentSeriesInput }) => put<SaveDocumentSeriesInput>(`numbers/${encodeURIComponent(kind)}`)(input),
       onSuccess: saved,

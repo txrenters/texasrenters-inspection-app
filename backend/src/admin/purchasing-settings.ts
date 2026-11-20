@@ -3,14 +3,21 @@ import {
   DEFAULT_APPROVAL_LIMIT_CENTS,
   DEFAULT_FILE_RULES,
   DEFAULT_QUOTES_ABOVE_LIMIT,
+  DEFAULT_CODE_KEEPERS,
   DOCUMENT_SERIES,
   FILE_GROUP_KEYS,
   FILE_REMOVALS,
+  KEEPER_ROLES,
+  codeList,
+  completePageLayout,
   defaultSeries,
   formatDocumentNumber,
+  keepsList,
   stepsFromLimit,
   type ApprovalStep,
   type ApprovalStepApprover,
+  type CodeKeepers,
+  type CodeListKey,
   type DocumentSeriesKind,
   type DocumentSeriesSetting,
   type FileGroup,
@@ -18,8 +25,11 @@ import {
   type PurchasingApprovals,
   type PurchasingSettings,
   type PurchasingStanding,
+  type RequisitionPageLayout,
   type RequisitionFileRules,
 } from '@texasrenters/shared';
+
+import { ApplicationError } from '../common/errors';
 
 /**
  * What Purchasing Setup keeps (2026-11-20, part 5a), read by every service
@@ -44,6 +54,8 @@ const SETTINGS_SELECT = {
   quoteFileAboveCents: true,
   fileRemoval: true,
   approverOwnCompaniesOnly: true,
+  codeKeepers: true,
+  requisitionPage: true,
 } as const;
 
 type SettingsRow = Prisma.PurchasingSettingsGetPayload<{ select: typeof SETTINGS_SELECT }>;
@@ -65,18 +77,30 @@ function filesOf(row: SettingsRow | null): RequisitionFileRules {
   };
 }
 
-/** Everything Setup keeps for approvals and files, in one read. */
+/** Who keeps each code list: the office's choices, the rest as before Setup. */
+function keepersOf(row: SettingsRow | null): CodeKeepers {
+  const saved = (row?.codeKeepers ?? {}) as Record<string, unknown>;
+  const keepers = { ...DEFAULT_CODE_KEEPERS };
+  for (const list of Object.keys(keepers) as CodeListKey[]) {
+    const role = saved[list];
+    if (typeof role === 'string' && (KEEPER_ROLES as readonly string[]).includes(role)) keepers[list] = role as CodeKeepers[CodeListKey];
+  }
+  return keepers;
+}
+
+/** Everything Setup keeps for approvals, files, code lists and the requisition page, in one read. */
 export async function readPurchasingSetup(
   db: Pick<Db, 'purchasingSettings' | 'purchasingApprovalStep'>,
   organizationId: string,
-): Promise<{ settings: PurchasingSettings; approvals: PurchasingApprovals }> {
+): Promise<{ settings: PurchasingSettings; approvals: PurchasingApprovals; keepers: CodeKeepers }> {
   const [row, saved] = await Promise.all([
     db.purchasingSettings.findUnique({ where: { organizationId }, select: SETTINGS_SELECT }),
     db.purchasingApprovalStep.findMany({ where: { organizationId }, orderBy: { position: 'asc' }, select: { upToCents: true, approver: true, quotesNeeded: true, reminderDays: true } }),
   ]);
   const steps = stepsOf(row, saved);
   return {
-    settings: { steps, files: filesOf(row) },
+    settings: { steps, files: filesOf(row), page: completePageLayout(row?.requisitionPage as Partial<RequisitionPageLayout> | null) },
+    keepers: keepersOf(row),
     approvals: {
       steps,
       approverOwnCompaniesOnly: row?.approverOwnCompaniesOnly ?? true,
@@ -111,6 +135,16 @@ export async function readStanding(db: Pick<Db, 'purchasingPerson'>, person: { i
     select: { companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true },
   });
   return standingOf(person.permissions, row);
+}
+
+/**
+ * A code list is made and changed only by whoever holds the role the office
+ * chose for it in Setup (2026-11-21; it starts as before Setup).
+ */
+export async function assertKeeps(db: Pick<Db, 'purchasingSettings' | 'purchasingApprovalStep'>, user: { organizationId: string; permissions: readonly string[] }, list: CodeListKey) {
+  const { keepers } = await readPurchasingSetup(db, user.organizationId);
+  if (!keepsList(user.permissions, keepers, list))
+    throw new ApplicationError(403, 'CODE_LIST_NOT_YOURS', `${codeList(list).label} are kept by somebody else here: Purchasing Setup says who.`);
 }
 
 /** The steps and file rules a requisition or order is held to. */
