@@ -130,7 +130,10 @@ export class PurchaseReceivingService {
     if (status === Status.RECEIVED && billStatus === VendorBillStatus.PAID) {
       const closed = await db.purchaseOrder.updateMany({ where: { id: orderId, organizationId, status: Status.RECEIVED }, data: { status: Status.CLOSED, closedAt: new Date() } });
       if (closed.count === 1) {
-        await db.purchaseRequisition.updateMany({ where: { id: order.requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.CLOSED } });
+        // One order a vendor (2026-11-20): the requisition closes with the last of its orders, not the first.
+        const open = await db.purchaseOrder.count({ where: { organizationId, requisitionId: order.requisitionId, id: { not: orderId }, status: { notIn: [Status.CLOSED, Status.CANCELLED] } } });
+        if (!open)
+          await db.purchaseRequisition.updateMany({ where: { id: order.requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.CLOSED } });
         await this.audit(db, user, 'PURCHASE_ORDER_CLOSED', orderId, { number: order.number });
       }
     }

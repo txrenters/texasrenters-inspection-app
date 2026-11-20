@@ -40,11 +40,13 @@ vi.mock('@/lib/vendor-bills-xero-queries', () => ({
 const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
-vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }) }));
+vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }), useAuth: () => ({ profile: { displayName: 'Sample Purchaser' } }) }));
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: '' }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12', orderId: 'order-9' }), useRouter: () => router, useSearchParams: () => new URLSearchParams(router.query) }));
 const pdf = vi.hoisted(() => ({ downloadOrder: vi.fn(async () => undefined), orderAttachment: vi.fn(async () => ({ fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' })) }));
 vi.mock('@/lib/purchase-order-pdf/download-order', () => pdf);
+const printed = vi.hoisted(() => ({ downloadRequisition: vi.fn(async () => undefined) }));
+vi.mock('@/lib/requisition-pdf/download-requisition', () => printed);
 
 const SETTINGS = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
 const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
@@ -79,7 +81,8 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   quotes: [],
   decidedBy: null,
   decidedAt: null,
-  order: null,
+  orders: [],
+  from: { name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null },
   files: [],
   notes: [],
   comments: [],
@@ -476,7 +479,7 @@ describe('a requisition and its order', () => {
   const makeOrder = () => within(screen.getByRole('toolbar', { name: 'Requisition actions' })).getByRole('button', { name: 'Make Purchase Order' }) as HTMLButtonElement;
 
   it('offers a purchaser the order to make, and opens it once made', async () => {
-    orderEdits.create!.mutateAsync.mockResolvedValue({ id: 'order-9' } as never);
+    orderEdits.create!.mutateAsync.mockResolvedValue({ orders: [{ id: 'order-9', vendor: { id: 'vendor-hill', number: 'V00010', name: 'Hill Country Supply' } }] } as never);
     mount(detail({ status: 'APPROVED', can: { ...approved, order: true } }));
 
     fireEvent.click(makeOrder());
@@ -484,10 +487,48 @@ describe('a requisition and its order', () => {
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/purchasing/orders/order-9'));
   });
 
-  it('links the order made from it, and offers no second one', () => {
-    mount(detail({ status: 'ORDERED', order: { id: 'order-9', number: 'PO-0009' }, can: { ...approved, order: false } }));
+  // One order a vendor (2026-11-20): several made stay on the requisition, each one linked.
+  it('lists the orders made when there is one for each of several vendors', async () => {
+    router.push.mockClear();
+    orderEdits.create!.mutateAsync.mockResolvedValue({
+      orders: [
+        { id: 'order-9', vendor: { id: 'vendor-hill', number: 'V00010', name: 'Hill Country Supply' } },
+        { id: 'order-10', vendor: null },
+      ],
+    } as never);
+    mount(detail({ status: 'APPROVED', can: { ...approved, order: true } }));
 
-    expect(screen.getByRole('link', { name: 'PO-0009' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
+    fireEvent.click(makeOrder());
+    expect(await screen.findByText('Made 2 draft purchase orders, one a vendor:')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'V00010 Hill Country Supply' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
+    expect(screen.getByRole('link', { name: 'Vendor to choose' }).getAttribute('href')).toBe('/purchasing/orders/order-10');
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it('prints the requisition as it was saved, signed by whoever printed it', async () => {
+    const data = detail({ status: 'APPROVED', can: { ...approved, order: true } });
+    mount(data);
+
+    const print = within(screen.getByRole('toolbar', { name: 'Requisition actions' })).getByRole('button', { name: 'Print...' }) as HTMLButtonElement;
+    expect(print.disabled).toBe(false);
+    fireEvent.click(print);
+    await waitFor(() => expect(printed.downloadRequisition).toHaveBeenCalledWith(data, 'Sample Purchaser'));
+  });
+
+  it('links each order made from it, with its vendor, and offers none while every vendor has one', () => {
+    mount(
+      detail({
+        status: 'ORDERED',
+        orders: [
+          { id: 'order-9', number: 'PO-0009', status: 'SENT', vendor: { id: 'vendor-hill', number: 'V00010', name: 'Hill Country Supply' } },
+          { id: 'order-10', number: null, status: 'DRAFT', vendor: null },
+        ],
+        can: { ...approved, order: false },
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'PO-0009 · V00010 Hill Country Supply' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
+    expect(screen.getByRole('link', { name: 'Draft order · vendor to choose' }).getAttribute('href')).toBe('/purchasing/orders/order-10');
     expect(makeOrder().disabled).toBe(true);
   });
 });

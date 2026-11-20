@@ -10,6 +10,7 @@ import type {
   PayVendorBillInput,
   PurchaseOrderDecisionInput,
   PurchaseOrderDetail,
+  PurchaseOrdersMade,
   PurchaseOrderList,
   PurchasingSettings,
   RequisitionChoices,
@@ -96,9 +97,10 @@ export function usePurchaseOrderEdits() {
   };
   const path = (orderId: string) => `${BASE}/orders/${encodeURIComponent(orderId)}`;
   return {
+    // One draft order a vendor still without one (2026-11-20): the requisition and the order lists are read again.
     create: useMutation({
-      mutationFn: (requisitionId: string) => api<PurchaseOrderDetail>(`${BASE}/requisitions/${encodeURIComponent(requisitionId)}/order`, { method: 'POST', body: '{}' }),
-      onSuccess: saved,
+      mutationFn: (requisitionId: string) => api<PurchaseOrdersMade>(`${BASE}/requisitions/${encodeURIComponent(requisitionId)}/order`, { method: 'POST', body: '{}' }),
+      onSuccess: () => void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] !== 'choices' }),
     }),
     update: useMutation({
       mutationFn: ({ orderId, input }: { orderId: string; input: SavePurchaseOrderInput }) => api<PurchaseOrderDetail>(path(orderId), { method: 'PUT', body: JSON.stringify(input) }),
