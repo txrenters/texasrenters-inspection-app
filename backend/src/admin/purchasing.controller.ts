@@ -34,7 +34,6 @@ import {
   type RequisitionDecisionInput,
   type RequisitionLineInput,
   type RequisitionQuoteInput,
-  type SavePurchasingSettingsInput,
   type SaveRequisitionInput,
   type SetRequisitionFileInput,
 } from '@texasrenters/shared';
@@ -90,11 +89,6 @@ export class SaveRequisitionDto implements Required<SaveRequisitionInput> {
 
 export class RequisitionDecisionDto implements Required<RequisitionDecisionInput> {
   @IsOptional() @IsString() @MaxLength(1000) note!: string | null;
-}
-
-export class SavePurchasingSettingsDto implements Required<SavePurchasingSettingsInput> {
-  @IsInt() @Min(0) @Max(MOST_CENTS) approvalLimitCents!: number;
-  @IsInt() @Min(0) @Max(MOST_REQUISITION_QUOTES) quotesAboveLimit!: number;
 }
 
 export class SetRequisitionFileDto implements Required<SetRequisitionFileInput> {
@@ -285,11 +279,5 @@ export class PurchasingController {
   @HttpCode(200)
   reject(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Body() body: RequisitionDecisionDto) {
     return this.purchasing.decide(request.user, requisitionId, 'REJECTED', body);
-  }
-
-  @Put('settings')
-  @RequirePermissions('purchasing:request', 'purchasing:approve', 'purchasing:approve-any')
-  saveSettings(@Req() request: AuthenticatedRequest, @Body() body: SavePurchasingSettingsDto) {
-    return this.purchasing.saveSettings(request.user, body);
   }
 }

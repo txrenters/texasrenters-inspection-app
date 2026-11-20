@@ -6,12 +6,12 @@
  * builds handle differently.
  */
 import { renderToBuffer } from '@react-pdf/renderer';
-import type { RequisitionDetail } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, stepsFromLimit, type RequisitionDetail } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
 import { requisitionFileName } from './download-requisition';
 import { navAmount, navDay, navMoment, navMomentDay } from '../nav-pdf/nav-pdf';
-import { RequisitionDocument, orderedAs, requisitionFacts, requisitionLineCells } from './requisition-document';
+import { RequisitionDocument, approvalStep, orderedAs, requisitionFacts, requisitionLineCells } from './requisition-document';
 
 /** Every name, code and price invented. */
 const CODES = { lineType: { code: 'ITEM', name: 'Item', keepsStock: true }, place: null, expectedOn: null, vendor: null, department: { id: 'd', code: 'MAINT', name: 'Maintenance' }, notes: null };
@@ -66,7 +66,7 @@ const REQUISITION = {
   comments: [],
   links: [],
   can: { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null, attach: true, recall: false, reopen: false },
-  settings: { approvalLimitCents: 50000, quotesAboveLimit: 2 },
+  settings: { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES },
 } satisfies RequisitionDetail;
 
 /** Every page's text, as a reader of the PDF would see it. */
@@ -130,6 +130,9 @@ describe('a purchase requisition as a PDF (2026-11-20)', () => {
   it('says what it was ordered as, one line an order', () => {
     expect(orderedAs(REQUISITION)).toEqual(['PO-0031 · V00003 Hill Country Supply', 'Draft order · vendor to choose']);
     expect(orderedAs({ orders: [] })).toEqual([]);
+    // Approved within the step its amount fell in (Purchasing Setup, 2026-11-20), never a single limit.
+    expect(approvalStep(REQUISITION, 34416)).toBe('$0.00 to $500.00');
+    expect(approvalStep(REQUISITION, 61200)).toBe('$500.01 and up');
   });
 
   it('writes days as NAV does and moments in Texas time', () => {

@@ -12,7 +12,9 @@
  * anything billed.
  */
 
+import { formatMoney } from './invoices.js';
 import type { PurchaseOrderFrom, PurchaseOrderStatus } from './purchase-orders.js';
+import { approvalStepFor, type ApprovalStep, type RequisitionFileRules } from './purchasing-setup.js';
 
 export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
 export type RequisitionStatus = (typeof REQUISITION_STATUSES)[number];
@@ -98,31 +100,34 @@ export function requisitionTotalCents(lines: readonly { quantity: number; estima
   return lines.reduce((sum, line) => sum + line.quantity * line.estimatedUnitCostCents, 0);
 }
 
+/**
+ * What a requisition is held to (Purchasing Setup, 2026-11-20): the office's
+ * approval steps by amount, and its rules for files. Before Setup there was
+ * one limit and the quotes above it; that office reads as two steps.
+ */
 export interface PurchasingSettings {
-  /** At or under this a holder of "Approve requisitions" approves; above it, only "Approve any amount". */
-  approvalLimitCents: number;
-  /** How many quotes a requisition above the limit needs before it can be submitted. */
-  quotesAboveLimit: number;
+  steps: ApprovalStep[];
+  files: RequisitionFileRules;
 }
-
-export type SavePurchasingSettingsInput = PurchasingSettings;
 
 /**
  * Why a requisition cannot be submitted yet, in the office's words; null when
  * it can. The page says it before the button is pressed and the server
- * refuses with the same sentence.
+ * refuses with the same sentence. `files` are those attached so far.
  */
 export function requisitionSubmitProblem(
-  requisition: { reason: string; lines: readonly { quantity: number; estimatedUnitCostCents: number }[]; quotes: readonly { chosen: boolean }[] },
+  requisition: { reason: string; lines: readonly { quantity: number; estimatedUnitCostCents: number }[]; quotes: readonly { chosen: boolean }[]; files?: readonly unknown[] },
   settings: PurchasingSettings,
 ): string | null {
   // Why it is needed is a note now (2026-11-20), not a requirement: the request code says what kind of request it is.
   if (!requisition.lines.length) return 'Add at least one item.';
   const chosen = requisition.quotes.filter((quote) => quote.chosen).length;
   if (requisition.quotes.length && chosen !== 1) return 'Mark one quote as the chosen one.';
-  const over = requisitionTotalCents(requisition.lines) > settings.approvalLimitCents;
-  if (over && requisition.quotes.length < settings.quotesAboveLimit)
-    return `Above the approval limit, ${settings.quotesAboveLimit} quote${settings.quotesAboveLimit === 1 ? ' is' : 's are'} needed.`;
+  const totalCents = requisitionTotalCents(requisition.lines);
+  const { quotesNeeded } = approvalStepFor(totalCents, settings.steps);
+  if (requisition.quotes.length < quotesNeeded) return `At this amount, ${quotesNeeded} quote${quotesNeeded === 1 ? ' is' : 's are'} needed.`;
+  const quoteFile = settings.files.quoteFileAboveCents;
+  if (quoteFile !== null && totalCents > quoteFile && !requisition.files?.length) return `Above ${formatMoney(quoteFile)}, attach the quote before sending it.`;
   return null;
 }
 
@@ -306,10 +311,11 @@ export function requisitionLinkUrl(value: string): string | null {
 
 // ── Files on a requisition (2026-11-20, part 3) ──────────────────────────────
 
-/** A file is at most 20 MB, as the office set it on the canvas (Purchasing Setup, part 5, will make it the admin's). */
+/**
+ * The most the server takes in one upload. What the office allows, up to this,
+ * is its own (Purchasing Setup, 2026-11-20: `PurchasingSettings.files`).
+ */
 export const REQUISITION_FILE_MAX_BYTES = 20_000_000;
-/** At most this many files on one requisition. */
-export const REQUISITION_FILES_MAX = 20;
 /**
  * What the files ticked for the vendor may come to, together, to go in one
  * purchase order email beside its PDF: the mail provider takes about 4 MB in

@@ -9,7 +9,6 @@ import {
   stockCountCoversPeriod,
   stockCountDifference,
   stockCountDue,
-  stockCountNumber,
   stockCountReasonsFor,
   stockCountTitle,
   type CancelStockCountInput,
@@ -27,7 +26,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { nextDocumentNumber } from './purchasing.service';
+import { nextDocumentCode } from './purchasing-settings';
 import { OPEN_COUNT } from './stock-freeze';
 
 /**
@@ -289,7 +288,7 @@ export class StockCountsService {
         if (pairs.size > MOST_COUNT_LINES) throw new ApplicationError(409, 'STOCK_COUNT_TOO_LARGE', `That is ${pairs.size} lines, more than one count holds. Count a place at a time.`);
 
         const today = businessDate();
-        const number = stockCountNumber(await nextDocumentNumber(tx, organizationId, 'CNT'));
+        const number = await nextDocumentCode(tx, organizationId, 'CNT');
         const count = await tx.stockCount.create({
           data: { organizationId, number, kind, day: dateOf(today), placeId, note: text(input.note), requestKey: input.requestKey, startedById: personId(user), startedByName: user.displayName },
           select: { id: true },

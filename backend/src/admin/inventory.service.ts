@@ -26,7 +26,6 @@ import {
   normalizePurchasingCode,
   purchasingCodeProblem,
   suggestedPlaceCode,
-  vendorNumber,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -35,7 +34,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
 import { defaultLineTypeId, lineTypeOf } from './purchasing-codes.service';
-import { nextDocumentNumber } from './purchasing.service';
+import { nextDocumentCode } from './purchasing-settings';
 
 /**
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): the
@@ -733,7 +732,7 @@ export class InventoryService {
     try {
       await this.prisma.$transaction(async (tx) => {
         // Numbered by the console, under the series row's lock: two vendors added at once never share one.
-        const number = vendorNumber(await nextDocumentNumber(tx, organizationId, 'V'));
+        const number = await nextDocumentCode(tx, organizationId, 'V');
         const vendor = await tx.vendor.create({
           data: { organizationId, number, name, nameKey: stockKey(name), contactName: text(input.contactName), email: text(input.email), phone: text(input.phone), terms: text(input.terms), notes: input.notes?.trim() || null },
           select: { id: true },

@@ -297,6 +297,20 @@ export class MailService {
     });
   }
 
+  /**
+   * A requisition waiting for an approver (Purchasing Setup, 2026-11-20): once
+   * when it is sent for approval, and once more as a reminder. The caller
+   * escapes every value in `html`. One address a call.
+   */
+  sendRequisitionApproval(input: { to: string; subject: string; title: string; html: string }) {
+    return this.deliver({
+      to: input.to,
+      subject: input.subject,
+      html: this.layout(input.title, input.html),
+      template: 'requisition-approval',
+    });
+  }
+
   private async deliver(input: {
     to: string;
     subject: string;

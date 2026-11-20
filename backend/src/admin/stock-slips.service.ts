@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { InspectionStatus, Prisma, StockMovementKind, StockSlipKind, UserRole } from '@prisma/client';
 import {
   STOCK_SLIPS_SHOWN,
-  stockSlipNumber,
   stockSlipProblem,
   stockSlipSeries,
   type PostStockSlipInput,
@@ -16,7 +15,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { nextDocumentNumber } from './purchasing.service';
+import { nextDocumentCode } from './purchasing-settings';
 import { assertStockNotFrozen } from './stock-freeze';
 
 /**
@@ -208,7 +207,7 @@ export class StockSlipsService {
         }
 
         const day = dateOf(businessDate());
-        const number = stockSlipNumber(kind, await nextDocumentNumber(tx, organizationId, stockSlipSeries(kind)));
+        const number = await nextDocumentCode(tx, organizationId, stockSlipSeries(kind));
         const who = { createdById: user.principalType === 'API_KEY' ? null : user.id, createdByName: user.displayName };
         const slip = await tx.stockSlip.create({
           data: { organizationId, number, kind, day, technicianId, fromPlaceId, toPlaceId, inspectionId, note: text(input.note), requestKey: input.requestKey, ...who },

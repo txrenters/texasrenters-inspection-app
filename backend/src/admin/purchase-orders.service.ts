@@ -6,13 +6,14 @@ import {
   OPEN_PURCHASE_ORDER_STATUSES,
   VENDOR_FILES_MAX_BYTES,
   formatFileSize,
+  approvalStepFor,
   formatMoney,
+  orderChangeNeedsApproval,
   billProblems,
   orderGroups,
   formatTaxRate,
   orderSubmitProblem,
   orderTotals,
-  purchaseOrderNumber,
   type CancelPurchaseOrderInput,
   type PurchaseOrderActions,
   type PurchaseOrderDecisionInput,
@@ -25,6 +26,7 @@ import {
   type SendPurchaseOrderInput,
   type VendorBillView,
   type VendorPaymentMethod,
+  type ApprovalStep,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -34,7 +36,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { PurchasingFileStorageService } from '../common/purchasing-file-storage.service';
 import { MailService } from '../mail/mail.service';
-import { nextDocumentNumber, readPurchasingSettings } from './purchasing.service';
+import { nextDocumentCode, readPurchasingSetup } from './purchasing-settings';
 import { vendorFilesOf } from './requisition-files';
 
 /**
@@ -67,6 +69,8 @@ const ENTITY = 'PurchaseOrder';
 const CLOSED_SHOWN = 200;
 const CANCELLABLE: Status[] = [Status.DRAFT, Status.AWAITING_APPROVAL, Status.APPROVED, Status.SENT];
 const SENDABLE: Status[] = [Status.APPROVED, Status.SENT];
+/** An approved order is changed before anything arrives for it (Purchasing Setup, 2026-11-20). */
+const CHANGEABLE: Status[] = [Status.APPROVED, Status.SENT];
 /** Goods can still arrive for it (phase 4). */
 const RECEIVABLE: Status[] = [Status.APPROVED, Status.SENT, Status.PARTLY_RECEIVED];
 /** Its bill can be entered: from approval until it is closed. */
@@ -145,9 +149,19 @@ function row(order: Order, companies: Companies): PurchaseOrderRow {
 }
 
 /** The history's words for each audited step. */
+/**
+ * Who changed an approved order, while that change waits for approval: the
+ * newest of its approvals and changes, read newest first, if it is a change.
+ */
+function changedBy(audits: readonly { action: string; actorUserId: string | null; metadata: unknown }[]): string | null {
+  const last = audits.find((audit) => audit.action === 'PURCHASE_ORDER_APPROVED' || audit.action === 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL');
+  return last?.action === 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL' && (last.metadata as { again?: boolean } | null)?.again ? last.actorUserId : null;
+}
+
 const STEP: Record<string, string> = {
   PURCHASE_ORDER_CREATED: 'made it from the requisition',
   PURCHASE_ORDER_CHANGED: 'changed it',
+  PURCHASE_ORDER_CHANGED_AFTER_APPROVAL: 'changed it after it was approved',
   PURCHASE_ORDER_SUBMITTED: 'submitted it for approval',
   PURCHASE_ORDER_APPROVED: 'approved it',
   PURCHASE_ORDER_SENT_BACK: 'sent it back',
@@ -208,8 +222,9 @@ export class PurchaseOrdersService {
     user: AuthenticatedUser,
     order: Pick<Order, 'status' | 'createdById'>,
     totalCents: number,
-    approvalLimitCents: number,
+    steps: readonly ApprovalStep[],
     bill: { status: string; enteredById: string } | null = null,
+    changedById: string | null = null,
   ): PurchaseOrderActions {
     const purchaser = may(user, ORDER);
     const mine = order.createdById === user.id;
@@ -218,11 +233,15 @@ export class PurchaseOrdersService {
       ? null
       : mine
         ? 'You made this order, so somebody else approves it.'
-        : totalCents > approvalLimitCents && !may(user, APPROVE_ANY)
-          ? `It is above the ${formatMoney(approvalLimitCents)} approval limit, so it needs somebody who may approve any amount.`
-          : null;
+        : changedById === user.id
+          ? 'You changed this order after it was approved, so somebody else approves the change.'
+          : approvalStepFor(totalCents, steps).approver === 'ANY_AMOUNT' && !may(user, APPROVE_ANY)
+            ? `At ${formatMoney(totalCents)} it needs somebody who may approve any amount.`
+            : null;
     return {
       edit: purchaser && order.status === Status.DRAFT,
+      // An approved order nothing has arrived for, and no bill is entered against (Purchasing Setup, 2026-11-20).
+      change: purchaser && CHANGEABLE.includes(order.status) && !bill,
       submit: purchaser && order.status === Status.DRAFT,
       approve: waiting && !approveBlocked,
       sendBack: waiting && !mine,
@@ -261,9 +280,9 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId, AND: [this.visible(user)] }, select: ROW });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
-    const [companies, settings, office, deliveries, audits, receipts, vendorFiles] = await Promise.all([
+    const [companies, setup, office, deliveries, audits, receipts, vendorFiles] = await Promise.all([
       this.companyNames(organizationId),
-      readPurchasingSettings(this.prisma, organizationId),
+      readPurchasingSetup(this.prisma, organizationId),
       this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
       this.prisma.purchaseOrderDelivery.findMany({
         where: { organizationId, orderId },
@@ -376,8 +395,9 @@ export class PurchaseOrdersService {
         const note = (audit.metadata as { note?: string | null } | null)?.note;
         return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${STEP[audit.action] ?? 'changed it'}${note ? `: ${note}` : ''}` };
       }),
-      can: this.actions(user, order, totals.totalCents, settings.approvalLimitCents, order.bill),
-      approvalLimitCents: settings.approvalLimitCents,
+      can: this.actions(user, order, totals.totalCents, setup.settings.steps, order.bill, changedBy(audits)),
+      approvalSteps: setup.settings.steps,
+      reapproveChangedOrders: setup.approvals.reapproveChangedOrders,
     };
   }
 
@@ -482,8 +502,9 @@ export class PurchaseOrdersService {
         submittedAt: true,
         taxBasisPoints: true,
         vendor: { select: { name: true } },
-        lines: { select: { quantity: true, unitPriceCents: true } },
+        lines: { select: { itemId: true, quantity: true, unitPriceCents: true } },
         requisition: { select: { number: true, lines: { select: { itemId: true } } } },
+        bill: { select: { id: true } },
       },
     });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
@@ -496,12 +517,24 @@ export class PurchaseOrdersService {
     if (moved.count !== 1) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order has changed since you opened it. Open it again.');
   }
 
-  /** Replaces the draft's vendor, terms and lines. Its items are its requisition's: nothing is ordered that nobody approved asking for. */
+  /**
+   * Replaces the order's vendor, terms and lines. Its items are its
+   * requisition's: nothing is ordered that nobody approved asking for.
+   *
+   * A draft is changed freely. An approved order may be changed too, before
+   * anything arrives or a bill is entered (Purchasing Setup, 2026-11-20): it
+   * goes back for approval when the office says every change does, or when the
+   * change raises it, adds an item or changes the vendor. Otherwise it stays
+   * approved -- and one already sent is to be sent again.
+   */
   async update(user: AuthenticatedUser, orderId: string, input: SavePurchaseOrderInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
     await this.prisma.$transaction(async (tx) => {
       const order = await this.found(tx, user, orderId);
-      if (order.status !== Status.DRAFT) throw new ApplicationError(409, 'PURCHASE_ORDER_FIXED', 'An order cannot be changed once it is submitted, unless it is sent back.');
+      const changing = CHANGEABLE.includes(order.status);
+      if (order.status !== Status.DRAFT && !changing)
+        throw new ApplicationError(409, 'PURCHASE_ORDER_FIXED', 'An order cannot be changed while it waits for approval, or once goods have arrived.');
+      if (changing && order.bill) throw new ApplicationError(409, 'PURCHASE_ORDER_FIXED', "The vendor's bill is entered against this order, so it stays as it is.");
       // An item already on another live order from the same requisition would be bought twice (2026-11-20, one order a vendor).
       const elsewhere = await tx.purchaseOrderLine.findMany({
         where: { organizationId, itemId: { in: input.lines.map((line) => line.itemId) }, order: { requisitionId: order.requisitionId, id: { not: orderId }, status: { not: Status.CANCELLED } } },
@@ -515,7 +548,7 @@ export class PurchaseOrdersService {
           `${first!.item.code} is already on ${first!.order.number ?? 'another order'}${first!.order.vendor ? ` to ${first!.order.vendor.name}` : ''}, made from the same requisition.`,
         );
       }
-      await this.write(tx, user, order, orderId, input);
+      await this.write(tx, user, order, orderId, input, changing);
     }).catch((error: unknown) => {
       if (taken(error)) throw new ApplicationError(409, 'PURCHASE_ORDER_VENDOR_TAKEN', 'Another order from this requisition already goes to that vendor.');
       throw error;
@@ -523,7 +556,8 @@ export class PurchaseOrdersService {
     return this.detail(user, orderId);
   }
 
-  private async write(tx: Db, user: AuthenticatedUser, order: Awaited<ReturnType<PurchaseOrdersService['found']>>, orderId: string, input: SavePurchaseOrderInput) {
+  /** Writes the order's vendor, terms and lines; `changing` an approved one decides whether it goes back for approval. */
+  private async write(tx: Db, user: AuthenticatedUser, order: Awaited<ReturnType<PurchaseOrdersService['found']>>, orderId: string, input: SavePurchaseOrderInput, changing = false) {
     const organizationId = user.organizationId;
     {
       if (input.vendorId && !(await tx.vendor.findFirst({ where: { organizationId, id: input.vendorId, active: true }, select: { id: true } })))
@@ -535,7 +569,20 @@ export class PurchaseOrdersService {
       if (new Set(itemIds).size !== itemIds.length) throw new ApplicationError(400, 'PURCHASE_ORDER_ITEM_TWICE', 'An item is on the order twice. Put it on one line.');
       if (itemIds.some((itemId) => !asked.has(itemId)))
         throw new ApplicationError(400, 'PURCHASE_ORDER_ITEM_NOT_REQUESTED', `An order holds only the items its requisition asked for${order.requisition.number ? ` (${order.requisition.number})` : ''}.`);
-      await this.move(tx, organizationId, orderId, [Status.DRAFT], {
+      const totalCents = orderTotals(input.lines, input.taxBasisPoints).totalCents;
+      let again = false;
+      if (changing) {
+        const problem = orderSubmitProblem({ vendorId: input.vendorId ?? null, lines: input.lines });
+        if (problem) throw new ApplicationError(400, 'PURCHASE_ORDER_NOT_READY', problem);
+        const { approvals } = await readPurchasingSetup(tx, organizationId);
+        again = orderChangeNeedsApproval(
+          { totalCents: orderTotals(order.lines, order.taxBasisPoints).totalCents, itemIds: order.lines.map((line) => line.itemId), vendorId: order.vendorId },
+          { totalCents, itemIds: itemIds, vendorId: input.vendorId ?? null },
+          approvals.reapproveChangedOrders,
+        );
+      }
+      await this.move(tx, organizationId, orderId, changing ? [order.status] : [Status.DRAFT], {
+        ...(changing ? (again ? { status: Status.AWAITING_APPROVAL, approvedById: null, approvedAt: null, decisionNote: null } : { status: Status.APPROVED }) : {}),
         vendorId: input.vendorId ?? null,
         deliverToPlaceId: input.deliverToPlaceId ?? null,
         expectedOn: input.expectedOn ? dateOf(input.expectedOn) : null,
@@ -546,7 +593,15 @@ export class PurchaseOrdersService {
       await tx.purchaseOrderLine.deleteMany({ where: { organizationId, orderId } });
       if (input.lines.length)
         await tx.purchaseOrderLine.createMany({ data: input.lines.map((line, position) => ({ organizationId, orderId, position, itemId: line.itemId, quantity: line.quantity, unitPriceCents: line.unitPriceCents })) });
-      await this.audit(tx, user, 'PURCHASE_ORDER_CHANGED', ENTITY, orderId, { lines: input.lines.length, totalCents: orderTotals(input.lines, input.taxBasisPoints).totalCents });
+      if (changing)
+        await this.audit(tx, user, 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL', ENTITY, orderId, {
+          number: order.number,
+          fromTotalCents: orderTotals(order.lines, order.taxBasisPoints).totalCents,
+          totalCents,
+          again,
+          note: again ? 'it goes back for approval' : order.status === Status.SENT ? 'it stays approved, to be sent again' : 'it stays approved',
+        });
+      else await this.audit(tx, user, 'PURCHASE_ORDER_CHANGED', ENTITY, orderId, { lines: input.lines.length, totalCents });
     }
   }
 
@@ -558,7 +613,7 @@ export class PurchaseOrdersService {
       if (order.status !== Status.DRAFT) throw new ApplicationError(409, 'PURCHASE_ORDER_MOVED_ON', 'This order has already been submitted.');
       const problem = orderSubmitProblem(order);
       if (problem) throw new ApplicationError(409, 'PURCHASE_ORDER_NOT_READY', problem);
-      const number = order.number ?? purchaseOrderNumber(await nextDocumentNumber(tx, organizationId, 'PO'));
+      const number = order.number ?? (await nextDocumentCode(tx, organizationId, 'PO'));
       await this.move(tx, organizationId, orderId, [Status.DRAFT], { status: Status.AWAITING_APPROVAL, number, submittedAt: order.submittedAt ?? new Date(), decisionNote: null });
       await this.audit(tx, user, 'PURCHASE_ORDER_SUBMITTED', ENTITY, orderId, { number, totalCents: orderTotals(order.lines, order.taxBasisPoints).totalCents });
     });
@@ -578,8 +633,16 @@ export class PurchaseOrdersService {
       if (order.createdById === user.id) throw new ApplicationError(403, 'PURCHASE_ORDER_OWN', 'You made this order, so somebody else decides it.');
       const totalCents = orderTotals(order.lines, order.taxBasisPoints).totalCents;
       if (decision === 'APPROVED') {
-        const settings = await readPurchasingSettings(tx, organizationId);
-        const { approveBlocked } = this.actions(user, order, totalCents, settings.approvalLimitCents);
+        const [{ settings }, audits] = await Promise.all([
+          readPurchasingSetup(tx, organizationId),
+          tx.auditLog.findMany({
+            where: { organizationId, entityType: ENTITY, entityId: orderId, action: { in: ['PURCHASE_ORDER_APPROVED', 'PURCHASE_ORDER_CHANGED_AFTER_APPROVAL'] } },
+            select: { action: true, actorUserId: true, metadata: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          }),
+        ]);
+        const { approveBlocked } = this.actions(user, order, totalCents, settings.steps, null, changedBy(audits));
         if (approveBlocked) throw new ApplicationError(403, 'PURCHASE_ORDER_OVER_LIMIT', approveBlocked);
         await this.move(tx, organizationId, orderId, [Status.AWAITING_APPROVAL], { status: Status.APPROVED, approvedById: user.id, approvedAt: new Date(), decisionNote: note });
       } else {

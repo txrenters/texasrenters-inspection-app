@@ -1,37 +1,34 @@
 'use client';
 
 import {
-  MOST_REQUISITION_QUOTES,
+  DEFAULT_FILE_RULES,
   REQUISITION_STATUSES,
   REQUISITION_STATUS_LABEL,
   formatMoney,
-  parseMoney,
+  stepsFromLimit,
   type PurchasingSettings,
   type RequisitionRow,
   type RequisitionStatus,
 } from '@texasrenters/shared';
 import { ClipboardListIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useState, type FormEvent } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
 import { CodesTab } from '@/components/purchasing/codes-tab';
 import { OrdersTab } from '@/components/purchasing/orders-tab';
 import { RequisitionStatusBadge, approverFor } from '@/components/purchasing/requisition-parts';
+import { SetupTab } from '@/components/purchasing/setup-tab';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatCount, formatDay } from '@/lib/format';
-import { usePurchasingEdits, useRequisitions } from '@/lib/purchasing-queries';
+import { useRequisitions } from '@/lib/purchasing-queries';
 import { useUrlState } from '@/lib/url-state';
 
 /**
@@ -81,10 +78,11 @@ export default function PurchasingPage() {
   const { has } = usePermissions();
   // The code lists a requisition picks from (2026-11-20): only for whoever may manage them.
   const canCode = has('purchasing:codes');
+  // Purchasing Setup (2026-11-20): a system admin or a Purchasing admin.
+  const canSetup = has('purchasing:setup');
   const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = useRequisitions(show);
-  const [limits, setLimits] = useState(false);
   const data = list.data;
 
   const words = state.q.trim().toLowerCase();
@@ -99,11 +97,6 @@ export default function PurchasingPage() {
       <PageHeader
         actions={
           <>
-            {has('purchasing:approve-any') && data ? (
-              <Button onClick={() => setLimits(true)} variant="outline">
-                Approval limits
-              </Button>
-            ) : null}
             <Link className={buttonVariants()} href="/purchasing/requisitions/new">
               New requisition
             </Link>
@@ -121,12 +114,18 @@ export default function PurchasingPage() {
         title="Purchasing"
       />
 
-      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : state.tab === 'codes' && canCode ? 'codes' : 'requisitions'}>
+      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : state.tab === 'codes' && canCode ? 'codes' : state.tab === 'setup' && canSetup ? 'setup' : 'requisitions'}>
         <TabsList>
           <TabsTrigger value="requisitions">Requisitions</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
           {canCode ? <TabsTrigger value="codes">Codes</TabsTrigger> : null}
+          {canSetup ? <TabsTrigger value="setup">Setup</TabsTrigger> : null}
         </TabsList>
+        {canSetup ? (
+          <TabsContent value="setup">
+            <SetupTab enabled={state.tab === 'setup'} />
+          </TabsContent>
+        ) : null}
         {canCode ? (
           <TabsContent value="codes">
             <CodesTab enabled={state.tab === 'codes'} />
@@ -137,7 +136,7 @@ export default function PurchasingPage() {
         </TabsContent>
         <TabsContent value="requisitions">
       {list.isLoading ? (
-        <DataTableSkeleton columns={columns({ approvalLimitCents: 0, quotesAboveLimit: 0 })} label="Loading requisitions" rows={6} />
+        <DataTableSkeleton columns={columns({ steps: stepsFromLimit(0, 0), files: DEFAULT_FILE_RULES })} label="Loading requisitions" rows={6} />
       ) : list.isError || !data ? (
         <ErrorState error={list.error} retry={() => void list.refetch()} />
       ) : (
@@ -206,65 +205,6 @@ export default function PurchasingPage() {
       )}
         </TabsContent>
       </Tabs>
-
-      {limits && data ? <LimitsDialog onClose={() => setLimits(false)} settings={data.settings} /> : null}
     </>
-  );
-}
-
-/** The office's approval limit and how many quotes it asks for above it. Only for whoever may approve any amount. */
-function LimitsDialog({ settings, onClose }: { settings: PurchasingSettings; onClose: () => void }) {
-  const { saveSettings } = usePurchasingEdits();
-  const [limit, setLimit] = useState((settings.approvalLimitCents / 100).toFixed(2));
-  const [quotes, setQuotes] = useState(String(settings.quotesAboveLimit));
-  const approvalLimitCents = limit.trim() ? parseMoney(limit) : null;
-  const quotesAboveLimit = /^\d+$/.test(quotes.trim()) && Number(quotes) <= MOST_REQUISITION_QUOTES ? Number(quotes) : null;
-  const invalid = approvalLimitCents === null || approvalLimitCents < 0 || quotesAboveLimit === null;
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (invalid || saveSettings.isPending) return;
-    try {
-      await saveSettings.mutateAsync({ approvalLimitCents, quotesAboveLimit });
-      onClose();
-    } catch {
-      // The mutation holds the API's message; it is shown below.
-    }
-  }
-
-  return (
-    <Dialog onOpenChange={(open) => (open ? undefined : onClose())} open>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Approval limits</DialogTitle>
-          <DialogDescription>Who may approve how much. A change applies to requisitions not yet decided.</DialogDescription>
-        </DialogHeader>
-        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
-          <Field>
-            <FieldLabel htmlFor="limit-amount">Approval limit</FieldLabel>
-            <Input id="limit-amount" inputMode="decimal" onChange={(event) => setLimit(event.target.value)} value={limit} />
-            <FieldDescription>Up to this, anybody with “Approve requisitions” approves. Above it, only “Approve any amount”.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="limit-quotes">Quotes needed above the limit</FieldLabel>
-            <Input id="limit-quotes" inputMode="numeric" onChange={(event) => setQuotes(event.target.value)} value={quotes} />
-            <FieldDescription>0 for none. At most {MOST_REQUISITION_QUOTES}.</FieldDescription>
-          </Field>
-          {saveSettings.error ? (
-            <Alert variant="destructive">
-              <AlertDescription>{saveSettings.error.message}</AlertDescription>
-            </Alert>
-          ) : null}
-          <DialogFooter>
-            <Button onClick={onClose} type="button" variant="outline">
-              Cancel
-            </Button>
-            <Button disabled={invalid || saveSettings.isPending} type="submit">
-              Save limits
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

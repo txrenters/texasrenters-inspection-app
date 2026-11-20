@@ -4,6 +4,8 @@ import {
   MOST_REQUISITION_LINES,
   MOST_REQUISITION_QUOTES,
   REQUISITION_STATUS_LABEL,
+  approvalStepFor,
+  approvalStepRange,
   formatMoney,
   orderGroups,
   parseMoney,
@@ -400,8 +402,12 @@ export function RequisitionForm({
     : input.lines.map((line) => ({ itemId: line.itemId, quantity: line.quantity, vendorId: line.vendorId ?? null }));
   const totalCents = reading ? reading.estimatedTotalCents : requisitionTotalCents(input.lines);
   const totalQuantity = shownLines.reduce((sum, line) => sum + line.quantity, 0);
-  const problem = complete ? requisitionSubmitProblem(input, choices.settings) : 'Finish or delete the lines that are not filled in.';
-  const overLimit = totalCents > choices.settings.approvalLimitCents;
+  // With the files attached so far: above the office's amount, the quote must be one of them.
+  const problem = complete ? requisitionSubmitProblem({ ...input, files: requisition?.files ?? [] }, choices.settings) : 'Finish or delete the lines that are not filled in.';
+  // The approval step its amount falls in (Purchasing Setup, 2026-11-20): who approves it and the quotes it needs.
+  const stepIndex = choices.settings.steps.indexOf(approvalStepFor(totalCents, choices.settings.steps));
+  const step = choices.settings.steps[stepIndex]!;
+  const overLimit = step.quotesNeeded > 0;
   // The vendors it is ordered from, one purchase order each (2026-11-20): a line's own, else the chosen quote's.
   const chosenVendorId = reading ? (reading.quotes.find((quote) => quote.chosen)?.vendor.id ?? null) : (quotes.find((quote) => quote.chosen)?.vendorId || null);
   const vendorsNamed = orderGroups(shownLines, chosenVendorId).filter((group) => group.vendorId).length;
@@ -602,7 +608,7 @@ export function RequisitionForm({
                   )}
                 </FieldRow>
                 <FieldRow label="Status">{generalValue(REQUISITION_STATUS_LABEL[requisition?.status ?? 'DRAFT'])}</FieldRow>
-                <FieldRow label="Approval Limit">{generalValue(formatMoney(choices.settings.approvalLimitCents))}</FieldRow>
+                <FieldRow label="Approval Step">{generalValue(approvalStepRange(choices.settings.steps, stepIndex))}</FieldRow>
                 <FieldRow label="Approved By">
                   {generalValue(requisition && ['APPROVED', 'ORDERED', 'CLOSED'].includes(requisition.status) ? requisition.decidedBy : null)}
                 </FieldRow>
@@ -865,7 +871,9 @@ export function RequisitionForm({
             {editing ? (
               <div className="grid gap-3">
                 <p className="text-muted-foreground text-xs">
-                  Optional up to {formatMoney(choices.settings.approvalLimitCents)}. Above it, {choices.settings.quotesAboveLimit} are needed, with one chosen.
+                  {step.quotesNeeded
+                    ? `At this amount, ${step.quotesNeeded} ${step.quotesNeeded === 1 ? 'is' : 'are'} needed, with one chosen.`
+                    : 'Optional at this amount. With any, one is chosen.'}
                 </p>
                 {quotes.map((quote, index) => (
                   <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" key={quote.key}>
@@ -946,9 +954,9 @@ export function RequisitionForm({
             facts={[
               { label: 'Lines', value: formatCount(shownLines.length) },
               { label: 'Total (USD)', value: formatMoney(totalCents) },
-              { label: 'Approval Limit', value: formatMoney(choices.settings.approvalLimitCents) },
+              { label: 'Approval Step', value: approvalStepRange(choices.settings.steps, stepIndex) },
               { label: 'Who Approves', value: approverFor(totalCents, choices.settings) },
-              { label: 'Quotes Needed', value: overLimit ? String(choices.settings.quotesAboveLimit) : 'None' },
+              { label: 'Quotes Needed', value: step.quotesNeeded ? String(step.quotesNeeded) : 'None' },
               { label: 'Vendors', value: formatCount(vendorsNamed) },
               // One live order a vendor since 2026-11-20: each one, with the vendor it went to.
               ...(requisition?.orders ?? []).map((order, index, orders) => ({

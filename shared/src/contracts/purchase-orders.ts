@@ -1,3 +1,4 @@
+import type { ApprovalStep } from './purchasing-setup.js';
 import type { GoodsReceiptRow, VendorBillView } from './receiving.js';
 
 /**
@@ -157,6 +158,11 @@ export interface PurchaseOrderDeliveryRow {
 /** What the caller may do with it now, decided by the server. */
 export interface PurchaseOrderActions {
   edit: boolean;
+  /**
+   * Change an approved order nothing has arrived for yet (Purchasing Setup,
+   * 2026-11-20). Whether it goes back for approval is `orderChangeNeedsApproval`.
+   */
+  change: boolean;
   submit: boolean;
   approve: boolean;
   sendBack: boolean;
@@ -220,6 +226,23 @@ export interface PurchaseOrderDetail extends PurchaseOrderRow {
   shortCloseReason: string | null;
   history: { at: string; by: string; what: string }[];
   can: PurchaseOrderActions;
-  /** The office's approval limit, which orders share with requisitions. */
-  approvalLimitCents: number;
+  /** The office's approval steps, which orders share with requisitions (Purchasing Setup, 2026-11-20). */
+  approvalSteps: ApprovalStep[];
+  /** Every change to an approved order goes back for approval; off, only one that raises it or adds a line. */
+  reapproveChangedOrders: boolean;
+}
+
+/**
+ * Whether a change to an approved order goes back for approval (2026-11-20):
+ * always when the office says so; otherwise when it raises the total, puts on
+ * an item the order did not have, or goes to another vendor. Lowering a
+ * quantity, a price or the date stays approved.
+ */
+export function orderChangeNeedsApproval(
+  before: { totalCents: number; itemIds: readonly string[]; vendorId: string | null },
+  after: { totalCents: number; itemIds: readonly string[]; vendorId: string | null },
+  reapproveChangedOrders: boolean,
+): boolean {
+  if (reapproveChangedOrders) return true;
+  return after.totalCents > before.totalCents || after.vendorId !== before.vendorId || after.itemIds.some((itemId) => !before.itemIds.includes(itemId));
 }

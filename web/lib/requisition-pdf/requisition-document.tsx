@@ -1,5 +1,5 @@
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
-import { requisitionTotalCents, type RequisitionDetail, type RequisitionLine, type RequisitionStatus } from '@texasrenters/shared';
+import { approvalStepFor, approvalStepRange, requisitionTotalCents, type RequisitionDetail, type RequisitionLine, type RequisitionStatus } from '@texasrenters/shared';
 
 import { coded, fromLines, navAmount, navDay, navMoment, navStyles as styles } from '../nav-pdf/nav-pdf';
 
@@ -88,6 +88,12 @@ export function orderedAs(requisition: Pick<RequisitionDetail, 'orders'>): strin
     const vendor = order.vendor ? `${order.vendor.number ? `${order.vendor.number} ` : ''}${order.vendor.name}` : 'vendor to choose';
     return `${order.number ?? 'Draft order'} · ${vendor}`;
   });
+}
+
+/** The approval step its amount fell in (Purchasing Setup, 2026-11-20): "$500.01 to $5,000.00". */
+export function approvalStep(requisition: Pick<RequisitionDetail, 'settings'>, totalCents: number): string {
+  const { steps } = requisition.settings;
+  return approvalStepRange(steps, steps.indexOf(approvalStepFor(totalCents, steps)));
 }
 
 /** Approved, and by whom: only once it has been. A requisition sent back or rejected was decided, not approved. */
@@ -194,7 +200,7 @@ export function RequisitionDocument({ requisition, printedBy, printedAt = new Da
                 <>
                   <Text>{requisition.decidedBy}</Text>
                   <Text style={styles.muted}>
-                    {requisition.decidedAt ? `Approved in the console ${navMoment(requisition.decidedAt)}` : 'Approved in the console'} · limit ${navAmount(requisition.settings.approvalLimitCents)}
+                    {requisition.decidedAt ? `Approved in the console ${navMoment(requisition.decidedAt)}` : 'Approved in the console'} · {approvalStep(requisition, totalCents)} step
                   </Text>
                 </>
               ) : (

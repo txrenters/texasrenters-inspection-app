@@ -1,4 +1,4 @@
-import type { PurchaseOrderDetail, PurchaseOrderRow, RequisitionChoices, RequisitionDetail, RequisitionList, RequisitionRow } from '@texasrenters/shared';
+import { DEFAULT_FILE_RULES, stepsFromLimit, type PurchaseOrderDetail, type PurchaseOrderRow, type RequisitionChoices, type RequisitionDetail, type RequisitionList, type RequisitionRow } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +28,9 @@ const hooks = vi.hoisted(() => ({
   useRequisitionNotes: vi.fn(),
   useRequisitionSiblings: vi.fn(),
   readRequisition: vi.fn(),
+  // The Setup tab has its own tests (setup-tab.test.tsx): here it only reads.
+  usePurchasingSetup: vi.fn(() => ({ isLoading: true })),
+  usePurchasingSetupEdits: vi.fn(),
 }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 // The bill's Xero card and the bills panel have their own tests (bill-in-xero.test.tsx): here they read nothing.
@@ -48,7 +51,8 @@ vi.mock('@/lib/purchase-order-pdf/download-order', () => pdf);
 const printed = vi.hoisted(() => ({ downloadRequisition: vi.fn(async () => undefined) }));
 vi.mock('@/lib/requisition-pdf/download-requisition', () => printed);
 
-const SETTINGS = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
+// The office before Purchasing Setup (2026-11-20): $500.00, and two quotes above it, as two steps.
+const SETTINGS = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES };
 const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
   id: 'req-12',
   number: 'PR-0012',
@@ -130,7 +134,7 @@ beforeEach(() => {
   hooks.usePurchaseOrderEdits.mockReturnValue(orderEdits);
   hooks.usePurchaseReceivingEdits.mockReturnValue(Object.fromEntries(['receive', 'reverseReceipt', 'closeShort', 'saveBill', 'approveBill', 'approveBillAnyway', 'payBill'].map((name) => [name, mutation()])));
   account.permissions = new Set(['purchasing:request']);
-  edits = { create: mutation(), update: mutation(), step: mutation(), saveSettings: mutation() };
+  edits = { create: mutation(), update: mutation(), step: mutation() };
   hooks.usePurchasingEdits.mockReturnValue(edits);
   hooks.useRequisitionFiles.mockReturnValue({ attach: mutation(), setForVendor: { ...mutation(), mutate: vi.fn() }, remove: { ...mutation(), mutate: vi.fn() } });
   hooks.useRequisitionNotes.mockReturnValue(Object.fromEntries(['addNote', 'removeNote', 'comment', 'addLink', 'removeLink'].map((name) => [name, { ...mutation(), mutate: vi.fn() }])));
@@ -173,19 +177,19 @@ describe('the requisitions list', () => {
     expect(screen.getByText('Your purchase requisitions, and the orders made from them.')).toBeTruthy();
   });
 
-  it('offers the approval limits only to somebody who may approve any amount', () => {
+  // Purchasing Setup (2026-11-20) replaces the approval limits dialog: a tab for a system admin or Purchasing admin only.
+  it('offers Setup only to a Purchasing admin, even one who may approve any amount', () => {
+    account.permissions = new Set(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
     const first = mount(list([row()]));
+    expect(screen.queryByRole('tab', { name: 'Setup' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Approval limits' })).toBeNull();
     expect(screen.getByRole('link', { name: 'New requisition' }).getAttribute('href')).toBe('/purchasing/requisitions/new');
     first.unmount();
 
-    account.permissions = new Set(['purchasing:request', 'purchasing:approve', 'purchasing:approve-any']);
+    account.permissions = new Set(['purchasing:request', 'purchasing:setup']);
+    url.state = { ...url.state, tab: 'setup' };
     mount(list([row()]));
-    fireEvent.click(screen.getByRole('button', { name: 'Approval limits' }));
-    const dialog = screen.getByRole('dialog', { name: 'Approval limits' });
-    fireEvent.change(within(dialog).getByLabelText('Approval limit'), { target: { value: '1,000.00' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save limits' }));
-    return waitFor(() => expect(edits.saveSettings!.mutateAsync).toHaveBeenCalledWith({ approvalLimitCents: 100000, quotesAboveLimit: 2 }));
+    expect(screen.getByRole('tab', { name: 'Setup', selected: true })).toBeTruthy();
   });
 });
 
@@ -279,7 +283,7 @@ describe('filling a requisition in', () => {
     fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '40' } });
 
     expect(screen.getByText('Somebody who may approve any amount')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toBe('Above the approval limit, 2 quotes are needed.');
+    expect(screen.getByRole('status').textContent).toBe('At this amount, 2 quotes are needed.');
     expect(submit().disabled).toBe(true);
   });
 
@@ -548,7 +552,7 @@ const orderRow = (over: Partial<PurchaseOrderRow> = {}): PurchaseOrderRow => ({
   sentAt: null,
   ...over,
 });
-const NOTHING = { edit: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
+const NOTHING = { edit: false, change: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
 const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => ({
   ...orderRow(),
   vendorContact: { contactName: 'A Person', email: 'orders@hill.example', phone: null },
@@ -574,7 +578,8 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   shortCloseReason: null,
   history: [{ at: '2026-11-18T16:10:00.000Z', by: 'Sample Purchaser', what: 'submitted it for approval' }],
   can: { ...NOTHING, approve: true, sendBack: true },
-  approvalLimitCents: 50000,
+  approvalSteps: stepsFromLimit(50000, 2),
+  reapproveChangedOrders: false,
   ...over,
 });
 

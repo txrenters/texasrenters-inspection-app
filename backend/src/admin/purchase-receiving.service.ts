@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus as Status, PurchaseRequisitionStatus, StockMovementKind, VendorBillStatus } from '@prisma/client';
 import {
   billProblems,
-  receiptNumber,
   type ApproveVendorBillInput,
   type CloseShortInput,
   type PayVendorBillInput,
@@ -18,7 +17,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
 import { PurchaseOrdersService } from './purchase-orders.service';
-import { nextDocumentNumber } from './purchasing.service';
+import { nextDocumentCode } from './purchasing-settings';
 
 /**
  * Receiving and the vendor's bill (2026-11-19, phase 4 of the inventory and
@@ -177,7 +176,7 @@ export class PurchaseReceivingService {
         if ((await tx.stockPlace.count({ where: { organizationId, id: { in: placeIds }, active: true } })) !== placeIds.length)
           throw new ApplicationError(400, 'STOCK_PLACE_NOT_FOUND', 'One of the places is not in use.');
 
-        const number = receiptNumber(await nextDocumentNumber(tx, organizationId, 'RCV'));
+        const number = await nextDocumentCode(tx, organizationId, 'RCV');
         const who = { createdById: user.principalType === 'API_KEY' ? null : user.id, createdByName: user.displayName };
         const receipt = await tx.goodsReceipt.create({
           data: { organizationId, number, orderId, receivedOn: dateOf(day), packingSlip: text(input.packingSlip), note: text(input.note), requestKey: input.requestKey, ...who },

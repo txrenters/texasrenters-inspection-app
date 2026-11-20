@@ -1,14 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PurchaseRequisitionStatus as Status, type Prisma } from '@prisma/client';
 import {
-  DEFAULT_APPROVAL_LIMIT_CENTS,
-  DEFAULT_QUOTES_ABOVE_LIMIT,
   EDITABLE_REQUISITION_STATUSES,
   OPEN_REQUISITION_STATUSES,
+  approvalStepFor,
   averageCostCents,
   formatMoney,
   orderGroups,
-  requisitionNumber,
   requisitionerCode,
   requisitionSubmitProblem,
   requisitionTotalCents,
@@ -20,7 +18,6 @@ import {
   type RequisitionHistoryEntry,
   type RequisitionList,
   type RequisitionRow,
-  type SavePurchasingSettingsInput,
   type SaveRequisitionInput,
 } from '@texasrenters/shared';
 
@@ -28,6 +25,8 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { nextDocumentCode, readPurchasingSettings } from './purchasing-settings';
+import { RequisitionApproversService } from './requisition-approvers';
 import { ATTACHABLE, requisitionFiles } from './requisition-files';
 import { requisitionNotesAndLinks } from './requisition-notes';
 
@@ -124,10 +123,6 @@ function row(requisition: Requisition, companies: Companies): RequisitionRow {
 }
 
 /** Who may approve how much: the office's own, or what it starts with. Orders share it (phase 3). */
-export async function readPurchasingSettings(db: Pick<Db, 'purchasingSettings'>, organizationId: string): Promise<PurchasingSettings> {
-  const saved = await db.purchasingSettings.findUnique({ where: { organizationId }, select: { approvalLimitCents: true, quotesAboveLimit: true } });
-  return saved ?? { approvalLimitCents: DEFAULT_APPROVAL_LIMIT_CENTS, quotesAboveLimit: DEFAULT_QUOTES_ABOVE_LIMIT };
-}
 
 /**
  * The office's next number of a kind of document -- "PR" requisitions, "PO"
@@ -185,9 +180,12 @@ export function visibleRequisitions(user: AuthenticatedUser): Prisma.PurchaseReq
 
 @Injectable()
 export class PurchasingService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(RequisitionApproversService) private readonly approvers: RequisitionApproversService,
+  ) {}
 
-  private settings(db: Pick<Db, 'purchasingSettings'>, organizationId: string): Promise<PurchasingSettings> {
+  private settings(db: Pick<Db, 'purchasingSettings' | 'purchasingApprovalStep'>, organizationId: string): Promise<PurchasingSettings> {
     return readPurchasingSettings(db, organizationId);
   }
 
@@ -211,8 +209,8 @@ export class PurchasingService {
       ? null
       : mine
         ? 'You asked for this, so somebody else approves it.'
-        : totalCents > settings.approvalLimitCents && !may(user, APPROVE_ANY)
-          ? `It is above the ${formatMoney(settings.approvalLimitCents)} approval limit, so it needs somebody who may approve any amount.`
+        : approvalStepFor(totalCents, settings.steps).approver === 'ANY_AMOUNT' && !may(user, APPROVE_ANY)
+          ? `At ${formatMoney(totalCents)} it needs somebody who may approve any amount.`
           : null;
     return {
       edit: mine && EDITABLE.includes(requisition.status),
@@ -501,7 +499,7 @@ export class PurchasingService {
     const organizationId = user.organizationId;
     const created = await this.prisma.$transaction(async (tx) => {
       await this.checked(tx, organizationId, input);
-      const number = requisitionNumber(await nextDocumentNumber(tx, organizationId, 'PR'));
+      const number = await nextDocumentCode(tx, organizationId, 'PR');
       const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input) }, select: { id: true } });
       await this.writeLinesAndQuotes(tx, organizationId, requisition.id, input);
       await this.audit(tx, user, 'PURCHASE_REQUISITION_CREATED', requisition.id, { number, lines: input.lines.length, totalCents: requisitionTotalCents(input.lines) });
@@ -514,7 +512,17 @@ export class PurchasingService {
   private async own(db: Db, user: AuthenticatedUser, requisitionId: string) {
     const requisition = await db.purchaseRequisition.findFirst({
       where: { id: requisitionId, organizationId: user.organizationId, requestedById: user.id },
-      select: { id: true, number: true, status: true, reason: true, submittedAt: true, lines: { select: { quantity: true, estimatedUnitCostCents: true } }, quotes: { select: { chosen: true } } },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        reason: true,
+        submittedAt: true,
+        lines: { select: { quantity: true, estimatedUnitCostCents: true } },
+        quotes: { select: { chosen: true } },
+        // Above the office's amount, a file -- the quote -- must be attached before it is sent.
+        files: { select: { id: true } },
+      },
     });
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     return requisition;
@@ -553,17 +561,22 @@ export class PurchasingService {
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has already been submitted.');
       const problem = requisitionSubmitProblem(requisition, await this.settings(tx, organizationId));
       if (problem) throw new ApplicationError(409, 'REQUISITION_NOT_READY', problem);
-      const number = requisition.number ?? requisitionNumber(await nextDocumentNumber(tx, organizationId, 'PR'));
+      const number = requisition.number ?? (await nextDocumentCode(tx, organizationId, 'PR'));
       await this.move(tx, organizationId, requisitionId, EDITABLE, {
         status: Status.SUBMITTED,
         number,
         submittedAt: requisition.submittedAt ?? new Date(),
+        // Asked now; reminded once if it waits past its step's days (Purchasing Setup, 2026-11-20).
+        approvalRequestedAt: new Date(),
+        approvalRemindedAt: null,
         decidedById: null,
         decidedAt: null,
         decisionNote: null,
       });
       await this.audit(tx, user, 'PURCHASE_REQUISITION_SUBMITTED', requisitionId, { number, totalCents: requisitionTotalCents(requisition.lines) });
     });
+    // After it is sent, never inside: an email that fails does not take the requisition back.
+    await this.approvers.ask(organizationId, requisitionId);
     return this.detail(user, requisitionId);
   }
 
@@ -642,21 +655,5 @@ export class PurchasingService {
       await this.audit(tx, user, `PURCHASE_REQUISITION_${decision}`, requisitionId, { number: requisition.number, totalCents, note });
     });
     return this.detail(user, requisitionId);
-  }
-
-  // ── Settings ────────────────────────────────────────────────────────────
-
-  async saveSettings(user: AuthenticatedUser, input: SavePurchasingSettingsInput): Promise<PurchasingSettings> {
-    const organizationId = user.organizationId;
-    return this.prisma.$transaction(async (tx) => {
-      const before = await this.settings(tx, organizationId);
-      const data = { approvalLimitCents: input.approvalLimitCents, quotesAboveLimit: input.quotesAboveLimit };
-      if (before.approvalLimitCents === data.approvalLimitCents && before.quotesAboveLimit === data.quotesAboveLimit) return before;
-      await tx.purchasingSettings.upsert({ where: { organizationId }, create: { organizationId, ...data }, update: data });
-      await tx.auditLog.create({
-        data: { organizationId, ...auditActor(user), action: 'PURCHASING_SETTINGS_CHANGED', entityType: 'PurchasingSettings', entityId: organizationId, metadata: { from: { ...before }, to: data } },
-      });
-      return data;
-    });
   }
 }

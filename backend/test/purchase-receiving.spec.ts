@@ -197,6 +197,8 @@ function database() {
     },
     xeroOrganisation: { findMany: jest.fn(async () => []) },
     purchasingSettings: { findUnique: jest.fn(async () => null) },
+    // No approval steps saved: the office's limit reads as two steps (Purchasing Setup, 2026-11-20).
+    purchasingApprovalStep: { findMany: jest.fn(async () => []) },
     invoiceSettings: { findUnique: jest.fn(async () => null) },
     purchaseOrderDelivery: { findMany: jest.fn(async () => []) },
     // No file on any requisition here: purchase-orders.spec.ts covers files ticked for the vendor.

@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { PurchaseRequisitionStatus as Status } from '@prisma/client';
 import {
-  REQUISITION_FILES_MAX,
   REQUISITION_FILE_MAX_BYTES,
+  fileGroupOf,
+  fileGroupsSaying,
   formatFileSize,
   type RequisitionDetail,
   type RequisitionFileLink,
@@ -17,7 +18,8 @@ import { PrismaService } from '../common/prisma.service';
 import { PurchasingFileStorageService, requisitionFileKey } from '../common/purchasing-file-storage.service';
 import { cleanFileName } from './invoice-records.service';
 import { PurchasingService, visibleRequisitions } from './purchasing.service';
-import { ATTACHABLE, FILES_REMOVABLE, fileDisposition, fileExtension, sniffRequisitionFile } from './requisition-files';
+import { readPurchasingSettings } from './purchasing-settings';
+import { ATTACHABLE, fileDisposition, fileExtension, filesRemovable, sniffRequisitionFile } from './requisition-files';
 
 /** How long a link to a file lasts: long enough to open, too short to pass around. */
 const LINK_SECONDS = 300;
@@ -57,13 +59,18 @@ export class RequisitionFilesService {
 
   async attach(user: AuthenticatedUser, requisitionId: string, file: UploadedRequisitionFile | undefined): Promise<RequisitionDetail> {
     if (!file?.buffer?.length) throw new ApplicationError(422, 'REQUISITION_FILE_INVALID', 'Choose a file to attach.');
-    if (file.size > REQUISITION_FILE_MAX_BYTES || file.buffer.length > REQUISITION_FILE_MAX_BYTES)
-      throw new ApplicationError(422, 'REQUISITION_FILE_TOO_BIG', `A file is at most ${formatFileSize(REQUISITION_FILE_MAX_BYTES)}; this one is ${formatFileSize(file.buffer.length)}.`);
+    // The office's rules (Purchasing Setup, 2026-11-20): the kinds it allows, the largest file, how many.
+    const { files: rules } = await readPurchasingSettings(this.prisma, user.organizationId);
+    const most = Math.min(rules.maxBytes, REQUISITION_FILE_MAX_BYTES);
+    if (file.size > most || file.buffer.length > most)
+      throw new ApplicationError(422, 'REQUISITION_FILE_TOO_BIG', `A file is at most ${formatFileSize(most)}; this one is ${formatFileSize(file.buffer.length)}.`);
     const contentType = sniffRequisitionFile(file.buffer);
-    if (!contentType) throw new ApplicationError(422, 'REQUISITION_FILE_INVALID', 'Attach a PDF, a picture (JPG, PNG or HEIC), or a Word or Excel file.');
+    const group = contentType ? fileGroupOf(contentType) : null;
+    if (!contentType || !group || !rules.groups.includes(group))
+      throw new ApplicationError(422, 'REQUISITION_FILE_INVALID', `Attach ${fileGroupsSaying(rules.groups).replace(/, ([^,]*)$/, ' or $1')}.`);
     const requisition = await this.requisitionOf(user, requisitionId);
     this.assertAttachable(requisition.status);
-    await this.assertRoom(this.prisma, user.organizationId, requisitionId);
+    await this.assertRoom(this.prisma, user.organizationId, requisitionId, rules.maxFiles);
     if (!this.storage.durable()) throw new ApplicationError(503, 'REQUISITION_FILE_STORAGE_NOT_CONFIGURED', 'Private file storage is not configured.');
 
     const id = randomUUID();
@@ -76,7 +83,7 @@ export class RequisitionFilesService {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`requisition-files:${requisitionId}`}, 0))::text AS locked`;
         const current = await tx.purchaseRequisition.findFirst({ where: { id: requisitionId, organizationId: user.organizationId }, select: { status: true } });
         this.assertAttachable(current?.status);
-        await this.assertRoom(tx, user.organizationId, requisitionId);
+        await this.assertRoom(tx, user.organizationId, requisitionId, rules.maxFiles);
         await tx.purchaseRequisitionFile.create({
           data: { id, organizationId: user.organizationId, requisitionId, fileName, contentType, sizeBytes: file.buffer.length, storageKey, attachedById: user.id },
         });
@@ -128,8 +135,9 @@ export class RequisitionFilesService {
     const requisition = await this.requisitionOf(user, requisitionId);
     const file = await this.fileOf(user, requisitionId, fileId);
     if (file.attachedById !== user.id) throw new ApplicationError(403, 'REQUISITION_FILE_NOT_YOURS', 'Only whoever attached a file takes it off.');
-    if (!FILES_REMOVABLE.includes(requisition.status))
-      throw new ApplicationError(409, 'REQUISITION_FILE_KEPT', 'This requisition has been sent, so its files stay with it.');
+    const { files: rules } = await readPurchasingSettings(this.prisma, user.organizationId);
+    if (!filesRemovable(rules.removal).includes(requisition.status))
+      throw new ApplicationError(409, 'REQUISITION_FILE_KEPT', `This requisition has been ${rules.removal === 'UNTIL_ORDERED' ? 'ordered' : 'sent'}, so its files stay with it.`);
     await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.purchaseRequisitionFile.deleteMany({ where: { id: fileId, requisitionId, organizationId: user.organizationId } });
       if (!count) throw this.notFound();
@@ -164,10 +172,9 @@ export class RequisitionFilesService {
       throw new ApplicationError(409, 'REQUISITION_FILES_CLOSED', 'This requisition is finished with, so nothing more is attached to it.');
   }
 
-  private async assertRoom(db: Pick<PrismaService, 'purchaseRequisitionFile'>, organizationId: string, requisitionId: string) {
+  private async assertRoom(db: Pick<PrismaService, 'purchaseRequisitionFile'>, organizationId: string, requisitionId: string, most: number) {
     const held = await db.purchaseRequisitionFile.count({ where: { organizationId, requisitionId } });
-    if (held >= REQUISITION_FILES_MAX)
-      throw new ApplicationError(409, 'REQUISITION_FILES_FULL', `A requisition holds at most ${REQUISITION_FILES_MAX} files. Take one off first.`);
+    if (held >= most) throw new ApplicationError(409, 'REQUISITION_FILES_FULL', `A requisition holds at most ${most} files. Take one off first.`);
   }
 
   private notFound() {

@@ -1,6 +1,8 @@
 import {
   PURCHASE_ORDER_STATUS_LABEL,
   REQUISITION_STATUS_LABEL,
+  approvalStepFor,
+  approverSaying,
   type PurchaseOrderStatus,
   type PurchasingSettings,
   type RequisitionStatus,
@@ -24,9 +26,9 @@ export function RequisitionStatusBadge({ status }: { status: RequisitionStatus }
   return <Badge variant={TONE[status]}>{REQUISITION_STATUS_LABEL[status]}</Badge>;
 }
 
-/** Who a requisition of this size goes to, in the office's words. */
+/** Who a requisition of this size goes to, in the office's words: by the approval step its amount falls in. */
 export function approverFor(totalCents: number, settings: PurchasingSettings): string {
-  return totalCents > settings.approvalLimitCents ? 'Somebody who may approve any amount' : 'An approver';
+  return approverSaying(approvalStepFor(totalCents, settings.steps));
 }
 
 const ORDER_TONE: Record<PurchaseOrderStatus, 'secondary' | 'warning' | 'info' | 'success'> = {
