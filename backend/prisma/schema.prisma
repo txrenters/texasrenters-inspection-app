@@ -6173,7 +6173,7 @@ enum PurchaseOrderStatus {
 
 /// An order to a vendor, made from one approved requisition. It moves no
 /// stock. Numbered when submitted for approval; never approved by whoever
-/// made it (checked); one live order a requisition (a partial unique index).
+/// made it (checked); one live order a requisition and vendor (a partial unique index, 2026-11-20).
 model PurchaseOrder {
   id               String              @id @default(uuid()) @db.Uuid
   organizationId   String              @db.Uuid

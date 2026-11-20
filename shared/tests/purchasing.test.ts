@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
-import { requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
+import { orderGroups, requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
 import { DEFAULT_FILE_RULES, stepsFromLimit } from '../src/contracts/purchasing-setup';
 
 // Purchase requisitions, phase 2 (2026-11-19). Every figure invented.
@@ -95,5 +95,23 @@ describe('a purchase order', () => {
     expect(orderSubmitProblem({ vendorId: null, lines: [{}] })).toBe('Choose the vendor.');
     expect(orderSubmitProblem({ vendorId: 'v', lines: [] })).toBe('An order needs at least one line.');
     expect(orderSubmitProblem({ vendorId: 'v', lines: [{}] })).toBeNull();
+  });
+});
+
+describe('how a requisition becomes purchase orders (2026-11-20)', () => {
+  const at = (itemId: string | null, vendorId: string | null) => ({ itemId, vendorId });
+
+  it('makes one order a vendor, in the order of each vendor first line', () => {
+    const groups = orderGroups([at('filter', 'alamo'), at('battery', 'hill'), at('glue', 'alamo')], null);
+    expect(groups.map((group) => [group.vendorId, group.lines.map((one) => one.itemId)])).toEqual([
+      ['alamo', ['filter', 'glue']],
+      ['hill', ['battery']],
+    ]);
+  });
+
+  it('sends a line naming no vendor to the chosen quote, else to one order waiting for a vendor, and orders no line without an item', () => {
+    expect(orderGroups([at('filter', null), at('battery', 'alamo')], 'hill').map((group) => group.vendorId)).toEqual(['hill', 'alamo']);
+    expect(orderGroups([at('filter', null), at('battery', null)], null)).toEqual([{ vendorId: null, lines: [at('filter', null), at('battery', null)] }]);
+    expect(orderGroups([at(null, 'hill')], null)).toEqual([]);
   });
 });

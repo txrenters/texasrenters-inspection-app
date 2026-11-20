@@ -113,9 +113,11 @@ export interface PurchaseOrderRow {
   /** Null while it is a draft never submitted. */
   number: string | null;
   status: PurchaseOrderStatus;
-  vendor: { id: string; name: string } | null;
+  /** `number` is the vendor's No. ("V-00003", 2026-11-20). */
+  vendor: { id: string; name: string; number?: string | null } | null;
   requisition: { id: string; number: string | null };
-  company: { tenantId: string; name: string } | null;
+  /** `purchaserCode` is the company's code ("THMP", 2026-11-20), when it has one. */
+  company: { tenantId: string; name: string; purchaserCode?: string | null } | null;
   expectedOn: string | null;
   lineCount: number;
   totalCents: number;
@@ -126,6 +128,11 @@ export interface PurchaseOrderRow {
 
 export interface PurchaseOrderList {
   orders: PurchaseOrderRow[];
+}
+
+/** What "Make purchase orders" made (2026-11-20, part 4): one draft order a vendor still without one. */
+export interface PurchaseOrdersMade {
+  orders: { id: string; vendor: { id: string; number: string | null; name: string } | null }[];
 }
 
 export interface PurchaseOrderLine {
@@ -191,7 +198,8 @@ export interface PurchaseOrderFrom {
 
 export interface PurchaseOrderDetail extends PurchaseOrderRow {
   vendorContact: { contactName: string | null; email: string | null; phone: string | null } | null;
-  deliverTo: { id: string; name: string } | null;
+  /** `code` is the place's Location Code ("STORE", 2026-11-20). */
+  deliverTo: { id: string; name: string; code?: string | null } | null;
   terms: string | null;
   taxBasisPoints: number;
   notes: string | null;

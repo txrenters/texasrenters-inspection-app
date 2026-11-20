@@ -59,9 +59,10 @@ function matches(row: Row, where: Where): boolean {
     if (value === undefined) return true;
     if (field === 'AND') return (value as Where[]).every((part) => matches(row, part));
     if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
-      const rule = value as { in?: unknown[]; notIn?: unknown[]; lte?: number; gte?: number };
+      const rule = value as { in?: unknown[]; notIn?: unknown[]; lte?: number; gte?: number; not?: unknown };
       if (rule.in) return rule.in.includes(row[field]);
       if (rule.notIn) return !rule.notIn.includes(row[field]);
+      if ('not' in rule) return row[field] !== rule.not;
       if (rule.lte !== undefined) return (row[field] as number) <= rule.lte;
       if (rule.gte !== undefined) return (row[field] as number) >= rule.gte;
       return true;
@@ -84,7 +85,8 @@ function database() {
   const base = { organizationId: ORG, requisitionId: REQUISITION, vendorId: id(21), xeroTenantId: null, deliverToPlaceId: STOCKROOM, expectedOn: null, terms: 'Net 30', taxBasisPoints: 825, notes: null, createdById: buyer.id, decisionNote: null, cancelReason: null, shortClosedAt: null, shortCloseReason: null };
   const orders: Row[] = [
     { ...base, id: ORDER, number: 'PO-0009', status: 'SENT', approvedById: owner.id, approvedAt: new Date('2026-11-18T16:00:00.000Z'), sentAt: new Date('2026-11-18T16:40:00.000Z'), createdAt: new Date('2026-11-18T15:00:00.000Z') },
-    { ...base, id: DRAFT_ORDER, number: null, status: 'DRAFT', approvedById: null, approvedAt: null, sentAt: null, createdAt: new Date('2026-11-18T15:30:00.000Z') },
+    // Another requisition's draft (2026-11-20): a requisition closes with the last of its own orders.
+    { ...base, id: DRAFT_ORDER, requisitionId: id(13), number: null, status: 'DRAFT', approvedById: null, approvedAt: null, sentAt: null, createdAt: new Date('2026-11-18T15:30:00.000Z') },
   ];
   const orderLines: Row[] = [
     { id: FILTER_LINE, organizationId: ORG, orderId: ORDER, position: 0, itemId: FILTER, quantity: 36, unitPriceCents: 390, receivedQuantity: 0 },
@@ -146,6 +148,8 @@ function database() {
         return found ? wholeOrder(found) : null;
       }),
       updateMany: updateMany(orders),
+      // The requisition's other orders still open (2026-11-20, one order a vendor): it closes with the last.
+      count: jest.fn(async ({ where }: { where: Where }) => orders.filter((row) => matches(row, where)).length),
     },
     purchaseOrderLine: { updateMany: updateMany(orderLines) },
     purchaseRequisition: { updateMany: updateMany(requisitions) },
@@ -435,6 +439,18 @@ describe('paying and closing', () => {
     expect(requisitions[0]).toMatchObject({ status: 'CLOSED' });
     expect(audits.slice(-2).map((audit) => audit.action)).toEqual(['VENDOR_BILL_PAID', 'PURCHASE_ORDER_CLOSED']);
     await expect(service.payBill(clerk, ORDER, payment)).rejects.toMatchObject({ code: 'VENDOR_BILL_NOT_APPROVED', message: 'This bill is already paid.' });
+  });
+
+  it('closes the order but keeps its requisition Ordered while another vendor order from it is open (2026-11-20)', async () => {
+    const { service, orders, requisitions } = database();
+    // A second vendor's order from the same requisition, sent and not yet received.
+    orders.push({ ...orders[0]!, id: id(44), number: 'PO-0010', vendorId: id(22), status: 'SENT' });
+    await service.receive(keeper, ORDER, everything());
+    await service.saveBill(clerk, ORDER, fullBill());
+    await service.approveBill(clerk, ORDER);
+
+    expect(await service.payBill(clerk, ORDER, payment)).toMatchObject({ status: 'CLOSED' });
+    expect(requisitions[0]).toMatchObject({ status: 'ORDERED' });
   });
 
   it('stays open when it is paid before everything has arrived, and closes when the rest does', async () => {

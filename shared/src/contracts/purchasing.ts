@@ -13,6 +13,7 @@
  */
 
 import { formatMoney } from './invoices.js';
+import type { PurchaseOrderFrom, PurchaseOrderStatus } from './purchase-orders.js';
 import { approvalStepFor, type ApprovalStep, type RequisitionFileRules } from './purchasing-setup.js';
 
 export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
@@ -67,6 +68,32 @@ export interface PurchasingCodeRef {
   id: string;
   code: string;
   name: string;
+}
+
+/** An order made from a requisition, as the requisition lists it. */
+export interface RequisitionOrder {
+  id: string;
+  /** Null while it is a draft never submitted. */
+  number: string | null;
+  status: PurchaseOrderStatus;
+  vendor: { id: string; number: string | null; name: string } | null;
+}
+
+/**
+ * How a requisition becomes purchase orders (2026-11-20, part 4): one a
+ * vendor, as NAV makes them. A line goes to its own vendor, else to the chosen
+ * quote's; a line with neither waits on an order with no vendor yet, which the
+ * purchaser fills in. Lines without an item are not ordered. Groups keep the
+ * order their first line has.
+ */
+export function orderGroups<Line extends { itemId: string | null; vendorId: string | null }>(lines: readonly Line[], quoteVendorId: string | null): { vendorId: string | null; lines: Line[] }[] {
+  const groups = new Map<string | null, Line[]>();
+  for (const line of lines) {
+    if (!line.itemId) continue;
+    const vendorId = line.vendorId ?? quoteVendorId;
+    groups.set(vendorId, [...(groups.get(vendorId) ?? []), line]);
+  }
+  return [...groups].map(([vendorId, grouped]) => ({ vendorId, lines: grouped }));
 }
 
 export function requisitionTotalCents(lines: readonly { quantity: number; estimatedUnitCostCents: number }[]): number {
@@ -355,8 +382,10 @@ export interface RequisitionDetail extends RequisitionRow {
   decidedBy: string | null;
   decidedAt: string | null;
   history: RequisitionHistoryEntry[];
-  /** The order made from it, once there is one. */
-  order: { id: string; number: string | null } | null;
+  /** The orders made from it, one a vendor (2026-11-20, part 4), oldest first; a cancelled one is left out. */
+  orders: RequisitionOrder[];
+  /** Who it is from, as its PDF heads it: the company it is for, at the office's address. */
+  from: PurchaseOrderFrom;
   /** What is attached to it, oldest first. */
   files: RequisitionFile[];
   /** Notes on the record, oldest first. */

@@ -217,7 +217,7 @@ function OrderForm({
   };
   // The order's own vendor, even if it has been switched off since.
   const vendors = [...choices.vendors];
-  if (order.vendor && !vendors.some((option) => option.id === order.vendor?.id)) vendors.push(order.vendor);
+  if (order.vendor && !vendors.some((option) => option.id === order.vendor?.id)) vendors.push({ id: order.vendor.id, name: order.vendor.name, number: order.vendor.number ?? undefined });
 
   return (
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">

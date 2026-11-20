@@ -7,6 +7,7 @@ import {
   approvalStepFor,
   approvalStepRange,
   formatMoney,
+  orderGroups,
   parseMoney,
   requisitionSubmitProblem,
   requisitionTotalCents,
@@ -179,6 +180,7 @@ export function RequisitionForm({
   onDiscard,
   readOnly = false,
   decisions,
+  onPrint,
 }: {
   choices: RequisitionChoices;
   /** The requisition being changed or read; none for a new one. */
@@ -196,6 +198,8 @@ export function RequisitionForm({
   /** Read, not changed: one sent for approval, or somebody else's. */
   readOnly?: boolean;
   decisions?: RequisitionDecisions;
+  /** Print...: the requisition as it was last saved, as a PDF (2026-11-20, part 4). None for a new one. */
+  onPrint?: () => void;
 }) {
   const ids = useId();
   const router = useRouter();
@@ -393,15 +397,20 @@ export function RequisitionForm({
   };
   // A requisition sent for approval reads its own figures.
   const reading = readOnly && requisition ? requisition : null;
-  const shownLines: readonly { quantity: number; vendorId: string | null }[] = reading ? reading.lines.map((line) => ({ quantity: line.quantity, vendorId: line.vendor?.id ?? null })) : input.lines.map((line) => ({ quantity: line.quantity, vendorId: line.vendorId ?? null }));
+  const shownLines: readonly { itemId: string | null; quantity: number; vendorId: string | null }[] = reading
+    ? reading.lines.map((line) => ({ itemId: line.item?.id ?? null, quantity: line.quantity, vendorId: line.vendor?.id ?? null }))
+    : input.lines.map((line) => ({ itemId: line.itemId, quantity: line.quantity, vendorId: line.vendorId ?? null }));
   const totalCents = reading ? reading.estimatedTotalCents : requisitionTotalCents(input.lines);
   const totalQuantity = shownLines.reduce((sum, line) => sum + line.quantity, 0);
-  const problem = complete ? requisitionSubmitProblem(input, choices.settings) : 'Finish or delete the lines that are not filled in.';
+  // With the files attached so far: above the office's amount, the quote must be one of them.
+  const problem = complete ? requisitionSubmitProblem({ ...input, files: requisition?.files ?? [] }, choices.settings) : 'Finish or delete the lines that are not filled in.';
   // The approval step its amount falls in (Purchasing Setup, 2026-11-20): who approves it and the quotes it needs.
   const stepIndex = choices.settings.steps.indexOf(approvalStepFor(totalCents, choices.settings.steps));
   const step = choices.settings.steps[stepIndex]!;
   const overLimit = step.quotesNeeded > 0;
-  const vendorsNamed = new Set(shownLines.flatMap((line) => (line.vendorId ? [line.vendorId] : []))).size;
+  // The vendors it is ordered from, one purchase order each (2026-11-20): a line's own, else the chosen quote's.
+  const chosenVendorId = reading ? (reading.quotes.find((quote) => quote.chosen)?.vendor.id ?? null) : (quotes.find((quote) => quote.chosen)?.vendorId || null);
+  const vendorsNamed = orderGroups(shownLines, chosenVendorId).filter((group) => group.vendorId).length;
 
   const save = (submit: boolean) => {
     if (pending || !complete || (submit && problem)) return;
@@ -502,6 +511,7 @@ export function RequisitionForm({
         onNew={() => go('/purchasing/requisitions/new')}
         onNext={requisition ? () => void sibling(1)() : undefined}
         onPrevious={requisition ? () => void sibling(-1)() : undefined}
+        onPrint={requisition ? onPrint : undefined}
         onReject={can?.reject ? () => setDialog('reject') : undefined}
         onRelease={can?.approve ? () => void decide('approve').catch(() => undefined) : undefined}
         onReopen={can?.reopen ? () => setDialog('reopen') : undefined}
@@ -511,7 +521,7 @@ export function RequisitionForm({
         onSendApproval={editing && !problem ? () => save(true) : undefined}
         onSendBack={can?.sendBack ? () => setDialog('send-back') : undefined}
         onToggle={toggle}
-        orderHint={can?.order ? 'Makes the draft purchase order from this requisition.' : undefined}
+        orderHint={can?.order ? 'Makes a draft purchase order for each vendor on this requisition that has none yet.' : undefined}
         releaseHint={can?.approveBlocked ?? undefined}
         saveHint={editing && !complete ? 'Finish or delete the lines that are not filled in.' : undefined}
         saving={pending}
@@ -948,18 +958,16 @@ export function RequisitionForm({
               { label: 'Who Approves', value: approverFor(totalCents, choices.settings) },
               { label: 'Quotes Needed', value: step.quotesNeeded ? String(step.quotesNeeded) : 'None' },
               { label: 'Vendors', value: formatCount(vendorsNamed) },
-              ...(requisition?.order
-                ? [
-                    {
-                      label: 'Purchase Order',
-                      value: (
-                        <Link className="underline underline-offset-4" href={`/purchasing/orders/${requisition.order.id}`}>
-                          {requisition.order.number ?? 'Draft order'}
-                        </Link>
-                      ),
-                    },
-                  ]
-                : []),
+              // One live order a vendor since 2026-11-20: each one, with the vendor it went to.
+              ...(requisition?.orders ?? []).map((order, index, orders) => ({
+                label: orders.length > 1 ? `Purchase Order ${index + 1}` : 'Purchase Order',
+                value: (
+                  <Link className="underline underline-offset-4" href={`/purchasing/orders/${order.id}`}>
+                    {order.number ?? 'Draft order'}
+                    {order.vendor ? ` · ${order.vendor.number ? `${order.vendor.number} ` : ''}${order.vendor.name}` : ' · vendor to choose'}
+                  </Link>
+                ),
+              })),
             ]}
             title="Requisition Statistics"
           >
