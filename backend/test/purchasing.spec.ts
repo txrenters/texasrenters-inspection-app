@@ -9,6 +9,7 @@ import { sniffRequisitionFile } from '../src/admin/requisition-files';
 import { RequisitionFilesService } from '../src/admin/requisition-files.service';
 import { RequisitionNotesService } from '../src/admin/requisition-notes.service';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { businessDate } from '../src/common/business-day';
 
 /**
  * Purchase requisitions, phase 2 (2026-11-19). Every id, name, code and price
@@ -952,9 +953,11 @@ describe('companies and approver limits (Purchasing Setup, 2026-11-21)', () => {
     const { service, persons } = database();
     persons.push(person(asker, { companyTenantIds: [PEST] }));
     const draft = await service.create(asker, small({ xeroTenantId: null, lines: [] }));
-    // Blank stays blank: no document date until somebody gives one.
-    expect(draft).toMatchObject({ status: 'DRAFT', company: null, documentDate: null, lines: [] });
+    // Its Document Date is the day it was made (2026-11-21), and stays that day when a save gives none.
+    expect(draft).toMatchObject({ status: 'DRAFT', company: null, documentDate: businessDate(), lines: [] });
     expect(draft.number).toMatch(/^PR-/);
+    expect(await service.update(asker, draft.id, small({ xeroTenantId: null, lines: [], documentDate: null }))).toMatchObject({ documentDate: draft.requisitionDate });
+    expect(await service.update(asker, draft.id, small({ xeroTenantId: null, lines: [], documentDate: '2026-11-02' }))).toMatchObject({ documentDate: '2026-11-02' });
     await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Add at least one item.' });
   });
 

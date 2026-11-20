@@ -8,13 +8,15 @@ import { Ribbon, RibbonButton, RibbonGroup, RibbonStack } from '@/components/pur
  * The requisition's ribbon, every group the office approved on the canvas
  * (2026-11-20): Manage, Request Approval, Release, Prepare, Order, Print, Show
  * Attached and Page -- with Approve for whoever decides it. A button whose
- * action is not open to this person now is drawn greyed, with why on hover;
- * one the page gives no action at all is left greyed with its reason.
+ * action is not open to this person now is drawn greyed, and says why when it
+ * is pressed (2026-11-21): a reason on hover alone was missed.
  *
  * It only draws: each action is the page's, and the server decides again.
  */
 
 type Action = (() => void) | undefined;
+
+const WRITING = 'Lines are added to a requisition that is still being written.';
 
 export interface RequisitionRibbonProps {
   /** Manage */
@@ -90,8 +92,8 @@ export function RequisitionRibbon(props: RequisitionRibbonProps) {
       <RibbonGroup caption="Prepare">
         <RibbonStack>
           <RibbonButton disabled={busy || !props.onAddLow} hint={props.onAddLow ? 'Adds a line for each item of this company that is at or below its reorder level.' : 'Nothing of this company is low, or the requisition is not being written.'} label="Add Everything That Is Low" onClick={() => props.onAddLow?.()} />
-          <RibbonButton disabled={busy || !props.onSelectFromCategories} label="Select From Item Categories" onClick={() => props.onSelectFromCategories?.()} />
-          <RibbonButton disabled={busy || !props.onScan} label={props.scanning ? 'Stop Scanning' : 'Scan Items'} onClick={() => props.onScan?.()} pressed={props.scanning} />
+          <RibbonButton disabled={busy || !props.onSelectFromCategories} hint={props.onSelectFromCategories ? undefined : WRITING} label="Select From Item Categories" onClick={() => props.onSelectFromCategories?.()} />
+          <RibbonButton disabled={busy || !props.onScan} hint={props.onScan ? undefined : WRITING} label={props.scanning ? 'Stop Scanning' : 'Scan Items'} onClick={() => props.onScan?.()} pressed={props.scanning} />
         </RibbonStack>
       </RibbonGroup>
 

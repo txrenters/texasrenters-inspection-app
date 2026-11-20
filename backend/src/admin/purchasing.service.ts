@@ -321,7 +321,8 @@ export class PurchasingService {
       requestCode: requisition.requestCode,
       costCenter: requisition.costCenter,
       requisitionDate: businessDate(requisition.createdAt),
-      documentDate: dayOf(requisition.documentDate),
+      // One made blank (2026-11-20 only) reads as the day it was made.
+      documentDate: dayOf(requisition.documentDate) ?? businessDate(requisition.createdAt),
       lines: requisition.lines.map((line) => ({
         id: line.id,
         item: line.item ? { id: line.item.id, code: line.item.code, name: line.item.name, unit: line.item.unit } : null,
@@ -500,15 +501,16 @@ export class PurchasingService {
     if (input.quotes.filter((quote) => quote.chosen).length > 1) throw new ApplicationError(400, 'REQUISITION_QUOTES_CHOSEN', 'Only one quote can be the chosen one.');
   }
 
-  private fields(input: SaveRequisitionInput) {
+  /** `made` is the Texas day the requisition was made: its Document Date unless another is given (2026-11-21). */
+  private fields(input: SaveRequisitionInput, made: string) {
     return {
       xeroTenantId: input.xeroTenantId ?? null,
       neededBy: input.neededBy ? dateOf(input.neededBy) : null,
       deliverToPlaceId: input.deliverToPlaceId ?? null,
       requestCodeId: input.requestCodeId ?? null,
       costCenterId: input.costCenterId ?? null,
-      // The day on the paper, as given: blank stays blank (2026-11-21), and the office may require it in Purchasing Setup.
-      documentDate: input.documentDate ? dateOf(input.documentDate) : null,
+      // The day on the paper: the day it was made, unless another is given.
+      documentDate: dateOf(input.documentDate || made),
       reason: input.reason.trim(),
     };
   }
@@ -551,7 +553,7 @@ export class PurchasingService {
     const created = await this.prisma.$transaction(async (tx) => {
       await this.checked(tx, user, input);
       const number = await nextDocumentCode(tx, organizationId, 'PR');
-      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input) }, select: { id: true } });
+      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input, businessDate()) }, select: { id: true } });
       await this.writeLinesAndQuotes(tx, organizationId, requisition.id, input);
       await this.audit(tx, user, 'PURCHASE_REQUISITION_CREATED', requisition.id, { number, lines: input.lines.length, totalCents: requisitionTotalCents(input.lines) });
       return requisition;
@@ -573,6 +575,7 @@ export class PurchasingService {
         requestCodeId: true,
         costCenterId: true,
         documentDate: true,
+        createdAt: true,
         neededBy: true,
         deliverToPlaceId: true,
         xeroTenantId: true,
@@ -602,7 +605,7 @@ export class PurchasingService {
       const requisition = await this.own(tx, user, requisitionId);
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_FIXED', 'A requisition cannot be changed once it is submitted, unless it is sent back.');
       await this.checked(tx, user, input);
-      await this.move(tx, organizationId, requisitionId, EDITABLE, this.fields(input));
+      await this.move(tx, organizationId, requisitionId, EDITABLE, this.fields(input, businessDate(requisition.createdAt)));
       await tx.purchaseRequisitionLine.deleteMany({ where: { organizationId, requisitionId } });
       await tx.purchaseRequisitionQuote.deleteMany({ where: { organizationId, requisitionId } });
       await this.writeLinesAndQuotes(tx, organizationId, requisitionId, input);
@@ -617,7 +620,7 @@ export class PurchasingService {
     await this.prisma.$transaction(async (tx) => {
       const requisition = await this.own(tx, user, requisitionId);
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has already been submitted.');
-      const problem = requisitionSubmitProblem({ ...requisition, documentDate: dayOf(requisition.documentDate), neededBy: dayOf(requisition.neededBy) }, await this.settings(tx, organizationId));
+      const problem = requisitionSubmitProblem({ ...requisition, documentDate: dayOf(requisition.documentDate) ?? businessDate(requisition.createdAt), neededBy: dayOf(requisition.neededBy) }, await this.settings(tx, organizationId));
       if (problem) throw new ApplicationError(409, 'REQUISITION_NOT_READY', problem);
       // Saved as a draft without a company, it is sent only for one of the person's own.
       const refused = companyRefusal(await readStanding(tx, user), requisition.xeroTenantId, 'ask for stock');

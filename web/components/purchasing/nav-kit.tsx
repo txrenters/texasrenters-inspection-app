@@ -3,6 +3,7 @@
 import { ChevronDownIcon, ChevronUpIcon, type LucideIcon } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 /**
@@ -35,6 +36,9 @@ export function RibbonGroup({ caption, children }: { caption: string; children: 
  * A large ribbon button with its icon above the words, or a small one of words
  * alone. `hint` says what it does, or why it cannot be pressed now; `pressed`
  * marks a toggle that is on (Notes, Links, Comments).
+ *
+ * Greyed with a reason, it still opens when pressed, to say why (2026-11-21):
+ * the office took greyed buttons for ones not built yet.
  */
 export function RibbonButton({
   icon: Icon,
@@ -55,25 +59,40 @@ export function RibbonButton({
   hint?: string;
   pressed?: boolean;
 }) {
-  return (
+  const blocked = Boolean(disabled && hint && !busy);
+  const [why, setWhy] = useState(false);
+  // One element whether greyed or not, so a button that greys keeps its place and focus.
+  const button = (
     <button
+      aria-disabled={blocked || undefined}
       aria-pressed={pressed}
       className={cn(
-        'focus-visible:ring-ring/50 rounded-sm text-xs font-medium outline-none focus-visible:ring-[3px] disabled:cursor-default disabled:opacity-40',
+        'focus-visible:ring-ring/50 rounded-sm text-xs font-medium outline-none focus-visible:ring-[3px] disabled:cursor-default disabled:opacity-40 aria-disabled:cursor-default aria-disabled:opacity-40',
         // A large button's words wrap under its icon, two lines at most, as NAV's do; a small one's stay on one line.
         Icon ? 'flex min-h-11 max-w-24 min-w-14 flex-col items-center gap-0.5 px-1 py-1 text-center leading-tight' : 'block min-h-6 px-1 py-0.5 text-left whitespace-nowrap',
         tone === 'danger' ? 'text-destructive' : 'text-heading',
         pressed ? 'bg-accent' : '',
-        'enabled:hover:bg-accent',
+        blocked ? '' : 'enabled:hover:bg-accent',
       )}
-      disabled={disabled || busy}
-      onClick={onClick}
+      disabled={blocked ? undefined : disabled || busy}
+      onClick={blocked ? () => setWhy(true) : onClick}
       title={hint}
       type="button"
     >
       {Icon ? <Icon aria-hidden="true" className="size-5" /> : null}
       {label}
     </button>
+  );
+  return (
+    <Popover onOpenChange={setWhy} open={blocked && why}>
+      <PopoverAnchor asChild>{button}</PopoverAnchor>
+      {blocked ? (
+        <PopoverContent aria-label={`Why ${label} cannot be pressed`} className="w-72 p-3 text-sm">
+          <p className="text-heading font-medium">{label}</p>
+          <p className="text-muted-foreground mt-1">{hint}</p>
+        </PopoverContent>
+      ) : null}
+    </Popover>
   );
 }
 
