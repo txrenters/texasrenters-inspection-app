@@ -12,7 +12,10 @@ import type {
   PurchaseOrderDetail,
   PurchaseOrdersMade,
   PurchaseOrderList,
+  AddPurchasingPersonInput,
   DocumentSeriesKind,
+  PurchasingPeople,
+  PurchasingRoleKey,
   PurchasingSetup,
   RequisitionChoices,
   RequisitionDecisionInput,
@@ -23,6 +26,7 @@ import type {
   ReverseReceiptInput,
   SavePurchaseOrderInput,
   SaveDocumentSeriesInput,
+  SavePurchasingPersonInput,
   SavePurchasingApprovalsInput,
   SaveRequisitionFileRulesInput,
   SaveRequisitionInput,
@@ -51,11 +55,39 @@ export const purchasingKeys = {
   orders: (show: 'open' | 'closed') => ['purchasing', 'orders', show] as const,
   order: (orderId: string) => ['purchasing', 'order', orderId] as const,
   setup: ['purchasing', 'setup'] as const,
+  people: ['purchasing', 'setup', 'people'] as const,
 };
 
 /** Purchasing Setup (2026-11-20, part 5a): only a system admin or a Purchasing admin reads it. */
 export function usePurchasingSetup(enabled: boolean) {
   return useQuery({ queryKey: purchasingKeys.setup, queryFn: ({ signal }) => api<PurchasingSetup>(`${BASE}/setup`, { signal }), enabled, ...KEPT });
+}
+
+/** Setup's roles and who holds them (part 5b, 2026-11-21). */
+export function usePurchasingPeople(enabled: boolean) {
+  return useQuery({ queryKey: purchasingKeys.people, queryFn: ({ signal }) => api<PurchasingPeople>(`${BASE}/setup/people`, { signal }), enabled, ...KEPT });
+}
+
+/** Giving and taking a role, a person's companies and limit, adding a person: each answers with the whole list. */
+export function usePurchasingPeopleEdits() {
+  const client = useQueryClient();
+  const saved = (people: PurchasingPeople) => client.setQueryData(purchasingKeys.people, people);
+  const path = (personId: string) => `${BASE}/setup/people/${encodeURIComponent(personId)}`;
+  return {
+    setRole: useMutation({
+      mutationFn: ({ personId, role, held }: { personId: string; role: PurchasingRoleKey; held: boolean }) =>
+        api<PurchasingPeople>(`${path(personId)}/roles/${encodeURIComponent(role)}`, { method: 'PUT', body: JSON.stringify({ held }) }),
+      onSuccess: saved,
+    }),
+    savePerson: useMutation({
+      mutationFn: ({ personId, input }: { personId: string; input: SavePurchasingPersonInput }) => api<PurchasingPeople>(path(personId), { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: saved,
+    }),
+    addPerson: useMutation({
+      mutationFn: (input: AddPurchasingPersonInput) => api<PurchasingPeople>(`${BASE}/setup/people`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: saved,
+    }),
+  };
 }
 
 /**

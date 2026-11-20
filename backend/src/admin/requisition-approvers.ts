@@ -1,18 +1,19 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PurchaseRequisitionStatus as Status } from '@prisma/client';
 import {
+  approvalRefusal,
   approvalStepFor,
   formatMoney,
   requisitionTotalCents,
   resolveEffectivePermissions,
-  type ApprovalStepApprover,
+  type ApprovalStep,
   type PermissionKey,
 } from '@texasrenters/shared';
 
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { escapeHtml } from './invoice-email';
-import { readPurchasingSetup } from './purchasing-settings';
+import { readPurchasingSetup, standingOf } from './purchasing-settings';
 
 /**
  * The approvers of a requisition, asked by email (Purchasing Setup,
@@ -31,9 +32,16 @@ export const MOST_APPROVERS_EMAILED = 10;
 const MOST_REMINDERS_A_RUN = 50;
 const DAY_MS = 86_400_000;
 
-/** What a step's approver must hold to press Approve: the route asks for requesting and approving, and above the step, approving any amount. */
-export function permissionsToApprove(approver: ApprovalStepApprover): PermissionKey[] {
-  return approver === 'ANY_AMOUNT' ? ['purchasing:request', 'purchasing:approve', 'purchasing:approve-any'] : ['purchasing:request', 'purchasing:approve'];
+/** What an approver must hold to press Approve at all: the route asks for requesting and approving. */
+export const PERMISSIONS_TO_APPROVE: PermissionKey[] = ['purchasing:request', 'purchasing:approve'];
+
+/** The requisition an approver is asked about, and what approving it is held to. */
+export interface ApprovalAsked {
+  requesterId: string;
+  steps: readonly ApprovalStep[];
+  totalCents: number;
+  companyTenantId: string | null;
+  ownCompaniesOnly: boolean;
 }
 
 /** The console's address for a link, when the deployment says it. */
@@ -57,17 +65,27 @@ export class RequisitionApproversService {
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  /** The active people of the office who may approve at this step, never the one who asked. */
-  async approvers(organizationId: string, approver: ApprovalStepApprover, requesterId: string): Promise<{ id: string; email: string; name: string }[]> {
-    const members = await this.prisma.organizationMember.findMany({
-      where: { organizationId },
-      select: {
-        role: true,
-        userProfile: {
-          select: { id: true, email: true, displayName: true, isActive: true, roleAssignments: { where: { organizationId }, select: { role: { select: { permissions: true } } } } },
+  /**
+   * The active people of the office who may approve this requisition, never
+   * the one who asked: by the same rule the Approve button follows -- its step,
+   * their own limit, and their companies when the office says so (Purchasing
+   * Setup, 2026-11-21).
+   */
+  async approvers(organizationId: string, asked: ApprovalAsked): Promise<{ id: string; email: string; name: string }[]> {
+    const requesterId = asked.requesterId;
+    const [members, rows] = await Promise.all([
+      this.prisma.organizationMember.findMany({
+        where: { organizationId },
+        select: {
+          role: true,
+          userProfile: {
+            select: { id: true, email: true, displayName: true, isActive: true, roleAssignments: { where: { organizationId }, select: { role: { select: { permissions: true } } } } },
+          },
         },
-      },
-    });
+      }),
+      this.prisma.purchasingPerson.findMany({ where: { organizationId }, select: { userProfileId: true, companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true } }),
+    ]);
+    const settingsOf = new Map(rows.map((row) => [row.userProfileId, row]));
     const people = new Map<string, { id: string; email: string; name: string; roles: string[]; permissions: string[] }>();
     for (const { role, userProfile: person } of members) {
       if (!person.isActive || person.id === requesterId) continue;
@@ -75,11 +93,12 @@ export class RequisitionApproversService {
       seen.roles.push(role);
       people.set(person.id, seen);
     }
-    const needed = permissionsToApprove(approver);
     return [...people.values()]
       .filter((person) => {
         const held = resolveEffectivePermissions(person.roles, person.permissions);
-        return needed.every((permission) => held.includes(permission));
+        if (!PERMISSIONS_TO_APPROVE.every((permission) => held.includes(permission))) return false;
+        const standing = standingOf(held, settingsOf.get(person.id) ?? null);
+        return approvalRefusal(standing, asked.steps, asked.totalCents, asked.companyTenantId, asked.ownCompaniesOnly) === null;
       })
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, MOST_APPROVERS_EMAILED)
@@ -144,8 +163,13 @@ export class RequisitionApproversService {
     if (!requisition) return 0;
     const { approvals } = await readPurchasingSetup(this.prisma, organizationId);
     const totalCents = requisitionTotalCents(requisition.lines);
-    const step = approvalStepFor(totalCents, approvals.steps);
-    const people = await this.approvers(organizationId, step.approver, requisition.requestedById);
+    const people = await this.approvers(organizationId, {
+      requesterId: requisition.requestedById,
+      steps: approvals.steps,
+      totalCents,
+      companyTenantId: requisition.xeroTenantId,
+      ownCompaniesOnly: approvals.approverOwnCompaniesOnly,
+    });
     if (!people.length) return 0;
     const company = requisition.xeroTenantId
       ? await this.prisma.xeroOrganisation.findFirst({ where: { organizationId, xeroTenantId: requisition.xeroTenantId }, select: { name: true } })

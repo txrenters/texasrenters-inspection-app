@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus as Status, PurchaseRequisitionStatus, StockMovementKind, VendorBillStatus } from '@prisma/client';
 import {
   billProblems,
+  companyRefusal,
   type ApproveVendorBillInput,
   type CloseShortInput,
   type PayVendorBillInput,
@@ -17,7 +18,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { assertStockNotFrozen } from './stock-freeze';
 import { PurchaseOrdersService } from './purchase-orders.service';
-import { nextDocumentCode } from './purchasing-settings';
+import { nextDocumentCode, readStanding } from './purchasing-settings';
 
 /**
  * Receiving and the vendor's bill (2026-11-19, phase 4 of the inventory and
@@ -141,8 +142,21 @@ export class PurchaseReceivingService {
   // ── Receiving ───────────────────────────────────────────────────────────
 
   /** Posts what arrived: stock in, a line at a time, all of it or none. Sent twice with the same key it posts once. */
+  /**
+   * A receiver or bill keeper limited to some companies acts only on their
+   * orders (Purchasing Setup, 2026-11-21). An order not on the list is left
+   * to the action itself to say so.
+   */
+  private async assertActs(user: AuthenticatedUser, orderId: string, what: string) {
+    const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId: user.organizationId }, select: { xeroTenantId: true } });
+    if (!order) return;
+    const refused = companyRefusal(await readStanding(this.prisma, user), order.xeroTenantId, what);
+    if (refused) throw new ApplicationError(403, 'PURCHASE_ORDER_COMPANY_NOT_YOURS', refused);
+  }
+
   async receive(user: AuthenticatedUser, orderId: string, input: ReceiveGoodsInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'receive goods');
     const today = businessDate();
     const day = input.receivedOn ?? today;
     if (day > today) throw new ApplicationError(400, 'RECEIPT_DAY_AHEAD', `Goods cannot be received on a day after today. It is ${dayWords(today)} in Texas.`);
@@ -216,6 +230,8 @@ export class PurchaseReceivingService {
    */
   async reverseReceipt(user: AuthenticatedUser, receiptId: string, input: ReverseReceiptInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    const receipt = await this.prisma.goodsReceipt.findFirst({ where: { id: receiptId, organizationId }, select: { orderId: true } });
+    if (receipt) await this.assertActs(user, receipt.orderId, 'receive goods');
     const reason = text(input.reason);
     if (!reason) throw new ApplicationError(400, 'RECEIPT_REVERSAL_NEEDS_REASON', 'Say why it is being reversed.');
     let orderId = '';
@@ -269,6 +285,7 @@ export class PurchaseReceivingService {
   /** The rest will not arrive: the order is finished with what has, and can be billed and closed on that. */
   async closeShort(user: AuthenticatedUser, orderId: string, input: CloseShortInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'order');
     const reason = text(input.reason);
     if (!reason) throw new ApplicationError(400, 'PURCHASE_ORDER_REASON_NEEDED', 'Say why the rest will not arrive.');
     await this.prisma.$transaction(async (tx) => {
@@ -291,6 +308,7 @@ export class PurchaseReceivingService {
   /** Enters the bill, or changes it while it is not approved. It is matched as it is saved. */
   async saveBill(user: AuthenticatedUser, orderId: string, input: SaveVendorBillInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'keep bills');
     const billNumber = text(input.billNumber);
     if (!billNumber) throw new ApplicationError(400, 'VENDOR_BILL_INCOMPLETE', "Enter the bill's number.");
     if (input.billDate > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', `A bill cannot be dated after today. It is ${dayWords(businessDate())} in Texas.`);
@@ -335,6 +353,7 @@ export class PurchaseReceivingService {
   /** Approves for payment a bill that matches its order and its receipts. */
   async approveBill(user: AuthenticatedUser, orderId: string): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'keep bills');
     await this.prisma.$transaction(async (tx) => {
       const bill = await this.billOf(tx, organizationId, orderId);
       if (bill.status === VendorBillStatus.HELD) throw new ApplicationError(409, 'VENDOR_BILL_HELD', 'This bill does not match the order and what was received. It needs somebody who may approve any amount, with a reason.');
@@ -352,6 +371,7 @@ export class PurchaseReceivingService {
    */
   async approveBillAnyway(user: AuthenticatedUser, orderId: string, input: ApproveVendorBillInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'keep bills');
     const reason = text(input.reason);
     if (!may(user, APPROVE_ANY)) throw new ApplicationError(403, 'VENDOR_BILL_OVERRIDE_FORBIDDEN', 'A bill that does not match needs somebody who may approve any amount.');
     if (!reason) throw new ApplicationError(400, 'VENDOR_BILL_REASON_NEEDED', 'Say why it is approved although it does not match.');
@@ -369,6 +389,7 @@ export class PurchaseReceivingService {
   /** Writes down that the office paid an approved bill: when, how, and its reference. No money moves here. */
   async payBill(user: AuthenticatedUser, orderId: string, input: PayVendorBillInput): Promise<PurchaseOrderDetail> {
     const organizationId = user.organizationId;
+    await this.assertActs(user, orderId, 'keep bills');
     if (input.paidOn > businessDate()) throw new ApplicationError(400, 'VENDOR_BILL_DAY_AHEAD', `A payment cannot be dated after today. It is ${dayWords(businessDate())} in Texas.`);
     await this.prisma.$transaction(async (tx) => {
       const bill = await this.billOf(tx, organizationId, orderId);

@@ -48,13 +48,14 @@ export class PurchasingSetupService {
     const organizationId = user.organizationId;
     const to: PurchasingApprovals = {
       steps: input.steps.map((step) => ({ upToCents: step.upToCents, approver: step.approver, quotesNeeded: step.quotesNeeded, reminderDays: step.reminderDays })),
+      approverOwnCompaniesOnly: input.approverOwnCompaniesOnly,
       emailApprovers: input.emailApprovers,
       reapproveChangedOrders: input.reapproveChangedOrders,
     };
     await this.prisma.$transaction(async (tx) => {
       const before = (await readPurchasingSetup(tx, organizationId)).approvals;
       if (JSON.stringify(before) === JSON.stringify(to)) return;
-      const switches = { emailApprovers: to.emailApprovers, reapproveChangedOrders: to.reapproveChangedOrders };
+      const switches = { approverOwnCompaniesOnly: to.approverOwnCompaniesOnly, emailApprovers: to.emailApprovers, reapproveChangedOrders: to.reapproveChangedOrders };
       await tx.purchasingSettings.upsert({ where: { organizationId }, create: { organizationId, ...switches }, update: switches });
       if (JSON.stringify(before.steps) !== JSON.stringify(to.steps)) {
         // Replaced whole: the tops are unique, so the old steps go first.

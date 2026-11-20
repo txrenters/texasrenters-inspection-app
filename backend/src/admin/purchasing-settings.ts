@@ -17,6 +17,7 @@ import {
   type FileRemoval,
   type PurchasingApprovals,
   type PurchasingSettings,
+  type PurchasingStanding,
   type RequisitionFileRules,
 } from '@texasrenters/shared';
 
@@ -42,6 +43,7 @@ const SETTINGS_SELECT = {
   filesMax: true,
   quoteFileAboveCents: true,
   fileRemoval: true,
+  approverOwnCompaniesOnly: true,
 } as const;
 
 type SettingsRow = Prisma.PurchasingSettingsGetPayload<{ select: typeof SETTINGS_SELECT }>;
@@ -75,8 +77,40 @@ export async function readPurchasingSetup(
   const steps = stepsOf(row, saved);
   return {
     settings: { steps, files: filesOf(row) },
-    approvals: { steps, emailApprovers: row?.emailApprovers ?? false, reapproveChangedOrders: row?.reapproveChangedOrders ?? false },
+    approvals: {
+      steps,
+      approverOwnCompaniesOnly: row?.approverOwnCompaniesOnly ?? true,
+      emailApprovers: row?.emailApprovers ?? false,
+      reapproveChangedOrders: row?.reapproveChangedOrders ?? false,
+    },
   };
+}
+
+/**
+ * A person's standing in purchasing (Purchasing Setup, 2026-11-21): their
+ * permissions, the companies Setup gives them (none set = every one) and their
+ * approver limit. A limit set in Setup caps them even with "Approve any
+ * amount"; with no row they stand as before Setup.
+ */
+export function standingOf(
+  permissions: readonly string[],
+  row: { companyTenantIds: string[]; approvesAnyAmount: boolean; approvalLimitCents: number | null } | null,
+): PurchasingStanding {
+  const approveAny = permissions.includes('purchasing:approve-any');
+  return {
+    permissions,
+    companies: row?.companyTenantIds.length ? row.companyTenantIds : null,
+    anyAmount: row ? row.approvesAnyAmount || (row.approvalLimitCents === null && approveAny) : approveAny,
+    limitCents: row?.approvesAnyAmount ? null : (row?.approvalLimitCents ?? null),
+  };
+}
+
+export async function readStanding(db: Pick<Db, 'purchasingPerson'>, person: { id: string; organizationId: string; permissions: readonly string[] }): Promise<PurchasingStanding> {
+  const row = await db.purchasingPerson.findUnique({
+    where: { organizationId_userProfileId: { organizationId: person.organizationId, userProfileId: person.id } },
+    select: { companyTenantIds: true, approvesAnyAmount: true, approvalLimitCents: true },
+  });
+  return standingOf(person.permissions, row);
 }
 
 /** The steps and file rules a requisition or order is held to. */

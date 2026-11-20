@@ -49,7 +49,7 @@ function database() {
       upsert: jest.fn(async ({ create, update }: { create: Row; update: Row }) => {
         if (settings[0]) Object.assign(settings[0], update);
         else
-          settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', ...create });
+          settings.push({ approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, fileGroups: ['PDF', 'PICTURES', 'WORD', 'EXCEL'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', approverOwnCompaniesOnly: true, ...create });
       }),
     },
     purchasingApprovalStep: {
@@ -73,13 +73,13 @@ function database() {
   return { db, settings, steps, series, audits, service: new PurchasingSetupService(client as never) };
 }
 
-const approvals = (over: Partial<SavePurchasingApprovalsInput> = {}): SavePurchasingApprovalsInput => ({ steps: STEPS, emailApprovers: true, reapproveChangedOrders: false, ...over });
+const approvals = (over: Partial<SavePurchasingApprovalsInput> = {}): SavePurchasingApprovalsInput => ({ steps: STEPS, approverOwnCompaniesOnly: true, emailApprovers: true, reapproveChangedOrders: false, ...over });
 
 describe('Purchasing Setup', () => {
   it('starts as the office was: its limit as two steps, every kind of file, and each number as the console wrote it', async () => {
     const { service } = database();
     const setup = await service.read(admin);
-    expect(setup.approvals).toEqual({ steps: stepsFromLimit(50000, 2), emailApprovers: false, reapproveChangedOrders: false });
+    expect(setup.approvals).toEqual({ steps: stepsFromLimit(50000, 2), approverOwnCompaniesOnly: true, emailApprovers: false, reapproveChangedOrders: false });
     expect(setup.files).toEqual(DEFAULT_FILE_RULES);
     expect(setup.numbers.map((one) => `${one.label}: ${one.prefix}${'0'.repeat(one.digits - 1)}${one.next}`)).toEqual([
       'Purchase requisition: PR-00001',
@@ -178,12 +178,13 @@ describe('asking and reminding the approvers', () => {
     member(14, 'Sample Buyer', ['purchasing:request', 'purchasing:order']),
   ];
 
-  function office(saved: { emailApprovers: boolean; reminderDays: number | null }, requisition: Row) {
+  function office(saved: { emailApprovers: boolean; reminderDays: number | null }, requisition: Row, people: Row[] = []) {
     const sent: { to: string; subject: string }[] = [];
     const requisitions = [requisition];
     const prisma = {
       organizationMember: { findMany: jest.fn(async () => MEMBERS) },
-      purchasingSettings: { findUnique: jest.fn(async () => ({ approvalLimitCents: 50000, quotesAboveLimit: 0, emailApprovers: saved.emailApprovers, reapproveChangedOrders: false, fileGroups: ['PDF'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT' })) },
+      purchasingPerson: { findMany: jest.fn(async () => people) },
+      purchasingSettings: { findUnique: jest.fn(async () => ({ approvalLimitCents: 50000, quotesAboveLimit: 0, emailApprovers: saved.emailApprovers, reapproveChangedOrders: false, fileGroups: ['PDF'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', approverOwnCompaniesOnly: true })) },
       purchasingApprovalStep: { findMany: jest.fn(async () => [{ upToCents: 50000, approver: 'ANY_APPROVER', quotesNeeded: 0, reminderDays: saved.reminderDays }, { upToCents: null, approver: 'ANY_AMOUNT', quotesNeeded: 0, reminderDays: saved.reminderDays }]) },
       purchaseRequisition: {
         findFirst: jest.fn(async () => requisitions[0]),
@@ -226,6 +227,17 @@ describe('asking and reminding the approvers', () => {
     const large = office({ emailApprovers: true, reminderDays: null }, requisition(61200, new Date()));
     await large.approvers.ask(ORG, id(90));
     expect(large.sent.map((one) => one.to)).toEqual(['person12@example.test']);
+  });
+
+  // Purchasing Setup, part 5b (2026-11-21): by the same rule as the Approve button.
+  it('emails only approvers who may approve it: of its company, and within their own limit', async () => {
+    const elsewhere = office({ emailApprovers: true, reminderDays: null }, requisition(18480, new Date()), [{ userProfileId: id(11), companyTenantIds: ['tenant-elsewhere'], approvesAnyAmount: false, approvalLimitCents: null }]);
+    expect(await elsewhere.approvers.ask(ORG, id(90))).toBe(1);
+    expect(elsewhere.sent.map((one) => one.to)).toEqual(['person12@example.test']);
+
+    const capped = office({ emailApprovers: true, reminderDays: null }, requisition(18480, new Date()), [{ userProfileId: id(12), companyTenantIds: [], approvesAnyAmount: false, approvalLimitCents: 10000 }]);
+    await capped.approvers.ask(ORG, id(90));
+    expect(capped.sent.map((one) => one.to)).toEqual(['person11@example.test']);
   });
 
   it('reminds once, after the step\'s days, and never again', async () => {

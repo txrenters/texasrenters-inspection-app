@@ -173,6 +173,8 @@ function database() {
     purchasingSettings: { findUnique: jest.fn(async () => null) },
     // No approval steps saved: the office's limit reads as two steps (Purchasing Setup, 2026-11-20).
     purchasingApprovalStep: { findMany: jest.fn(async () => []) },
+    // Setup's people (2026-11-21): none set, so everybody acts for every company with no limit of their own.
+    purchasingPerson: { findUnique: jest.fn(async (): Promise<unknown> => null) },
     invoiceSettings: { findUnique: jest.fn(async () => ({ companyName: 'Example Office', addressLine1: '1 Example Plaza', addressLine2: 'Testville, TX 77000', phone: null, email: 'office@example.test' })) },
     purchaseOrderDelivery: {
       findMany: jest.fn(async ({ where }: { where: Where }) => deliveries.filter((row) => matches(row, where)).reverse()),
@@ -611,5 +613,34 @@ describe('who may do what', () => {
 
   it('never lets an API key make or send an order', () => {
     expect(MACHINE_FORBIDDEN_PERMISSIONS).toContain('purchasing:order');
+  });
+});
+
+describe('companies and limits on orders (Purchasing Setup, 2026-11-21)', () => {
+  const only = (tenant: string, over: Record<string, unknown> = {}) => ({ companyTenantIds: [tenant], approvesAnyAmount: false, approvalLimitCents: null, ...over });
+
+  it('lets a purchaser limited to other companies neither make nor change this one', async () => {
+    const made = database();
+    made.db.purchasingPerson.findUnique.mockResolvedValue(only('tenant-elsewhere'));
+    await expect(made.service.createFromRequisition(buyer, REQUISITION)).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS', message: "You order only for your own companies, and this is another company's." });
+
+    const { db, service, orderId } = await order('approved');
+    db.purchasingPerson.findUnique.mockResolvedValue(only('tenant-elsewhere'));
+    expect((await service.detail(buyer, orderId)).can).toMatchObject({ change: false, send: false, cancel: false });
+    await expect(service.update(buyer, orderId, terms({ lines: [line(FILTER, 30, 390)] }))).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS' });
+    await expect(service.cancel(buyer, orderId, { reason: 'Not ours.' })).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS' });
+  });
+
+  it("lets an approver decide only their own companies' orders, and never above their own limit", async () => {
+    const elsewhere = await order('waiting');
+    elsewhere.db.purchasingPerson.findUnique.mockResolvedValue(only('tenant-elsewhere'));
+    expect((await elsewhere.service.detail(manager, elsewhere.orderId)).can).toMatchObject({ approve: false, sendBack: false });
+    await expect(elsewhere.service.decide(manager, elsewhere.orderId, 'SENT_BACK', { note: 'No' })).rejects.toMatchObject({ code: 'PURCHASE_ORDER_COMPANY_NOT_YOURS' });
+
+    // $200.05 with tax, over a $150.00 limit.
+    const capped = await order('waiting');
+    capped.db.purchasingPerson.findUnique.mockResolvedValue(only('tenant-thmp', { approvalLimitCents: 15000 }));
+    expect((await capped.service.detail(manager, capped.orderId)).can.approveBlocked).toBe('At $200.05 it is above your approval limit of $150.00.');
+    await expect(capped.service.decide(manager, capped.orderId, 'APPROVED', {})).rejects.toMatchObject({ code: 'PURCHASE_ORDER_OVER_LIMIT' });
   });
 });

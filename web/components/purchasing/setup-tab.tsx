@@ -2,7 +2,6 @@
 
 import {
   APPROVAL_STEP_APPROVERS,
-  APPROVAL_STEP_APPROVER_LABEL,
   FILE_GROUPS,
   FILE_GROUP_KEYS,
   FILE_REMOVALS,
@@ -14,6 +13,7 @@ import {
   REMINDER_DAY_CHOICES,
   approvalStepFromCents,
   approvalStepsProblem,
+  approverLabel,
   documentSeriesProblem,
   fileGroupsSaying,
   fileRulesProblem,
@@ -34,6 +34,7 @@ import { ChevronDownIcon, PlusIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
 import { FastTab } from '@/components/purchasing/nav-kit';
+import { RolesSection } from '@/components/purchasing/setup-roles';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -54,8 +55,8 @@ import { usePurchasingSetup, usePurchasingSetupEdits } from '@/lib/purchasing-qu
  *
  * Saved as you go: a choice saves when it is made, a typed value when its box
  * is left, and only when it is one the office may keep -- the same rules the
- * server checks. The roles, the code lists and the requisition page's own
- * section come in the next parts (5b, 5c).
+ * server checks. The roles and who holds them came with part 5b (2026-11-21);
+ * the code lists and the requisition page's own section come in part 5c.
  */
 export function SetupTab({ enabled }: { enabled: boolean }) {
   const setup = usePurchasingSetup(enabled);
@@ -70,7 +71,8 @@ export function SetupTab({ enabled }: { enabled: boolean }) {
           <span className="text-muted-foreground text-sm">Changes are saved as you go</span>
         </div>
       </div>
-      <p className="text-muted-foreground text-sm">Roles and who holds them, the code lists and the requisition page&rsquo;s fields come with the next parts of Setup.</p>
+      <p className="text-muted-foreground text-sm">The code lists and the requisition page&rsquo;s fields come with the next part of Setup.</p>
+      <RolesSection enabled={enabled} />
       {/* Keyed on what the server holds, so a save from elsewhere starts each section afresh. */}
       <ApprovalsSection approvals={setup.data.approvals} key={JSON.stringify(setup.data.approvals)} />
       <NumbersSection numbers={setup.data.numbers} />
@@ -136,7 +138,11 @@ function parseSteps(rows: readonly StepDraft[]): { steps: ApprovalStep[]; proble
 function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
   const { approvals: save } = usePurchasingSetupEdits();
   const [rows, setRows] = useState(() => approvals.steps.map(toDraft));
-  const [switches, setSwitches] = useState({ emailApprovers: approvals.emailApprovers, reapproveChangedOrders: approvals.reapproveChangedOrders });
+  const [switches, setSwitches] = useState({
+    approverOwnCompaniesOnly: approvals.approverOwnCompaniesOnly,
+    emailApprovers: approvals.emailApprovers,
+    reapproveChangedOrders: approvals.reapproveChangedOrders,
+  });
   const parsed = parseSteps(rows);
 
   /** Saves what the page shows, when the office may keep it and it is not what is saved already. */
@@ -144,7 +150,8 @@ function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
     const { steps, problem } = parseSteps(nextRows);
     if (problem) return;
     const input = { steps, ...nextSwitches };
-    if (JSON.stringify(input) === JSON.stringify({ steps: approvals.steps, emailApprovers: approvals.emailApprovers, reapproveChangedOrders: approvals.reapproveChangedOrders })) return;
+    const saved = { steps: approvals.steps, approverOwnCompaniesOnly: approvals.approverOwnCompaniesOnly, emailApprovers: approvals.emailApprovers, reapproveChangedOrders: approvals.reapproveChangedOrders };
+    if (JSON.stringify(input) === JSON.stringify(saved)) return;
     save.mutate(input);
   };
   const change = (index: number, patch: Partial<StepDraft>, now = false) => {
@@ -218,8 +225,9 @@ function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
                         </SelectTrigger>
                         <SelectContent>
                           {APPROVAL_STEP_APPROVERS.map((approver) => (
-                            <SelectItem key={approver} value={approver}>
-                              {APPROVAL_STEP_APPROVER_LABEL[approver]}
+                            // The last step has no top for an approver's own limit to reach.
+                            <SelectItem disabled={last && approver === 'APPROVER_LIMIT'} key={approver} value={approver}>
+                              {approverLabel(approver, last ? null : parseMoney(row.upTo))}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -269,6 +277,12 @@ function ApprovalsSection({ approvals }: { approvals: PurchasingApprovals }) {
         </div>
         <div className="grid gap-x-8 gap-y-2 md:grid-cols-2">
           <SwitchRow checked disabled label="Nobody approves their own requisition (always on)" />
+          <SwitchRow
+            checked={switches.approverOwnCompaniesOnly}
+            hint="The companies each approver acts for are set under Roles and who holds them."
+            label="An approver approves only for their own companies"
+            onChange={(on) => toggle('approverOwnCompaniesOnly', on)}
+          />
           <SwitchRow checked={switches.emailApprovers} label="Email the approver when one is sent" onChange={(on) => toggle('emailApprovers', on)} />
           <SwitchRow
             checked={switches.reapproveChangedOrders}
