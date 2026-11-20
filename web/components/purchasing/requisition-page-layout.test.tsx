@@ -79,7 +79,8 @@ describe('the fields', () => {
     expect(screen.getAllByText('(required)')).toHaveLength(2);
     expect(screen.getByRole('columnheader', { name: /Department Code/ }).textContent).toContain('*');
     expect(screen.getByRole('status').textContent).toBe('Give the expected receipt date.');
-    expect((screen.getByRole('button', { name: 'Send Approval Request' }) as HTMLButtonElement).disabled).toBe(true);
+    // Greyed, and pressed it says why (2026-11-21).
+    expect(screen.getByRole('button', { name: 'Send Approval Request' }).getAttribute('aria-disabled')).toBe('true');
 
     fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-12-01' } });
     expect(screen.getByRole('status').textContent).toBe('Choose a department code on every line.');

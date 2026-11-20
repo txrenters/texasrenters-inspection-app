@@ -6,7 +6,6 @@ import {
   REQUISITION_STATUS_LABEL,
   FACT_BOXES,
   approvalStepFor,
-  approvalStepRange,
   factBoxesFor,
   formatMoney,
   orderGroups,
@@ -111,6 +110,9 @@ interface LineDraft {
   filled: Filled[];
   /** Line Amount as it is being typed; the amount from quantity and cost once it is left. */
   amount?: string | null;
+  /** Given its own Location Code or Expected Receipt Date on the line, it no longer goes with General's (2026-11-21). */
+  ownPlace?: boolean;
+  ownDate?: boolean;
 }
 interface QuoteDraft {
   key: string;
@@ -234,7 +236,8 @@ export function RequisitionForm({
   const [place, setPlace] = useTracked(requisition?.deliverTo?.id ?? NONE, mark);
   const [requestCode, setRequestCode] = useTracked(requisition?.requestCode?.id ?? NONE, mark);
   const [costCenter, setCostCenter] = useTracked(requisition?.costCenter?.id ?? NONE, mark);
-  const [documentDate, setDocumentDate] = useTracked(requisition?.documentDate ?? '', mark);
+  // The day it was made, unless another is given (2026-11-21).
+  const [documentDate, setDocumentDate] = useTracked(requisition?.documentDate ?? businessToday(), mark);
   const [reason, setReason] = useTracked(requisition?.reason ?? '', mark);
   const [moreShown, setMoreShown] = useState(Boolean(requisition?.reason));
 
@@ -245,9 +248,11 @@ export function RequisitionForm({
     if (typeof costCents === 'number') filled.push('cost');
     // A quantity somebody asked for (a scan, "Add everything that is low") is theirs; the reorder quantity is the item's.
     if (!quantity && item.reorderQuantity) filled.push('quantity');
+    // A line's own location and date stay; else General's.
     const placeId = base.placeId && base.placeId !== NONE ? base.placeId : place;
     if (placeId !== NONE) filled.push('place');
-    if (neededBy) filled.push('expected');
+    const expectedOn = base.expectedOn || neededBy;
+    if (expectedOn && expectedOn === neededBy) filled.push('expected');
     if (item.usualVendorId) filled.push('vendor');
     const departmentId = previous?.departmentId ?? NONE;
     if (departmentId !== NONE) filled.push('department');
@@ -259,14 +264,16 @@ export function RequisitionForm({
       placeId,
       quantity: quantity ? String(quantity) : item.reorderQuantity ? String(item.reorderQuantity) : '',
       cost: dollars0(costCents),
-      expectedOn: neededBy,
+      expectedOn,
       vendorId: item.usualVendorId ?? NONE,
       departmentId,
       notes: base.notes ?? '',
       filled,
+      ownPlace: base.ownPlace,
+      ownDate: base.ownDate,
     };
   };
-  /** A line with every cell blank (2026-11-21); only the Location Code and date chosen on General carry down. */
+  /** A line with every cell blank (2026-11-21) but the Location Code and Expected Receipt Date chosen on General. */
   const blankLine = (): LineDraft => ({
     key: key(),
     typeId: NONE,
@@ -283,7 +290,7 @@ export function RequisitionForm({
   });
 
   const [lines, setLines] = useTracked<LineDraft[]>(() => {
-    const drafted = requisition?.lines.map((line) => draftOf(line, choices)) ?? [];
+    const drafted = requisition?.lines.map((line) => draftOf(line, choices, { placeId: requisition.deliverTo?.id ?? NONE, expectedOn: requisition.neededBy ?? '' })) ?? [];
     // One blank line to type in, and no more: a line is added only by Add New Line (2026-11-21).
     return readOnly || drafted.length ? drafted : [blankLine()];
   }, mark);
@@ -359,6 +366,20 @@ export function RequisitionForm({
     setLines((rows) => rows.filter((row) => row.itemId === NONE || itemOf.get(row.itemId)?.companyTenantId === chosen(next)));
   }
 
+  /**
+   * General's Location Code and Expected Receipt Date are every line's (2026-11-21): changed there, each line
+   * that goes with General changes with it; a line given its own on the line keeps it.
+   */
+  const followed = (filled: Filled[], field: Filled, on: boolean): Filled[] => [...filled.filter((one) => one !== field), ...(on ? [field] : [])];
+  function changePlace(next: string) {
+    setPlace(next);
+    setLines((rows) => rows.map((row) => (row.ownPlace ? row : { ...row, placeId: next, filled: followed(row.filled, 'place', next !== NONE) })));
+  }
+  function changeNeededBy(next: string) {
+    setNeededBy(next);
+    setLines((rows) => rows.map((row) => (row.ownDate ? row : { ...row, expectedOn: next, filled: followed(row.filled, 'expected', Boolean(next)) })));
+  }
+
   /** Copy Document: another requisition's lines, and its General if asked. */
   function copyFrom(from: RequisitionDetail, options: { general: boolean; replace: boolean }): string | null {
     // Copied into one with no company yet (2026-11-21), it takes the other's, as picking an item does.
@@ -366,15 +387,17 @@ export function RequisitionForm({
     const taken = from.lines.filter((line) => line.item && itemOf.get(line.item.id)?.companyTenantId === target);
     if (!taken.length) return `${from.number ?? 'That requisition'} has no line this requisition's company buys.`;
     if (target !== companyId && target) setCompany(target);
+    // Its lines go with the General they are copied under: the other's, when its General is copied too.
+    const general = options.general ? { placeId: from.deliverTo?.id ?? NONE, expectedOn: from.neededBy ?? '' } : { placeId: place, expectedOn: neededBy };
     if (options.general) {
-      setPlace(from.deliverTo?.id ?? NONE);
+      changePlace(from.deliverTo?.id ?? NONE);
       setRequestCode(from.requestCode?.id ?? NONE);
       setCostCenter(from.costCenter?.id ?? NONE);
-      setNeededBy(from.neededBy ?? '');
+      changeNeededBy(from.neededBy ?? '');
     }
     setLines((rows) => {
       const kept = options.replace ? [] : rows.filter((row) => !isBlank(row));
-      const copied = taken.filter((line) => !kept.some((row) => row.itemId === line.item!.id)).map((line) => draftOf(line, choices));
+      const copied = taken.filter((line) => !kept.some((row) => row.itemId === line.item!.id)).map((line) => draftOf(line, choices, general));
       const all = [...kept, ...copied].slice(0, MOST_REQUISITION_LINES);
       return all.length ? all : [blankLine()];
     });
@@ -564,7 +587,6 @@ export function RequisitionForm({
         facts={[
           { label: 'Lines', value: formatCount(shownLines.length) },
           { label: 'Total (USD)', value: formatMoney(totalCents) },
-          { label: 'Approval Step', value: approvalStepRange(choices.settings.steps, stepIndex) },
           { label: 'Who Approves', value: approverFor(totalCents, choices.settings) },
           { label: 'Quotes Needed', value: step.quotesNeeded ? String(step.quotesNeeded) : 'None' },
           { label: 'Vendors', value: formatCount(vendorsNamed) },
@@ -715,9 +737,9 @@ export function RequisitionForm({
                     )}
                   </FieldRow>
                 ) : null}
-                <FieldRow hint={editing ? 'Each new line goes here.' : undefined} htmlFor={editing ? `${ids}-place` : undefined} label="Location Code" required={editing && required('LOCATION')}>
+                <FieldRow hint={editing ? 'Every line goes here, unless it is given its own.' : undefined} htmlFor={editing ? `${ids}-place` : undefined} label="Location Code" required={editing && required('LOCATION')}>
                   {editing ? (
-                    <Pick id={`${ids}-place`} label="Location Code" none="Not decided" onChange={setPlace} options={choices.places.map((option) => ({ value: option.id, label: option.code ? `${option.code} · ${option.name}` : option.name }))} value={place} />
+                    <Pick id={`${ids}-place`} label="Location Code" none="Not decided" onChange={changePlace} options={choices.places.map((option) => ({ value: option.id, label: option.code ? `${option.code} · ${option.name}` : option.name }))} value={place} />
                   ) : (
                     generalValue(requisition?.deliverTo ? (requisition.deliverTo.code ? `${requisition.deliverTo.code} · ${requisition.deliverTo.name}` : requisition.deliverTo.name) : null)
                   )}
@@ -746,20 +768,19 @@ export function RequisitionForm({
                 ) : null}
                 {showsField('EXPECTED_RECEIPT', editing ? neededBy : requisition?.neededBy) ? (
                   <FieldRow
-                    hint={editing ? 'Each new line expects it then.' : undefined}
+                    hint={editing ? 'Every line expects it then, unless it is given its own.' : undefined}
                     htmlFor={editing ? `${ids}-expected` : undefined}
                     label="Expected Receipt Date"
                     required={editing && required('EXPECTED_RECEIPT')}
                   >
                     {editing ? (
-                      <Input aria-label="Expected Receipt Date" className="h-8" id={`${ids}-expected`} onChange={(event) => setNeededBy(event.target.value)} type="date" value={neededBy} />
+                      <Input aria-label="Expected Receipt Date" className="h-8" id={`${ids}-expected`} onChange={(event) => changeNeededBy(event.target.value)} type="date" value={neededBy} />
                     ) : (
                       generalValue(requisition?.neededBy ? formatDay(requisition.neededBy) : null)
                     )}
                   </FieldRow>
                 ) : null}
                 <FieldRow label="Status">{generalValue(REQUISITION_STATUS_LABEL[requisition?.status ?? 'DRAFT'])}</FieldRow>
-                <FieldRow label="Approval Step">{generalValue(approvalStepRange(choices.settings.steps, stepIndex))}</FieldRow>
                 <FieldRow label="Approved By">
                   {generalValue(requisition && ['APPROVED', 'ORDERED', 'CLOSED'].includes(requisition.status) ? requisition.decidedBy : null)}
                 </FieldRow>
@@ -938,7 +959,7 @@ export function RequisitionForm({
                             <input aria-label={`Description of ${name}`} className={CELL_INPUT} maxLength={200} onChange={(event) => setLine(line.key, { description: event.target.value }, 'description')} value={line.description} />
                           </td>
                           <td className={cn(CELL, fill('place'))}>
-                            <Pick cell label={`Location of ${name}`} none="None" onChange={(placeId) => setLine(line.key, { placeId }, 'place')} options={choices.places.map((option) => ({ value: option.id, label: option.code ?? option.name }))} value={line.placeId} />
+                            <Pick cell label={`Location of ${name}`} none="None" onChange={(placeId) => setLine(line.key, { placeId, ownPlace: placeId !== NONE && placeId !== place }, 'place')} options={choices.places.map((option) => ({ value: option.id, label: option.code ?? option.name }))} value={line.placeId} />
                           </td>
                           <td className={cn(CELL, fill('quantity'))}>
                             <input aria-label={`Quantity of ${name}`} className={cn(CELL_INPUT, 'text-right tabular-nums')} inputMode="numeric" onChange={(event) => setLine(line.key, { quantity: event.target.value }, 'quantity')} value={line.quantity} />
@@ -959,7 +980,7 @@ export function RequisitionForm({
                             />
                           </td>
                           <td className={cn(CELL, fill('expected'))}>
-                            <input aria-label={`Expected receipt date of ${name}`} className={CELL_INPUT} onChange={(event) => setLine(line.key, { expectedOn: event.target.value }, 'expected')} type="date" value={line.expectedOn} />
+                            <input aria-label={`Expected receipt date of ${name}`} className={CELL_INPUT} onChange={(event) => setLine(line.key, { expectedOn: event.target.value, ownDate: Boolean(event.target.value) && event.target.value !== neededBy }, 'expected')} type="date" value={line.expectedOn} />
                           </td>
                           <td className={cn(CELL, fill('vendor'))}>
                             <Pick cell label={`Vendor of ${name}`} none="None" onChange={(vendorId) => setLine(line.key, { vendorId }, 'vendor')} options={choices.vendors.map((option) => ({ value: option.id, label: option.number ? `${option.number} · ${option.name}` : option.name }))} value={line.vendorId} />
@@ -1229,7 +1250,8 @@ export function RequisitionForm({
 }
 
 /** A saved line as the form holds it: nothing marked, as nobody has just picked it. */
-function draftOf(line: RequisitionLine, choices: RequisitionChoices): LineDraft {
+/** A saved line as the form holds it; one whose location or date is not General's has its own. */
+function draftOf(line: RequisitionLine, choices: RequisitionChoices, general: { placeId: string; expectedOn: string }): LineDraft {
   const item = line.item ? choices.items.find((option) => option.id === line.item!.id) : undefined;
   return {
     key: key(),
@@ -1244,6 +1266,8 @@ function draftOf(line: RequisitionLine, choices: RequisitionChoices): LineDraft 
     departmentId: line.department?.id ?? NONE,
     notes: line.notes ?? '',
     filled: [],
+    ownPlace: Boolean(line.place) && line.place!.id !== general.placeId,
+    ownDate: Boolean(line.expectedOn) && line.expectedOn !== general.expectedOn,
   };
 }
 

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RequisitionForm } from '@/components/purchasing/requisition-form';
+import { businessToday } from '@/lib/clock';
 
 import PurchaseOrderPage from './orders/[orderId]/page';
 import PurchasingPage from './page';
@@ -236,6 +237,9 @@ const choose = (label: string, option: string) => {
   fireEvent.click(screen.getByRole('option', { name: option }));
 };
 
+/** Greyed: a button not open now, pressed only to say why (2026-11-21), or one with no reason that cannot be pressed at all. */
+const greyed = (button: HTMLElement) => (button as HTMLButtonElement).disabled || button.getAttribute('aria-disabled') === 'true';
+
 describe("a line's cost", () => {
   it('starts from the usual price the stock keeper gave the item, and from the average cost when it has none', () => {
     const priced: RequisitionChoices = { ...CHOICES, items: CHOICES.items.map((item) => (item.id === 'item-filter' ? { ...item, priceCents: 425 } : item)) };
@@ -258,16 +262,65 @@ describe('filling a requisition in', () => {
   };
   const submit = () => screen.getByRole('button', { name: 'Send Approval Request' }) as HTMLButtonElement;
 
-  it('starts with every field and its one line blank (2026-11-21)', () => {
+  it('starts with every field and its one line blank (2026-11-21) but the Document Date, the day it was made', () => {
     mount();
     // Nothing chosen reads as blank; each list still offers its "none" to clear a choice.
     for (const field of ['Purchaser Code', 'Request Code', 'Location Code', 'Cost Center Code']) expect(screen.getByLabelText(field).textContent).toBe('');
-    expect((screen.getByLabelText('Document Date:') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Document Date:') as HTMLInputElement).value).toBe(businessToday());
+    // The approval step is not shown (2026-11-21); who approves still is.
+    expect(screen.queryByText('Approval Step:')).toBeNull();
+    expect(screen.queryByText('Approval Step')).toBeNull();
     expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
     expect(screen.getByLabelText('Type of line 1').textContent).toBe('');
     expect((screen.getByLabelText('Item on line 1') as HTMLInputElement).placeholder).toBe('');
     // Nothing to add from Everything That Is Low until the requisition is for a company.
-    expect((screen.getByRole('button', { name: 'Add Everything That Is Low' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(greyed(screen.getByRole('button', { name: 'Add Everything That Is Low' }))).toBe(true);
+  });
+
+  it("carries General's Location Code and Expected Receipt Date to each line that goes with it, never over a line's own (2026-11-21)", () => {
+    const choices: RequisitionChoices = { ...CHOICES, places: [...CHOICES.places, { id: 'place-truck', name: 'Truck 2', code: 'TRK2' }] };
+    render(<RequisitionForm choices={choices} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} />);
+    // The blank line goes with General from the start.
+    choose('Location Code', 'STORE · Stockroom');
+    expect(screen.getByLabelText('Location of line 1').textContent).toBe('STORE');
+    choose('Purchaser Code', 'THMP · THMP');
+    fireEvent.click(screen.getByRole('button', { name: 'Add Everything That Is Low' }));
+    const date = (name: string) => (screen.getByLabelText(`Expected receipt date of ${name}`) as HTMLInputElement).value;
+
+    fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-12-01' } });
+    expect([date('Filter 20x25x1'), date('Battery, 9 V')]).toEqual(['2026-12-01', '2026-12-01']);
+    // The battery is given its own location and date.
+    choose('Location of Battery, 9 V', 'TRK2');
+    fireEvent.change(screen.getByLabelText('Expected receipt date of Battery, 9 V'), { target: { value: '2026-12-05' } });
+
+    choose('Location Code', 'TRK2 · Truck 2');
+    fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-12-03' } });
+    expect(screen.getByLabelText('Location of Filter 20x25x1').textContent).toBe('TRK2');
+    expect(date('Filter 20x25x1')).toBe('2026-12-03');
+    expect(date('Battery, 9 V')).toBe('2026-12-05');
+    choose('Location Code', 'STORE · Stockroom');
+    expect(screen.getByLabelText('Location of Filter 20x25x1').textContent).toBe('STORE');
+    // The battery went to the truck on its own, and stays.
+    expect(screen.getByLabelText('Location of Battery, 9 V').textContent).toBe('TRK2');
+  });
+
+  it("reopened, a saved line at General's location goes with it still, and one somewhere else keeps its own", () => {
+    const choices: RequisitionChoices = { ...CHOICES, places: [...CHOICES.places, { id: 'place-truck', name: 'Truck 2', code: 'TRK2' }] };
+    const saved = detail({
+      status: 'DRAFT',
+      can: { ...detail().can, edit: true, submit: true },
+      lines: detail().lines.map((line, index) =>
+        index === 0 ? { ...line, place: { id: 'place-stockroom', name: 'Stockroom', code: 'STORE' }, expectedOn: '2026-11-24' } : { ...line, place: { id: 'place-truck', name: 'Truck 2', code: 'TRK2' }, expectedOn: '2026-11-30' },
+      ),
+    });
+    render(<RequisitionForm choices={choices} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} requisition={saved} />);
+    choose('Location Code', 'TRK2 · Truck 2');
+    fireEvent.change(screen.getByLabelText('Expected Receipt Date'), { target: { value: '2026-12-02' } });
+    choose('Location Code', 'STORE · Stockroom');
+    expect(screen.getByLabelText('Location of Filter 20x25x1').textContent).toBe('STORE');
+    expect((screen.getByLabelText('Expected receipt date of Filter 20x25x1') as HTMLInputElement).value).toBe('2026-12-02');
+    expect(screen.getByLabelText('Location of Battery, 9 V').textContent).toBe('TRK2');
+    expect((screen.getByLabelText('Expected receipt date of Battery, 9 V') as HTMLInputElement).value).toBe('2026-11-30');
   });
 
   it('adds everything of the company that is low, at what the office usually orders and what one cost', async () => {
@@ -324,7 +377,10 @@ describe('filling a requisition in', () => {
 
     expect(screen.getByText('Somebody who may approve any amount')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toBe('At this amount, 2 quotes are needed.');
-    expect(submit().disabled).toBe(true);
+    expect(greyed(submit())).toBe(true);
+    // Pressed, greyed, it says why rather than nothing (2026-11-21).
+    fireEvent.click(submit());
+    expect(screen.getByRole('dialog', { name: 'Why Send Approval Request cannot be pressed' }).textContent).toContain('At this amount, 2 quotes are needed.');
   });
 
   it('asks for every line by an item code, and never saves a blank line (2026-11-20)', async () => {
@@ -334,17 +390,17 @@ describe('filling a requisition in', () => {
     // A new one starts with one blank line, ready to type in, as a spreadsheet's next row.
     expect(screen.getAllByLabelText(/^Item on line/)).toHaveLength(1);
     const draft = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
-    expect(draft.disabled).toBe(false);
+    expect(greyed(draft)).toBe(false);
 
     // Something typed on a line with no item code is not a line yet.
     fireEvent.change(screen.getByLabelText('Notes on line 1'), { target: { value: 'Something' } });
-    expect(draft.disabled).toBe(true);
+    expect(greyed(draft)).toBe(true);
     expect(screen.getByRole('status').textContent).toBe('Finish or delete the lines that are not filled in.');
 
     // Delete Line takes the line the cursor is on.
     fireEvent.focus(screen.getByLabelText('Notes on line 1'));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Line' }));
-    expect(draft.disabled).toBe(false);
+    expect(greyed(draft)).toBe(false);
     fireEvent.click(draft);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ lines: [], reason: '' }), false));
   });
@@ -470,8 +526,11 @@ describe('one requisition', () => {
     mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.', attach: true, recall: false, reopen: false } }));
 
     const approve = ribbon().getByRole('button', { name: 'Approve' }) as HTMLButtonElement;
-    expect(approve.disabled).toBe(true);
+    expect(greyed(approve)).toBe(true);
     expect(approve.title).toMatch(/above the \$500\.00 approval limit/);
+    fireEvent.click(approve);
+    expect(edits.step!.mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Why Approve cannot be pressed' }).textContent).toMatch(/above the \$500\.00 approval limit/);
     expect((ribbon().getByRole('button', { name: 'Send Back' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -575,7 +634,7 @@ describe('a requisition and its order', () => {
 
     expect(screen.getByRole('link', { name: 'PO-0009 · V00010 Hill Country Supply' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
     expect(screen.getByRole('link', { name: 'Draft order · vendor to choose' }).getAttribute('href')).toBe('/purchasing/orders/order-10');
-    expect(makeOrder().disabled).toBe(true);
+    expect(greyed(makeOrder())).toBe(true);
   });
 });
 
