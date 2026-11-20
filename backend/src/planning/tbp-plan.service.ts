@@ -40,7 +40,7 @@ import { visitAccess } from '../admin/property-details-view';
 import { leftBenefitPackage, SERVICE_SWITCHES_SELECT } from '../admin/property-service-status';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
-import { isDoneInspectionStatus } from '../common/inspection-done';
+import { isDoneInspectionStatus, UPCOMING_INSPECTION_STATUSES } from '../common/inspection-done';
 import { PrismaService } from '../common/prisma.service';
 import {
   addressKeyCandidates,
@@ -389,6 +389,15 @@ export class TbpPlanService {
    * too, but it re-plans every visit not yet booked, which a button on one row
    * must not do. A lease that already has a stop keeps it as it is -- excluded
    * included, which is a decision -- so a second press adds nothing.
+   *
+   * A visit the quarter made for a lease at the property that has ended since
+   * is never joined by a second (the office, 2026-11-20: one property offered
+   * both "give the old visit a day" and "add a new one", which would have sent
+   * Jobber two). One already booked stands, and is changed rather than doubled.
+   * One still waiting for its day -- on Jobber's Unscheduled list, or never sent
+   * -- is carried over to the new lease: it keeps its place and its Jobber
+   * visit, takes the new lease's Details, and "Publish the rest" gives that same
+   * visit its day.
    */
   async addToQuarter(user: AuthenticatedUser, planId: string, buildingId: string): Promise<AddToQuarterResult> {
     const organizationId = user.organizationId;
@@ -425,7 +434,41 @@ export class TbpPlanService {
     });
     const missing = here.filter((tenant) => !existing.some((stop) => stop.propertywareTenantId === tenant.id));
     const kept = existing.map((stop) => stop.id);
-    if (!missing.length) return { planId: plan.id, added: [], kept };
+    if (!missing.length) return { planId: plan.id, added: [], kept, carried: [] };
+
+    const ended = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: {
+        planId: plan.id,
+        propertywareBuildingId: buildingId,
+        tenant: { isActive: false },
+        status: { not: TbpStopStatus.EXCLUDED },
+      },
+      select: { id: true, status: true, sequence: true, inspectionId: true, inspection: { select: { status: true, scheduledAt: true } } },
+    });
+    const booked = ended.find((stop) => stop.inspection && UPCOMING_INSPECTION_STATUSES.includes(stop.inspection.status));
+    if (booked)
+      throw new ApplicationError(
+        409,
+        'ALREADY_BOOKED',
+        `This property already has a visit booked this quarter, on ${booked.inspection!.scheduledAt.toISOString().slice(0, 10)}, made for its previous lease. Change that visit rather than add a second.`,
+      );
+    const waiting = ended.filter((stop) => !stop.inspectionId && CARRIABLE_STOP_STATUSES.includes(stop.status));
+    // One for one only: which of two units' visits is whose is not a guess to make here.
+    const carry = missing.length === 1 && waiting.length === 1 ? { stop: waiting[0]!, tenant: missing[0]! } : null;
+    if (carry)
+      await this.prisma.tbpQuarterPlanStop.update({
+        where: { id: carry.stop.id },
+        data: {
+          propertywareTenantId: carry.tenant.id,
+          tenantExternalId: carry.tenant.externalId,
+          // The words, the door and the kind of visit chosen for the previous
+          // lease were about that lease; the new one's are worked out afresh.
+          visitTitleOverriddenAt: null,
+          visitDetailsOverriddenAt: null,
+          unitOverriddenAt: null,
+          inspectionTypeOverriddenAt: null,
+        },
+      });
 
     // Where it stood in earlier quarters, as a rebuild would carry it; the end
     // of the queue for its place in this one, which is already laid out.
@@ -438,22 +481,28 @@ export class TbpPlanService {
     let sequence = last._max.sequence ?? 0;
     let blocked = 0;
     for (const tenant of missing) {
-      sequence += 1;
+      // A visit carried over keeps its place in the queue.
+      const carriedTo = carry && carry.tenant === tenant ? carry.stop : null;
+      if (!carriedTo) sequence += 1;
       const rank = ranked.get(tenant.externalId)!;
-      const isBlocked = await this.upsertStop(organizationId, plan.id, tenant, { ...rank, sequence }, quarter, {
+      const at = carriedTo ? carriedTo.sequence : sequence;
+      const isBlocked = await this.upsertStop(organizationId, plan.id, tenant, { ...rank, sequence: at }, quarter, {
         officeDetails: office.byTenantId.get(tenant.id) ?? null,
         previousTechnicianId: previousTechnician.get(tenant.externalId) ?? null,
       });
       if (isBlocked) blocked += 1;
     }
 
+    const carried = carry ? [carry.stop.id] : [];
     const added = (
       await this.prisma.tbpQuarterPlanStop.findMany({
         where: { planId: plan.id, propertywareTenantId: { in: missing.map((tenant) => tenant.id) } },
         select: { id: true },
         orderBy: { sequence: 'asc' },
       })
-    ).map((stop) => stop.id);
+    )
+      .map((stop) => stop.id)
+      .filter((id) => !carried.includes(id));
     const stopCount = await this.prisma.tbpQuarterPlanStop.count({ where: { planId: plan.id } });
     await this.prisma.tbpQuarterPlan.update({
       where: { id: plan.id },
@@ -466,7 +515,7 @@ export class TbpPlanService {
         action: 'TBP_PLAN_PROPERTY_ADDED',
         entityType: 'TbpQuarterPlan',
         entityId: plan.id,
-        metadata: { quarter: quarterLabel(quarter), buildingId, stopIds: added, keptStopIds: kept },
+        metadata: { quarter: quarterLabel(quarter), buildingId, stopIds: added, keptStopIds: kept, carriedStopIds: carried },
       },
     });
     this.logger.log({
@@ -477,10 +526,11 @@ export class TbpPlanService {
       buildingId,
       added: added.length,
       kept: kept.length,
+      carried: carried.length,
       blocked,
     });
 
-    return { planId: plan.id, added, kept };
+    return { planId: plan.id, added, kept, carried };
   }
 
   /**
@@ -1560,6 +1610,18 @@ const rotationCandidate = (tenant: PlanTenant): RotationCandidate => ({
   // nothing to report it.
   addressKey: normalizeAddressKey(tenant.addressLine1, tenant.postalCode) || null,
 });
+
+/**
+ * A stop with no booking yet that can be carried over to a property's new
+ * lease: waiting in the plan, held for a person, refused, or on Jobber's
+ * Unscheduled list -- never one published or taken out.
+ */
+const CARRIABLE_STOP_STATUSES: TbpStopStatus[] = [
+  TbpStopStatus.PLANNED,
+  TbpStopStatus.BLOCKED,
+  TbpStopStatus.FAILED,
+  TbpStopStatus.UNSCHEDULED,
+];
 
 /** A stop a person may still change: not published, not excluded, no inspection. */
 function editableStop(stop: { status: TbpStopStatus; inspectionId: string | null }) {

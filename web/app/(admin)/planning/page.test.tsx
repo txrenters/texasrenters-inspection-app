@@ -1618,6 +1618,7 @@ describe('where every property in the package stands this quarter', () => {
         visit: null,
         previousLeaseOpen: 0,
         missingLeases: 1,
+        missingLeaseAction: 'ADD',
       },
       {
         buildingId: 'building-u',
@@ -1643,6 +1644,7 @@ describe('where every property in the package stands this quarter', () => {
         },
         previousLeaseOpen: 0,
         missingLeases: 0,
+        missingLeaseAction: null,
       },
     ],
     leftWithOpenVisit: [],
@@ -1676,9 +1678,25 @@ describe('where every property in the package stands this quarter', () => {
 
     expect(addToQuarter.mutate).toHaveBeenCalledWith({ planId: 'plan-1', buildingId: 'building-j' }, expect.anything());
     const { onSuccess } = addToQuarter.mutate.mock.calls[0]![1] as { onSuccess: (result: unknown) => void };
-    act(() => onSuccess({ planId: 'plan-1', added: ['s1'], kept: [] }));
+    act(() => onSuccess({ planId: 'plan-1', added: ['s1'], kept: [], carried: [] }));
     expect(success).toHaveBeenCalledWith('Added to Q4 2026', {
       description: 'Give it a day here, then publish the rest to book it in Jobber.',
+    });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('says when it moved the old lease’s visit to the new lease, and opens that visit', () => {
+    url.state = { quarter: '2026-4', tab: 'coverage', day: '', view: 'month', show: 'all' };
+    const addToQuarter = { mutate: vi.fn(), isPending: false, variables: undefined };
+    const success = vi.spyOn(toast, 'success');
+    mount({ coverage: COVERAGE, addToQuarter });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Q4 2026' }));
+    const { onSuccess } = addToQuarter.mutate.mock.calls[0]![1] as { onSuccess: (result: unknown) => void };
+    act(() => onSuccess({ planId: 'plan-1', added: [], kept: [], carried: ['s1'] }));
+
+    expect(success).toHaveBeenCalledWith('Moved to the new lease', {
+      description: 'Give it a day here, then publish the rest: its Jobber visit gets the day and the new lease’s Details.',
     });
     expect(screen.getByRole('dialog')).toBeTruthy();
   });

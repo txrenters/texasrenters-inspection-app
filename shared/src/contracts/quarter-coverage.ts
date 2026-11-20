@@ -95,6 +95,13 @@ export interface QuarterCoverageProperty {
    * quarter" would add. A lease that joined after the quarter was built.
    */
   missingLeases: number;
+  /**
+   * What "Add to the quarter" does here, when a lease has no stop: ADD a new
+   * one; CARRY_OVER the one visit waiting for an ended lease to the new lease;
+   * or nothing, when a visit for an ended lease is ALREADY_BOOKED and a second
+   * would send somebody twice. Null when every lease has a stop.
+   */
+  missingLeaseAction: 'ADD' | 'CARRY_OVER' | 'ALREADY_BOOKED' | null;
 }
 
 /** What adding a property to a quarter did (`POST quarters/:planId/properties/:buildingId`). */
@@ -104,6 +111,12 @@ export interface AddToQuarterResult {
   added: string[];
   /** Its leases' stops already in the plan, left as they were. */
   kept: string[];
+  /**
+   * A stop made for a lease that has ended since, still waiting for its day,
+   * moved to the new lease instead of a second: the same Jobber visit, with
+   * the new lease's Details.
+   */
+  carried: string[];
 }
 
 /** Out of the package now, with a visit this quarter still going ahead. */

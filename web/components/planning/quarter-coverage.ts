@@ -78,6 +78,9 @@ export function groupDetail(group: CoverageGroup, details: Record<CoverageDetail
 /** What to do about a property, or what is true of it, in one line. */
 export function nextStep(property: QuarterCoverageProperty): string {
   const visit = property.visit;
+  // Its only visit was planned for a lease that has ended: move it, not a second beside it.
+  if (property.missingLeaseAction === 'CARRY_OVER' && property.group === 'NOT_SCHEDULED')
+    return 'Planned for the previous lease, with no booking: move it to the new lease, then give it a day';
   switch (property.detail) {
     case 'IN_REVIEW':
       return visit?.previousLease ? 'Visited for the previous lease; waiting for the office’s review' : 'Waiting for the office’s review';
@@ -92,9 +95,7 @@ export function nextStep(property: QuarterCoverageProperty): string {
     case 'NEEDS_PERSON':
       return visit?.note ?? 'Something needs fixing before it can be booked';
     case 'NO_DAY':
-      return visit?.previousLease
-        ? 'Planned for the previous lease, with no day: give it a day for the new one'
-        : 'On Jobber’s Unscheduled list: give it a day';
+      return visit?.previousLease ? 'Planned for the previous lease, with no day' : 'On Jobber’s Unscheduled list: give it a day';
     case 'NOT_SENT':
       return visit?.scheduledOn
         ? 'Has a day but was never booked: publish the rest'
@@ -118,9 +119,11 @@ export function extraNotes(property: QuarterCoverageProperty): string[] {
     property.leases > 1 ? `${property.leases} enrolled leases` : null,
     // A visit for the property, but not for every lease it has now: a new
     // tenant, or a unit the quarter left out. Whether it needs one is the office's call.
-    property.missingLeases && property.group !== 'NONE'
+    property.missingLeaseAction === 'ADD' && property.group !== 'NONE'
       ? `${property.missingLeases === 1 ? 'Its current lease has' : `${property.missingLeases} of its leases have`} no visit this quarter`
       : null,
+    // A second beside it would send somebody twice: that visit is the one to change.
+    property.missingLeaseAction === 'ALREADY_BOOKED' ? 'Booked for the previous lease; its current lease has no visit of its own' : null,
   ].filter((note): note is string => Boolean(note));
 }
 

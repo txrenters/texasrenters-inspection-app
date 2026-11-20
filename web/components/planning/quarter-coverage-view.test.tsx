@@ -42,6 +42,7 @@ const property = (buildingId: string, overrides: Partial<QuarterCoverageProperty
   visit: visit({ stopId: `stop-${buildingId}`, inspectionId: `insp-${buildingId}` }),
   previousLeaseOpen: 0,
   missingLeases: 0,
+  missingLeaseAction: null,
   ...overrides,
 });
 
@@ -53,7 +54,12 @@ const COVERAGE: QuarterCoverage = {
   properties: [
     property('1', { visit: visit({ previousLease: true, inspectionId: 'insp-1' }) }),
     // Visited for its old tenant; the new one has no visit.
-    property('2', { detail: 'FINISHED', missingLeases: 1, visit: visit({ inspectionStatus: 'COMPLETED', inspectionId: 'insp-2' }) }),
+    property('2', {
+      detail: 'FINISHED',
+      missingLeases: 1,
+      missingLeaseAction: 'ADD',
+      visit: visit({ inspectionStatus: 'COMPLETED', inspectionId: 'insp-2' }),
+    }),
     property('3', {
       group: 'SCHEDULED',
       detail: 'PAST_DUE',
@@ -73,7 +79,15 @@ const COVERAGE: QuarterCoverage = {
       zone: '1',
       visit: visit({ stopId: 'stop-5', inspectionId: null, inspectionStatus: null, stopStatus: 'UNSCHEDULED', scheduledOn: null, technician: null }),
     }),
-    property('6', { group: 'NONE', detail: 'NOT_PLANNED', visit: null, firstOnReport: '2026-10-20T13:00:00.000Z', zone: '3', missingLeases: 1 }),
+    property('6', {
+      group: 'NONE',
+      detail: 'NOT_PLANNED',
+      visit: null,
+      firstOnReport: '2026-10-20T13:00:00.000Z',
+      zone: '3',
+      missingLeases: 1,
+      missingLeaseAction: 'ADD',
+    }),
     property('7', {
       group: 'NONE',
       detail: 'EXCLUDED',
@@ -152,6 +166,38 @@ describe('the quarter’s coverage tab', () => {
     rerender(<QuarterCoverageView adding="6" coverage={COVERAGE} onAdd={onAdd} />);
     const busy = within(rows()[5]!).getByRole('button', { name: 'Adding…' });
     expect((busy as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('moves an ended lease’s waiting visit to the new lease rather than offering a second, and offers nothing beside one booked', () => {
+    const onAdd = vi.fn();
+    const onOpenStop = vi.fn();
+    const carry = property('carry', {
+      group: 'NOT_SCHEDULED',
+      detail: 'NO_DAY',
+      missingLeases: 1,
+      missingLeaseAction: 'CARRY_OVER',
+      visit: visit({ stopId: 'stop-old', inspectionId: null, inspectionStatus: null, stopStatus: 'UNSCHEDULED', scheduledOn: null, previousLease: true }),
+    });
+    const booked = property('booked', {
+      group: 'SCHEDULED',
+      detail: 'UPCOMING',
+      missingLeases: 1,
+      missingLeaseAction: 'ALREADY_BOOKED',
+      visit: visit({ inspectionId: 'insp-old', inspectionStatus: 'SCHEDULED', scheduledOn: '2026-11-25', previousLease: true }),
+    });
+    render(<QuarterCoverageView coverage={{ ...COVERAGE, properties: [carry, booked] }} onAdd={onAdd} onOpenStop={onOpenStop} />);
+
+    const [carried, alreadyBooked] = rows();
+    expect(within(carried!).getByText('Planned for the previous lease, with no booking: move it to the new lease, then give it a day')).toBeTruthy();
+    // Its window would give the old lease's visit a day.
+    expect(within(carried!).queryByRole('button', { name: 'Open in the plan' })).toBeNull();
+    expect(within(carried!).queryByRole('button', { name: 'Add to Q4 2026' })).toBeNull();
+    fireEvent.click(within(carried!).getByRole('button', { name: 'Move to the new lease' }));
+    expect(onAdd).toHaveBeenCalledWith('carry');
+
+    expect(within(alreadyBooked!).getByText('Booked for the previous lease; its current lease has no visit of its own')).toBeTruthy();
+    expect(within(alreadyBooked!).queryByRole('button', { name: /Add to|Move to/ })).toBeNull();
+    expect(within(alreadyBooked!).getByRole('link', { name: 'Open visit' })).toBeTruthy();
   });
 
   it('warns of a property that left the package with its visit still booked', () => {

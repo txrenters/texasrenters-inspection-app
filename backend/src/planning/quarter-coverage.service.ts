@@ -43,6 +43,27 @@ interface Candidate {
   visit: CoverageVisit;
   /** 1 done, 2 booked, 3 in the plan with no booking, 4 taken out of the plan. */
   rank: 1 | 2 | 3 | 4;
+  /**
+   * A stop for an ended lease, with no inspection, still waiting for its day:
+   * what adding the property carries over to its new lease
+   * (`TbpPlanService.addToQuarter`, whose rule this mirrors).
+   */
+  carriable: boolean;
+}
+
+const CARRIABLE_STOP_STATUSES = new Set<string>([
+  TbpStopStatus.PLANNED,
+  TbpStopStatus.BLOCKED,
+  TbpStopStatus.FAILED,
+  TbpStopStatus.UNSCHEDULED,
+]);
+
+/** What adding the property would do, as `TbpPlanService.addToQuarter` decides it. */
+function missingLeaseAction(missing: number, list: readonly Candidate[]): QuarterCoverageProperty['missingLeaseAction'] {
+  if (!missing) return null;
+  const ended = list.filter((candidate) => candidate.visit.stopId && candidate.visit.previousLease);
+  if (ended.some((candidate) => candidate.rank === 2)) return 'ALREADY_BOOKED';
+  return missing === 1 && ended.filter((candidate) => candidate.carriable).length === 1 ? 'CARRY_OVER' : 'ADD';
 }
 
 const GROUP_OF_RANK: Record<Candidate['rank'], CoverageGroup> = {
@@ -165,7 +186,8 @@ export class QuarterCoverageService {
     ]);
 
     const candidates: Candidate[] = [];
-    const add = (buildingId: string, visit: CoverageVisit) => candidates.push({ buildingId, visit, rank: rankOf(visit) });
+    const add = (buildingId: string, visit: CoverageVisit, carriable = false) =>
+      candidates.push({ buildingId, visit, rank: rankOf(visit), carriable });
     for (const stop of stops) {
       const buildingId = stop.propertywareBuildingId ?? stop.tenant.propertywareBuildingId;
       if (!buildingId) continue;
@@ -183,7 +205,7 @@ export class QuarterCoverageService {
         fromJobber: false,
         previousLease: !stop.tenant.isActive,
         note: stop.blockedMessage,
-      });
+      }, !stop.tenant.isActive && !stop.inspection && CARRIABLE_STOP_STATUSES.has(stop.status));
     }
     for (const inspection of jobberVisits) {
       // "Q4 2026" in some other part of the title is not the quarter it names.
@@ -261,6 +283,7 @@ export class QuarterCoverageService {
         previousLeaseOpen: list.filter((candidate) => candidate !== best && candidate.visit.previousLease && isOpen(candidate))
           .length,
         missingLeases: leases?.missing ?? 0,
+        missingLeaseAction: missingLeaseAction(leases?.missing ?? 0, list),
       };
     });
 
