@@ -13,6 +13,7 @@ import InspectionsPage from './page';
 const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
   useTechnicians: vi.fn(),
+  useInspection: vi.fn(() => ({ isLoading: true, isError: false, data: undefined })),
   // The day against Jobber, for the Jobber column; nothing to compare here.
   useJobberDay: vi.fn(() => ({ data: undefined })),
 }));
@@ -232,5 +233,21 @@ describe('the table', () => {
     expect(screen.getByText(/Nothing of this type is scheduled on Wednesday, October 7/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show every date' }));
     expect(url.set).toHaveBeenLastCalledWith({ day: 'all', page: 1 });
+  });
+});
+
+describe('a work order on the list', () => {
+  it('opens as a work order in a dialog, while an inspection still opens its page', () => {
+    mount({}, [
+      row(),
+      row({ id: 'wo-1', inspectionType: 'MAINTENANCE', propertywareBuilding: { id: 'b-2', name: '5718 Rocky Trail Dr' } }),
+    ]);
+
+    expect(screen.getByRole('link', { name: /18919 Summer Farm Trl/ })).toHaveAttribute('href', '/inspections/inspection-1');
+    expect(screen.queryByRole('link', { name: /5718 Rocky Trail Dr/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /5718 Rocky Trail Dr/ }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(hooks.useInspection).toHaveBeenLastCalledWith('wo-1');
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkOrdersPage from './page';
@@ -12,6 +12,7 @@ import WorkOrdersPage from './page';
 
 const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
+  useInspection: vi.fn(),
 }));
 vi.mock('@/lib/queries', () => hooks);
 const url = vi.hoisted(() => ({
@@ -82,7 +83,6 @@ describe('each row', () => {
     expect(screen.getByText('123 Demo St.')).toBeInTheDocument();
     expect(screen.getByText('Maintenance')).toBeInTheDocument();
     expect(screen.getByText('Moses Rodriguez')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /44781/ })).toHaveAttribute('href', '/inspections/inspection-1');
   });
 
   it('says Pest control for the pest crew, and Unassigned while nobody is on it', () => {
@@ -105,5 +105,28 @@ describe('when nothing has arrived', () => {
     mount({ q: 'nothing' }, []);
 
     expect(screen.getByText('No work orders match')).toBeInTheDocument();
+  });
+});
+
+describe('opening a work order', () => {
+  it('opens it in a dialog, not on the inspection page', () => {
+    hooks.useInspection.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        ...row(),
+        internalNotes: 'Work order #44781\nPlumbing · Leak\n\nKitchen sink drips under the cabinet',
+      },
+    });
+    mount();
+
+    expect(screen.queryByRole('link', { name: /44781/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /44781/ }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(hooks.useInspection).toHaveBeenLastCalledWith('inspection-1');
+    expect(within(dialog).getByText('Work order #44781')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Kitchen sink drips under the cabinet/)).toBeInTheDocument();
+    expect(within(dialog).getByText('Moses Rodriguez')).toBeInTheDocument();
   });
 });

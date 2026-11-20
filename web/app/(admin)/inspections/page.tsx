@@ -18,6 +18,7 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { isWorkOrderVisit, WorkOrderDialog } from '@/components/work-order-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -347,6 +348,7 @@ export default function InspectionsPage() {
   const canSelect = canDelete || canManage || canAssign;
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [workOrderId, setWorkOrderId] = useState<string | null>(null);
   const [state, setState] = useUrlState({
     // Empty is newest first. Kept as the absent value so the ordinary URL stays
     // clean and an old link still means what it meant.
@@ -709,7 +711,9 @@ export default function InspectionsPage() {
           <DataTable
             columns={columns}
             label="Property inspections"
-            rowHref={(row) => `/inspections/${row.id}`}
+            // A work order opens as one, not on the inspection page.
+            rowHref={(row) => (isWorkOrderVisit(row) ? undefined : `/inspections/${row.id}`)}
+            rowOpen={(row) => () => setWorkOrderId(row.id)}
             rowKey={(row) => row.id}
             rows={rows}
             // Back to page one: page four of newest-first holds nothing a
@@ -754,6 +758,8 @@ export default function InspectionsPage() {
           onDeleted={(ids) => setSelectedIds((current) => new Set([...current].filter((id) => !ids.includes(id))))}
         />
       ) : null}
+
+      {workOrderId ? <WorkOrderDialog inspectionId={workOrderId} onClose={() => setWorkOrderId(null)} /> : null}
     </>
   );
 }
