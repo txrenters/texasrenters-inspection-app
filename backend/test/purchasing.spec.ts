@@ -465,13 +465,29 @@ describe('deciding a requisition', () => {
     return { ...made, requisitionId: draft.id };
   };
 
-  it('is never done by whoever asked, whatever else they may do', async () => {
-    const { service, requisitionId, requisitions } = await waiting(owner, small());
+  // 2026-11-21, the office: an approver approves their own, as anybody else's.
+  it('is approved by whoever asked when they are an approver, audited as their own, but never sent back or rejected by them', async () => {
+    const { service, requisitionId, requisitions, audits } = await waiting(owner, small());
 
-    expect((await service.detail(owner, requisitionId)).can).toMatchObject({ approve: false, sendBack: false, reject: false, approveBlocked: 'You asked for this, so somebody else approves it.' });
-    for (const decision of ['APPROVED', 'SENT_BACK', 'REJECTED'] as const)
-      await expect(service.decide(owner, requisitionId, decision, { note: 'Mine' })).rejects.toMatchObject({ code: 'REQUISITION_OWN' });
+    expect((await service.detail(owner, requisitionId)).can).toMatchObject({ approve: true, sendBack: false, reject: false, approveBlocked: null });
+    for (const decision of ['SENT_BACK', 'REJECTED'] as const)
+      await expect(service.decide(owner, requisitionId, decision, { note: 'Mine' })).rejects.toMatchObject({ code: 'REQUISITION_OWN', message: 'You asked for this: take it back with Cancel Approval Request instead.' });
     expect(requisitions[0]).toMatchObject({ status: 'SUBMITTED', decidedById: null });
+
+    expect(await service.decide(owner, requisitionId, 'APPROVED', {})).toMatchObject({ status: 'APPROVED', decidedBy: 'Sample Owner' });
+    expect(audits.find((audit) => audit.action === 'PURCHASE_REQUISITION_APPROVED')?.metadata).toMatchObject({ ownRequest: true });
+  });
+
+  it('holds an approver approving their own to their limit, and somebody who only asks never approves', async () => {
+    // $184.80, by somebody who may approve to $100.00.
+    const capped = await waiting(manager, small());
+    capped.persons.push({ organizationId: ORG, userProfileId: manager.id, companyTenantIds: [], approvesAnyAmount: false, approvalLimitCents: 10000 });
+    expect((await capped.service.detail(manager, capped.requisitionId)).can).toMatchObject({ approve: false, approveBlocked: 'At $184.80 it is above your approval limit of $100.00.' });
+    await expect(capped.service.decide(manager, capped.requisitionId, 'APPROVED', {})).rejects.toMatchObject({ code: 'REQUISITION_OVER_LIMIT' });
+
+    const asked = await waiting(asker, small());
+    expect((await asked.service.detail(asker, asked.requisitionId)).can).toMatchObject({ approve: false, approveBlocked: null });
+    await expect(asked.service.decide(asker, asked.requisitionId, 'APPROVED', {})).rejects.toMatchObject({ code: 'REQUISITION_NOT_APPROVER' });
   });
 
   it('approves under the limit with Approve requisitions, once', async () => {

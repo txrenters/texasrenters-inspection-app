@@ -174,5 +174,6 @@
   "202611200015_purchasing_setup": "560b61223219ebe0",
   "202611210001_purchasing_roles": "ec50b701f8dfdac8",
   "202611210002_purchasing_page": "6d06b318b241d4ea",
-  "202611210003_units_of_measure": "4e53d25f8b3a7d1c"
+  "202611210003_units_of_measure": "4e53d25f8b3a7d1c",
+  "202611210004_requisition_own_approval": "9e5d7399a4b2473f"
 }

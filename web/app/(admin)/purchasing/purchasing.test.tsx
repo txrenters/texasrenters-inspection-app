@@ -740,3 +740,20 @@ describe('one order', () => {
     });
   });
 });
+
+// 2026-11-21, the office: an approver approves their own requisition, within their limit.
+describe('who approves a requisition its requester writes', () => {
+  const write = (permissions: string[]) =>
+    render(<RequisitionForm choices={CHOICES} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} permissions={permissions} />);
+
+  it('tells an approver they may approve it themselves once it is sent', () => {
+    write(['purchasing:request', 'purchasing:approve']);
+    expect(screen.getByText('Once it is sent, you may approve it yourself, within your limit.')).toBeTruthy();
+  });
+
+  it('tells somebody who only asks that an approver decides it', () => {
+    write(['purchasing:request']);
+    expect(screen.getByText('Once it is sent, an approver decides it.')).toBeTruthy();
+    expect(screen.queryByText(/approve it yourself/)).toBeNull();
+  });
+});
