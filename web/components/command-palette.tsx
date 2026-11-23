@@ -1,18 +1,30 @@
 'use client';
 
-import type { AdminInspection, AdminProperty, AdminTechnician } from '@texasrenters/shared';
+import { SEARCH_MIN_LENGTH, type SearchHit, type SearchKind, type SearchResults } from '@texasrenters/shared';
 import { useQuery } from '@tanstack/react-query';
 import {
+  BanknoteIcon,
+  BoxesIcon,
+  BriefcaseIcon,
   Building2Icon,
+  ChartColumnIcon,
   ClipboardCheckIcon,
+  ClipboardListIcon,
+  FilePlusIcon,
   HardHatIcon,
   LogOutIcon,
   MonitorIcon,
   MoonIcon,
   PanelsTopLeftIcon,
+  ReceiptTextIcon,
   SearchIcon,
+  SettingsIcon,
+  ShoppingCartIcon,
+  StoreIcon,
   SunIcon,
   UserRoundIcon,
+  UsersIcon,
+  type LucideIcon,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useRouter } from 'next/navigation';
@@ -34,59 +46,73 @@ import {
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { getVisibleAdminNavigation } from '@/lib/admin-navigation';
-import { api, type Page, queryString } from '@/lib/api';
+import { api, queryString } from '@/lib/api';
 import { useAuth, usePermissions } from '@/lib/auth';
 import type { ConsoleShell } from '@/lib/console-shell';
-import { formatScheduledDate, humanize } from '@/lib/format';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useSearchText } from '@/lib/use-search-text';
 import { cn } from '@/lib/utils';
 
-/** How many of each kind of record the search shows: enough to pick from. */
-const RECORDS = 5;
-/** Fewer letters than this match too much to be worth asking for. */
-const MIN_QUERY = 2;
+/**
+ * Each kind of record the search finds: the heading it is listed under, its
+ * icon, and the page a hit opens. The server decides which kinds an account is
+ * answered with (`GET /admin/search`); a kind with nothing found is not drawn.
+ */
+const RECORD_KINDS: Record<SearchKind, { heading: string; icon: LucideIcon; href: (hit: SearchHit) => string }> = {
+  inspection: { heading: 'Inspections', icon: ClipboardCheckIcon, href: (hit) => `/inspections/${hit.id}` },
+  job: { heading: 'Jobs', icon: BriefcaseIcon, href: (hit) => `/jobs/${hit.id}` },
+  property: { heading: 'Properties', icon: Building2Icon, href: (hit) => `/properties/${hit.id}` },
+  // A tenant has no page of their own: their property, or the Tenants list narrowed to them.
+  tenant: {
+    heading: 'Tenants',
+    icon: UsersIcon,
+    href: (hit) => (hit.targetId ? `/properties/${hit.targetId}` : `/tenants${queryString({ q: hit.title })}`),
+  },
+  invoice: { heading: 'Invoices', icon: ReceiptTextIcon, href: (hit) => `/invoices/${hit.id}` },
+  payment: { heading: 'Payments', icon: BanknoteIcon, href: (hit) => `/payments/${hit.id}` },
+  requisition: { heading: 'Requisitions', icon: ClipboardListIcon, href: (hit) => `/purchasing/requisitions/${hit.id}` },
+  purchaseOrder: { heading: 'Purchase orders', icon: ShoppingCartIcon, href: (hit) => `/purchasing/orders/${hit.id}` },
+  stockItem: { heading: 'Stock items', icon: BoxesIcon, href: (hit) => `/inventory/items/${hit.id}` },
+  // Vendors are a tab of Inventory, with no page each.
+  vendor: { heading: 'Vendors', icon: StoreIcon, href: () => '/inventory?tab=vendors' },
+  technician: { heading: 'Technicians', icon: HardHatIcon, href: (hit) => `/technicians/${hit.id}` },
+  user: { heading: 'Users', icon: UserRoundIcon, href: (hit) => `/users/${hit.id}` },
+};
 
 /**
- * Records matching what was typed: inspections, properties and technicians,
- * each only for an account allowed to read them.
+ * Pages reached from a button on another page, so not in the sidebar: found by
+ * name once something is typed. Each with the permission its own page asks for.
+ */
+const MORE_PAGES: { title: string; words: string; href: string; icon: LucideIcon; permission: string }[] = [
+  { title: 'Invoice reports', words: 'aged receivables projected income transactions taxes', href: '/invoices/reports', icon: ChartColumnIcon, permission: 'invoices:read' },
+  { title: 'Invoice settings', words: 'products services templates reminders numbering', href: '/invoices/settings', icon: SettingsIcon, permission: 'invoices:read' },
+  { title: 'New invoice', words: 'create make', href: '/invoices/new', icon: FilePlusIcon, permission: 'invoices:manage' },
+  { title: 'Invoice several visits', words: 'batch create make', href: '/invoices/batch', icon: FilePlusIcon, permission: 'invoices:manage' },
+  { title: 'New requisition', words: 'purchase request create make', href: '/purchasing/requisitions/new', icon: FilePlusIcon, permission: 'purchasing:request' },
+  { title: 'Settings', words: 'console providers', href: '/settings', icon: SettingsIcon, permission: 'integrations:read' },
+];
+
+/**
+ * Records matching what was typed, of every kind the account may read.
  *
  * The office (2026-10-07): the header's search only jumped between pages, while
  * every list had a search box of its own. It now finds the records themselves,
  * from anywhere in the console -- the lists' searches live in the header too.
+ *
+ * And (2026-11-24) what was added since: invoices by their number, payments,
+ * requisitions, purchase orders, stock items, vendors, tenants, jobs and users.
+ * One request a search, where there was one a kind; the server reads only its
+ * own database for it.
  */
 function useRecordSearch(term: string, open: boolean) {
-  const { has } = usePermissions();
-  const ready = open && term.length >= MIN_QUERY;
-  const query = { page: 1, pageSize: RECORDS, search: term };
-  const inspections = useQuery({
-    queryKey: ['admin', 'search', 'inspections', term],
-    queryFn: ({ signal }) =>
-      api<Page<AdminInspection>>(`/api/v1/admin/inspections${queryString(query)}`, { signal }),
-    enabled: ready && has('inspections:read'),
+  const ready = open && term.length >= SEARCH_MIN_LENGTH;
+  const found = useQuery({
+    queryKey: ['admin', 'search', term],
+    queryFn: ({ signal }) => api<SearchResults>(`/api/v1/admin/search${queryString({ q: term })}`, { signal }),
+    enabled: ready,
     staleTime: 30_000,
   });
-  const properties = useQuery({
-    queryKey: ['admin', 'search', 'properties', term],
-    queryFn: ({ signal }) =>
-      api<Page<AdminProperty>>(`/api/v1/admin/properties${queryString(query)}`, { signal }),
-    enabled: ready && has('properties:read'),
-    staleTime: 30_000,
-  });
-  const technicians = useQuery({
-    queryKey: ['admin', 'search', 'technicians', term],
-    queryFn: ({ signal }) =>
-      api<Page<AdminTechnician>>(`/api/v1/admin/technicians${queryString(query)}`, { signal }),
-    enabled: ready && has('technicians:read'),
-    staleTime: 30_000,
-  });
-  return {
-    ready,
-    searching: inspections.isFetching || properties.isFetching || technicians.isFetching,
-    inspections: ready ? (inspections.data?.items ?? []) : [],
-    properties: ready ? (properties.data?.items ?? []) : [],
-    technicians: ready ? (technicians.data?.items ?? []) : [],
-  };
+  return { ready, searching: found.isFetching, groups: ready ? (found.data?.groups ?? []) : [] };
 }
 
 /** Every word of the query somewhere in the text, as the lists' search reads it. */
@@ -162,7 +188,7 @@ function HeaderListSearch({
         aria-label="Search everything"
         className="text-muted-foreground hover:bg-muted absolute top-1/2 right-1.5 -translate-y-1/2 rounded border px-1.5 py-0.5 text-[10px] font-medium"
         onClick={onSearchEverything}
-        title="Search inspections, properties, technicians and pages"
+        title="Search every record and page"
         type="button"
       >
         {shortcut}
@@ -180,9 +206,9 @@ function isTypingInto(target: EventTarget | null) {
 /**
  * The header's search.
  *
- * On a list page it is that list's search. Everywhere, Ctrl K (⌘K) finds inspections,
- * properties and technicians by what was typed, and every page the account can
- * open -- the same permission-filtered navigation the sidebar draws. "/" opens it
+ * On a list page it is that list's search. Everywhere, Ctrl K (⌘K) finds the
+ * records of every kind the account may read by what was typed (`RECORD_KINDS`),
+ * and every page the account can open -- the same permission-filtered navigation the sidebar draws. "/" opens it
  * too, as it does in Jobber, whenever the key would not be typed into a field.
  *
  * `variant="jobber"` draws the trigger as Jobber's wide "Press / to search" box
@@ -243,13 +269,16 @@ export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell
   // "Nothing matches" waits for the answer: until the typing settles and the
   // records arrive, an empty list means "not yet", not "no".
   const settling =
-    query.trim().length >= MIN_QUERY && (query.trim() !== term || records.searching);
+    query.trim().length >= SEARCH_MIN_LENGTH && (query.trim() !== term || records.searching);
   const pages = groups
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => matchesWords(`${group.title} ${item.title} ${item.href}`, query)),
     }))
     .filter((group) => group.items.length);
+  const morePages = query.trim()
+    ? MORE_PAGES.filter((entry) => has(entry.permission) && matchesWords(`${entry.title} ${entry.words}`, query))
+    : [];
 
   // Matched like the pages (console-development): these vanished the moment
   // anything was typed, so "sign out" or "dark" found nothing.
@@ -340,7 +369,7 @@ export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell
       {/* Not filtered by cmdk: the records are the server's answer already,
           and the pages are matched word by word above, as the lists are. */}
       <CommandDialog
-        description="Find an inspection, property, technician or page"
+        description="Find an inspection, property, invoice, requisition, stock item, person or page"
         onOpenChange={changeOpen}
         open={open}
         shouldFilter={false}
@@ -348,7 +377,7 @@ export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell
       >
         <CommandInput
           onValueChange={setQuery}
-          placeholder="Search inspections, properties, technicians, pages…"
+          placeholder="Search addresses, invoice and order numbers, stock, people, pages…"
           value={query}
         />
         <CommandList>
@@ -361,71 +390,31 @@ export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell
             <CommandEmpty>Nothing matches “{query}”.</CommandEmpty>
           )}
 
-          {records.inspections.length ? (
-            <CommandGroup heading="Inspections">
-              {records.inspections.map((inspection) => {
-                const technician = (inspection.assignments ?? []).find((entry) => entry.isCurrent)
-                  ?.technician?.displayName;
-                return (
+          {records.groups.map((group) => {
+            const kind = RECORD_KINDS[group.kind];
+            // A kind this build does not know yet: a newer server is answering.
+            if (!kind) return null;
+            const Icon = kind.icon;
+            return (
+              <CommandGroup heading={kind.heading} key={group.kind}>
+                {group.hits.map((hit) => (
                   <CommandItem
-                    key={inspection.id}
-                    onSelect={() => run(() => router.push(`/inspections/${inspection.id}`))}
-                    value={`inspection-${inspection.id}`}
+                    key={hit.id}
+                    onSelect={() => run(() => router.push(kind.href(hit)))}
+                    value={`${group.kind}-${hit.id}`}
                   >
-                    <ClipboardCheckIcon />
+                    <Icon />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate">
-                        {inspection.propertywareBuilding?.name ?? 'Property snapshot'}
-                        {inspection.propertywareUnit?.name ? ` · ${inspection.propertywareUnit.name}` : ''}
-                      </span>
-                      <span className="text-muted-foreground block truncate text-xs">
-                        {humanize(inspection.inspectionType)} · {formatScheduledDate(inspection.scheduledAt)} ·{' '}
-                        {technician ?? 'Unassigned'}
-                      </span>
+                      <span className="block truncate">{hit.title}</span>
+                      {hit.detail ? (
+                        <span className="text-muted-foreground block truncate text-xs">{hit.detail}</span>
+                      ) : null}
                     </span>
                   </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          ) : null}
-
-          {records.properties.length ? (
-            <CommandGroup heading="Properties">
-              {records.properties.map((property) => (
-                <CommandItem
-                  key={property.id}
-                  onSelect={() => run(() => router.push(`/properties/${property.id}`))}
-                  value={`property-${property.id}`}
-                >
-                  <Building2Icon />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{property.name}</span>
-                    <span className="text-muted-foreground block truncate text-xs">
-                      {[property.addressLine1, property.city].filter(Boolean).join(', ')}
-                    </span>
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ) : null}
-
-          {records.technicians.length ? (
-            <CommandGroup heading="Technicians">
-              {records.technicians.map((technician) => (
-                <CommandItem
-                  key={technician.id}
-                  onSelect={() => run(() => router.push(`/technicians/${technician.id}`))}
-                  value={`technician-${technician.id}`}
-                >
-                  <HardHatIcon />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{technician.displayName}</span>
-                    <span className="text-muted-foreground block truncate text-xs">{technician.email}</span>
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ) : null}
+                ))}
+              </CommandGroup>
+            );
+          })}
 
           {pages.map((group) => (
             <CommandGroup heading={group.title} key={group.title}>
@@ -444,6 +433,20 @@ export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell
               })}
             </CommandGroup>
           ))}
+
+          {morePages.length ? (
+            <CommandGroup heading="More pages">
+              {morePages.map((entry) => {
+                const Icon = entry.icon;
+                return (
+                  <CommandItem key={entry.href} onSelect={() => run(() => router.push(entry.href))} value={`page-${entry.href}`}>
+                    <Icon />
+                    {entry.title}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          ) : null}
 
           {account.length || themes.length ? <CommandSeparator /> : null}
           {account.length ? (

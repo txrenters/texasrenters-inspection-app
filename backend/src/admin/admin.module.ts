@@ -75,6 +75,8 @@ import { PurchaseReceivingController } from './purchase-receiving.controller';
 import { PurchaseReceivingService } from './purchase-receiving.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
+import { SearchController } from './search.controller';
+import { SearchService } from './search.service';
 import { InvoiceSettingsService } from './invoice-settings.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { AreaChecklistAiService } from './area-checklist-ai.service';
@@ -133,6 +135,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceTemplatesController,
     InvoiceSettingsController,
     InvoiceReportsController,
+    SearchController,
     ActualVsBudgetController,
     // Before InventoryController: `inventory/slips` must not be read as an item's id.
     StockSlipsController,
@@ -195,6 +198,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceEditsService,
     InvoiceBatchService,
     InvoiceReportsService,
+    SearchService,
     ActualVsBudgetService,
     InventoryService,
     InventoryImportService,
