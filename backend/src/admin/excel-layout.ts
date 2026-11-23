@@ -49,8 +49,10 @@ export interface ExcelTab {
    * console's rows go below them, from this sheet row (0-based) down, and the
    * tab is never made, sized or headed by the console. Set when it is first
    * written; absent for a tab the console lays out from its first cell.
+   * `to` is the last day of the console's rows on it (tomorrow): a row the
+   * office types for a later day waits there until its day comes.
    */
-  below?: { origin?: number; technicianId?: string };
+  below?: { origin?: number; technicianId?: string; to?: string };
   /** The bold rows are filled too: the log's Total rows, light blue as the office's are. */
   fill?: string;
 }
@@ -377,9 +379,10 @@ export function columnLetter(index: number): string {
  * A technician's own tab -- "Amy", "Kevin" -- as the office keeps it: a row
  * a visit in the workbook's 19 columns, and a Total row closing each day. The
  * console's rows go under the office's (see `below`), from the sync's first
- * day; the tab's headings and its rows before that day are the office's.
+ * day to `to` (tomorrow); the tab's headings and its rows before that day are
+ * the office's.
  */
-export function logTab(name: string, technicianId: string, days: readonly RevenueLogDay[]): ExcelTab {
+export function logTab(name: string, technicianId: string, days: readonly RevenueLogDay[], to: string): ExcelTab {
   const rows: ExcelCell[][] = [];
   const keys: (string | null)[] = [];
   const bold: number[] = [];
@@ -416,5 +419,5 @@ export function logTab(name: string, technicianId: string, days: readonly Revenu
     ]);
     keys.push(null);
   }
-  return { name, rows, bold, keys, editable: { ...LOG_EDITABLE }, below: { technicianId }, fill: '#DDEBF7' };
+  return { name, rows, bold, keys, editable: { ...LOG_EDITABLE }, below: { technicianId, to }, fill: '#DDEBF7' };
 }

@@ -88,6 +88,16 @@ const trimEmptyRows = (rows: ExcelCell[][]) => {
   while (last > 0 && rows[last - 1]!.every((cell) => !cellText(cell).trim())) last -= 1;
   return rows.slice(0, last);
 };
+/** Row numbers as blocks of rows side by side, first and last of each: [3, 4, 5, 9] -> [3, 5], [9, 9]. */
+const blocks = (rows: readonly number[]) => {
+  const runs: [number, number][] = [];
+  for (const row of [...new Set(rows)].sort((left, right) => left - right)) {
+    const last = runs.at(-1);
+    if (last && last[1] === row - 1) last[1] = row;
+    else runs.push([row, row]);
+  }
+  return runs;
+};
 
 @Injectable()
 export class ExcelSyncService {
@@ -345,7 +355,7 @@ export class ExcelSyncService {
           const to = [shiftDay(from, MAX_LOG_DAYS - 1), tomorrow].sort()[0]!;
           days.push(...(await this.revenue.log(reader, { technicianId: technician.id, from, to })).days);
         }
-        tabs.push(logTab(name, technician.id, days));
+        tabs.push(logTab(name, technician.id, days, tomorrow));
       }
     }
     return tabs;
@@ -611,6 +621,7 @@ export class ExcelSyncService {
         excel: read.excel,
         editable: tab.editable,
         from: dayOf(snapshot.adoptedFrom!),
+        to: tab.below!.to!,
       });
     };
     let deferred = false;
@@ -661,7 +672,10 @@ export class ExcelSyncService {
       const row = (index: number) => origin + index + 1;
       for (const write of plan.writes)
         await this.putCells(client, name, `${columnLetter(write.column)}${row(write.row)}:${columnLetter(write.column + write.cells.length - 1)}${row(write.row)}`, [write.cells]);
-      for (const index of plan.clears) await client.clearRange(name, `A${row(index)}:${columnLetter(LOG_WIDTH - 1)}${row(index)}`);
+      // Rows side by side emptied in one call, not one call a row (2026-11-23: ~2,000 copied rows to empty at the
+      // foot of the tabs, against a run's 80 calls).
+      for (const [first, final] of blocks(plan.clears))
+        await client.clearRange(name, `A${row(first)}:${columnLetter(LOG_WIDTH - 1)}${row(final)}`);
       if (plan.appends.length) {
         // At the foot of the tab, under whatever the office has there -- and under any formula of the office's that
         // shows nothing (a "" result is not a value to Excel's last row): never written over.
