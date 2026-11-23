@@ -14,7 +14,7 @@ import { getSession, SessionUnavailableError, signOut } from './session';
  */
 
 vi.mock('./session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./session')>()),
+  ...(await importOriginal<Record<string, unknown>>()),
   getSession: vi.fn(),
   signOut: vi.fn(),
 }));

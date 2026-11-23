@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({ replace: vi.fn(), api: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: mocks.replace }) }));
 vi.mock('./api', () => ({ api: mocks.api }));
 vi.mock('./session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./session')>()),
+  ...(await importOriginal<Record<string, unknown>>()),
   getSession: vi.fn(),
   onSessionChange: () => () => undefined,
   signOut: vi.fn(),
