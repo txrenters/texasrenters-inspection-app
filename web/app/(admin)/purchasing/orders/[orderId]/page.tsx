@@ -700,7 +700,10 @@ function OrderAside({ data, onChange }: { data: PurchaseOrderDetail; onChange?: 
 /** The email to the vendor. The PDF is made here, in the browser, when Send is pressed; one press is one email. */
 function SendDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () => void }) {
   const { send } = usePurchaseOrderEdits();
-  const [to, setTo] = useState(data.vendorContact?.email ?? '');
+  // The vendor's email, else where this order last went (the office, 2026-11-24): emailed again, it goes to the same place.
+  const lastSent = data.deliveries.find((delivery) => delivery.status === 'SENT')?.recipient ?? null;
+  const [to, setTo] = useState(data.vendorContact?.email ?? lastSent ?? '');
+  const vendorName = data.vendor?.name ?? 'The vendor';
   const [message, setMessage] = useState('');
   const [making, setMaking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -746,7 +749,13 @@ function SendDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () 
           <Field>
             <FieldLabel htmlFor="send-to">To</FieldLabel>
             <Input autoComplete="off" id="send-to" maxLength={320} onChange={(event) => setTo(event.target.value)} required type="email" value={to} />
-            {data.vendorContact?.email ? null : <FieldDescription>The vendor has no email saved. Add it on Inventory, under Vendors, to have it filled in.</FieldDescription>}
+            {data.vendorContact?.email ? null : (
+              <FieldDescription>
+                {lastSent && to.trim() === lastSent
+                  ? `The address it was last sent to. ${vendorName} has no email saved: add it on Inventory, under Vendors, to have it filled in on every order.`
+                  : `${vendorName} has no email saved. Type the address to send it to, or add it on Inventory, under Vendors, to have it filled in.`}
+              </FieldDescription>
+            )}
           </Field>
           <Field>
             <FieldLabel htmlFor="send-message">Message</FieldLabel>
