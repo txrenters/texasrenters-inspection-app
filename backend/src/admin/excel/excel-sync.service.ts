@@ -7,6 +7,7 @@ import {
   weekOf,
   type ExcelFormulaRepair,
   type ExcelPull,
+  type ExcelRefusedRow,
   type ExcelSyncRun,
   type ExcelSyncView,
   type RevenueLiveScope,
@@ -24,7 +25,7 @@ import { cellText, columnLetter, dailyTab, logTab, monthTab, projectionTab, trac
 import { formatOf, isFormula, repairFormats } from './excel-formats';
 import { ExcelGraphClient } from './excel-graph.client';
 import { dayFrom } from '../workbook-import';
-import { LOG_WIDTH, planLogTab, sameCell, writtenOf, type ConsoleLogRow, type LogTabPlan } from './excel-log-rows';
+import { LOG_WIDTH, planLogTab, sameCell, screenOfficeRows, writtenOf, type ConsoleLogRow, type LogTabPlan } from './excel-log-rows';
 import { readTab, type ExcelEdit } from './excel-read';
 import { MicrosoftAuthService, MicrosoftError } from './microsoft-auth.service';
 import { microsoftConfigured } from './microsoft.config';
@@ -79,6 +80,8 @@ const LOG_TABS_PER_RUN = 10;
 /** Read past a tab's last row, so a row the office added under it is seen. */
 const EXTRA_ROWS_READ = 3;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** A log tab's key for a row of the office's own (`logKey`): the entry's id follows. */
+const ENTRY_KEY = 'log|entry|';
 
 const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
@@ -495,7 +498,12 @@ export class ExcelSyncService {
       run.tabs.push(...logs.tabs);
       if (logs.pull) {
         const pull = run.pulled ?? { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0, kept: 0 };
-        run.pulled = { ...pull, taken: pull.taken + logs.pull.taken, conflicts: pull.conflicts + logs.pull.conflicts };
+        run.pulled = {
+          ...pull,
+          taken: pull.taken + logs.pull.taken,
+          conflicts: pull.conflicts + logs.pull.conflicts,
+          ...(logs.pull.refused ? { refused: logs.pull.refused, refusedRows: logs.pull.refusedRows } : {}),
+        };
         await this.prisma.excelSync.update({
           where: { organizationId },
           data: { lastPulledAt: new Date(run.pulled.at), lastPull: run.pulled as unknown as Prisma.InputJsonValue },
@@ -604,7 +612,11 @@ export class ExcelSyncService {
     snapshots: Map<string, { name: string; origin: number | null; rows: unknown; keys: unknown; adoptedFrom: Date | null; updatedAt?: Date }>,
     edited: boolean,
     again: () => Promise<ExcelTab[]>,
-  ): Promise<{ tabs: ExcelSyncRun['tabs']; pull: { taken: number; conflicts: number } | null; deferred: boolean }> {
+  ): Promise<{
+    tabs: ExcelSyncRun['tabs'];
+    pull: { taken: number; conflicts: number; refused: number; refusedRows: ExcelRefusedRow[] } | null;
+    deferred: boolean;
+  }> {
     const rowsOf = (tab: ExcelTab): ConsoleLogRow[] =>
       tab.rows.flatMap((cells, index) => (tab.keys[index] ? [{ key: tab.keys[index]!, cells: Array.from({ length: LOG_WIDTH }, (_, column) => cells[column] ?? '') }] : []));
     const reads = new Map<
@@ -650,11 +662,11 @@ export class ExcelSyncService {
     const edits = [...plans].flatMap(([name, plan]) => plan.edits.map((edit) => ({ ...edit, tab: name })));
     const conflicts = [...plans.values()].reduce((total, plan) => total + plan.conflicts, 0);
     const taken = await this.takeEdits(organizationId, account, edits);
-    const added = await this.addOfficeRows(
-      organizationId,
-      account,
-      [...plans].flatMap(([name, plan]) => plan.added.map((row) => ({ ...row, tab: name, technicianId: reads.get(name)!.tab.below!.technicianId! }))),
-    );
+    const offered = [...plans].flatMap(([name, plan]) => plan.added.map((row) => ({ ...row, tab: name, technicianId: reads.get(name)!.tab.below!.technicianId! })));
+    const { accepted, refused } = await this.screen(organizationId, offered, [...reads.values()].map(({ tab }) => tab));
+    if (refused.length)
+      this.logger.warn(`Excel sync left ${refused.length} office rows in Excel: ${refused.slice(0, 5).map((row) => `${row.tab} ${row.date} ${row.why}`).join('; ')}`);
+    const added = await this.addOfficeRows(organizationId, account, accepted);
     if (taken || added) {
       // What came in is the console's now: its rows are matched to the tab again, the office's cells standing.
       const fresh = new Map((await again()).map((tab) => [tab.name, tab]));
@@ -704,7 +716,37 @@ export class ExcelSyncService {
       });
       results.push({ name, created: false, rowsWritten: new Set(plan.writes.map((write) => write.row)).size + plan.appends.length + plan.clears.length });
     }
-    return { tabs: results, pull: { taken: taken + added, conflicts }, deferred };
+    const refusedRows: ExcelRefusedRow[] = refused.slice(0, 5).map((row) => ({
+      tab: row.tab,
+      date: row.date,
+      row: row.cells.jobNumber ? `Job# ${row.cells.jobNumber}` : (row.cells.address ?? ''),
+      why: row.why,
+    }));
+    return { tabs: results, pull: { taken: taken + added, conflicts, refused: refused.length, refusedRows }, deferred };
+  }
+
+  /**
+   * The office's rows a run would bring in, past `screenOfficeRows`: against the
+   * console's own rows on those technicians' days, read from the database --
+   * not only those the planner compared with the tabs.
+   */
+  private async screen<T extends { technicianId: string; date: string; cells: LogTabPlan['added'][number]['cells'] }>(
+    organizationId: string,
+    rows: T[],
+    tabs: ExcelTab[],
+  ) {
+    if (!rows.length) return { accepted: rows, refused: [] };
+    const days = [...new Map(rows.map((row) => [`${row.technicianId}|${row.date}`, row])).values()];
+    const existing = await this.prisma.revenueLogEntry.findMany({
+      where: { organizationId, inspectionId: null, OR: days.map((row) => ({ technicianId: row.technicianId, day: new Date(`${row.date}T00:00:00.000Z`) })) },
+      select: { id: true, technicianId: true, day: true, address: true, jobNumber: true },
+    });
+    const compared = new Set(tabs.flatMap((tab) => tab.keys.flatMap((key) => (key?.startsWith(ENTRY_KEY) ? [key.slice(ENTRY_KEY.length)] : []))));
+    return screenOfficeRows(
+      rows,
+      existing.map((entry) => ({ ...entry, day: dayOf(entry.day) })),
+      compared,
+    );
   }
 
   /** Rows the office added to a log tab, into the console as rows of the office's own -- as the workbook import makes them. */

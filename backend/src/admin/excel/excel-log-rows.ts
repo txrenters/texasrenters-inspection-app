@@ -1,3 +1,5 @@
+import { MAX_EXCEL_OFFICE_ROWS_A_DAY } from '@texasrenters/shared';
+
 import { cellText, type ExcelCell, type ExcelEditableField } from '../excel-layout';
 import { dayFrom, text, type ImportedLogCells } from '../workbook-import';
 import { isFormula } from './excel-formats';
@@ -260,6 +262,64 @@ export function planLogTab(input: {
     plan.added.push({ date: row.day!, cells: officeRow(row.texts, row.values) });
   }
   return plan;
+}
+
+export type RefusedWhy = 'ALREADY_IN_CONSOLE' | 'DAY_FULL';
+
+/** What a row is, for telling it from another of its day: its Job#, or its street without one. */
+const identityOf = (address: string | null | undefined, jobNumber: string | null | undefined) => {
+  const job = jobKey(jobNumber ?? undefined);
+  if (job) return `job ${job}`;
+  const street = addressKey(address ?? undefined);
+  return street ? `street ${street}` : null;
+};
+
+/**
+ * The last word before a row the office added in Excel becomes a row of the
+ * console's (2026-11-23: a row the planner could not see the console's copy of
+ * was brought in again on every run -- 8 rows became 1,203 over a weekend).
+ * Whatever the planner concluded, a row comes in only when:
+ *  - the console has no row of the office's own for it already -- same
+ *    technician, day and Job# (or street, without one) -- among those the
+ *    planner did not compare with the tab: a row it did not see, which the
+ *    Excel row is;
+ *  - its technician's day holds fewer than MAX_EXCEL_OFFICE_ROWS_A_DAY rows of the
+ *    office's own: whatever goes wrong, a day never fills with copies.
+ * A row refused stays in Excel as it is, and the next run asks again.
+ */
+export function screenOfficeRows<T extends { technicianId: string; date: string; cells: ImportedLogCells }>(
+  rows: readonly T[],
+  /** The office's own rows in the console on those technicians' days. */
+  existing: readonly { id: string; technicianId: string; day: string; address: string | null; jobNumber: string | null }[],
+  /** The office's own rows the planner compared with the tabs, by id. */
+  compared: ReadonlySet<string>,
+): { accepted: T[]; refused: (T & { why: RefusedWhy })[] } {
+  const held = new Map<string, number>();
+  const unseen = new Map<string, number>();
+  for (const entry of existing) {
+    const day = `${entry.technicianId}|${entry.day}`;
+    held.set(day, (held.get(day) ?? 0) + 1);
+    const name = identityOf(entry.address, entry.jobNumber);
+    if (name && !compared.has(entry.id)) unseen.set(`${day}|${name}`, (unseen.get(`${day}|${name}`) ?? 0) + 1);
+  }
+  const accepted: T[] = [];
+  const refused: (T & { why: RefusedWhy })[] = [];
+  for (const row of rows) {
+    const day = `${row.technicianId}|${row.date}`;
+    const name = identityOf(row.cells.address, row.cells.jobNumber);
+    const same = name ? `${day}|${name}` : null;
+    if (same && unseen.get(same)) {
+      // That row of the console's is this one: once each.
+      unseen.set(same, unseen.get(same)! - 1);
+      refused.push({ ...row, why: 'ALREADY_IN_CONSOLE' });
+    } else if ((held.get(day) ?? 0) >= MAX_EXCEL_OFFICE_ROWS_A_DAY) {
+      refused.push({ ...row, why: 'DAY_FULL' });
+    } else {
+      held.set(day, (held.get(day) ?? 0) + 1);
+      accepted.push(row);
+    }
+  }
+  return { accepted, refused };
 }
 
 /** What the console last wrote into a log tab, by row, from its snapshot -- either kind. */

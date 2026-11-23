@@ -11,8 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useExcelSync, useExcelSyncEdits } from '@/lib/actual-vs-budget-queries';
-import { formatRelative } from '@/lib/format';
-import type { ExcelPull } from '@texasrenters/shared';
+import { formatDay, formatRelative } from '@/lib/format';
+import { MAX_EXCEL_OFFICE_ROWS_A_DAY, type ExcelPull } from '@texasrenters/shared';
 
 /** What the last read of the office's Excel edits did, in a line. */
 export function pullWords(pull: ExcelPull): string {
@@ -22,6 +22,24 @@ export function pullWords(pull: ExcelPull): string {
   if (pull.putBack) parts.push(`${cells(pull.putBack)} put back`);
   if (pull.conflicts) parts.push(`${cells(pull.conflicts)} changed in both: Excel's kept`);
   return `Read from Excel ${formatRelative(pull.at)}: ${parts.join(', ')}`;
+}
+
+/**
+ * Rows the office added in Excel that the last read did not bring in, and why
+ * (2026-11-23: the sync once brought the same rows in on every run). Null when
+ * there were none.
+ */
+export function refusedWords(pull: ExcelPull): string | null {
+  if (!pull.refused) return null;
+  const why = { ALREADY_IN_CONSOLE: 'the console has it already', DAY_FULL: `the day holds ${MAX_EXCEL_OFFICE_ROWS_A_DAY} rows already` } as const;
+  const which = (pull.refusedRows ?? []).map((row) => `${row.tab} ${formatDay(row.date)}, ${row.row} (${why[row.why]})`);
+  const more = pull.refused - which.length;
+  return `${pull.refused} ${pull.refused === 1 ? 'row' : 'rows'} left in Excel only: ${[...which, ...(more > 0 ? [`${more} more`] : [])].join('; ')}`;
+}
+
+function RefusedLine({ pull }: { pull: ExcelPull }) {
+  const words = refusedWords(pull);
+  return words ? <div className="text-warning">{words}</div> : null;
 }
 
 /**
@@ -164,6 +182,7 @@ export function ExcelSyncDialog({ canManage, onClose }: { canManage: boolean; on
                       <span className="text-muted-foreground">Not written yet</span>
                     )}
                     {excel.data.workbook.lastPull ? <div className="text-muted-foreground">{pullWords(excel.data.workbook.lastPull)}</div> : null}
+                    {excel.data.workbook.lastPull ? <RefusedLine pull={excel.data.workbook.lastPull} /> : null}
                   </div>
                   {canManage ? (
                     <div className="flex shrink-0 gap-2">
