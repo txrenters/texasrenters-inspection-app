@@ -1,7 +1,7 @@
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { MinusIcon, PlusIcon } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { jobStockProblem, type JobStockItem, type PhoneSlipKind } from '@texasrenters/shared';
 
@@ -15,12 +15,15 @@ import { BelowHeader } from '@/src/lib/native-header';
 import { QueuedOfflineError } from '@/src/repositories/api/offline-writes';
 import { scanOntoSlip } from '@/src/utils/item-scan';
 import { newSlipKey, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '@/src/utils/job-stock';
+import { findOnTruck } from '@/src/utils/truck-stock';
 
 registerIcons(MinusIcon, PlusIcon);
 
 /**
- * A job's materials (2026-11-19, phase 7): what this technician took from the
- * truck for the job, and what they are putting back.
+ * A job's materials (2026-11-19, phase 7; redrawn 2026-11-24 on the Inventory
+ * Screens canvas): what this technician took from the truck for the job, and
+ * what they are putting back. Scan each label, or find the item by name and
+ * tap + or type how many.
  *
  * The button answers on the tap. The slip is kept on the phone before it is
  * sent, comes off what the truck shows at once, and is listed as sending; with
@@ -28,7 +31,9 @@ registerIcons(MinusIcon, PlusIcon);
  * the list says it was not recorded and why -- it is never dropped quietly.
  *
  * The phone only ever takes from a truck and puts back what was taken for this
- * job. Moving stock into the truck, and undoing a slip, are the office's.
+ * job. An item the office's stock shows none of in the truck cannot be taken
+ * here: the technician tells the office from My truck. Moving stock into the
+ * truck, and undoing a slip, are the office's.
  */
 
 const header = <Stack.Screen options={{ title: 'Materials', headerRight: () => <HomeButton /> }} />;
@@ -37,6 +42,10 @@ const MODES: readonly { value: PhoneSlipKind; label: string }[] = [
   { value: 'RETURN', label: 'Putting back' },
 ];
 const when = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+/** A typed number of units as a whole number, or null. */
+const readTyped = (typed: string) => (/^\d{1,6}$/.test(typed.trim()) ? Number(typed.trim()) : null);
+/** The numbers being typed, less one: it shows what the steppers hold again. */
+const without = (all: Readonly<Record<string, string>>, itemId: string) => Object.fromEntries(Object.entries(all).filter(([key]) => key !== itemId));
 
 export default function JobStockScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
@@ -46,6 +55,9 @@ export default function JobStockScreen() {
   const [mode, setMode] = useState<PhoneSlipKind>('WITHDRAWAL');
   const [chosenPlace, setChosenPlace] = useState<string | null>(null);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  /** A number being typed in place of + and −, by item, until it is left. */
+  const [typing, setTyping] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState('');
   /** Recorded on this tap and not yet answered: shown at once, before the queue has been read again. */
   const [sending, setSending] = useState<PendingSlip[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +85,7 @@ export default function JobStockScreen() {
 
   const data = stock.data;
   const placeId = chosenPlace && data.places.some((place) => place.id === chosenPlace) ? chosenPlace : (data.places[0]?.id ?? null);
+  const placeName = data.places.find((place) => place.id === placeId)?.name ?? 'the truck';
   const held = local.data?.pending ?? [];
   // What the phone is holding, and what this tap has just recorded: each once.
   const waiting = [...held, ...sending.filter((slip) => !held.some((kept) => kept.clientRequestId === slip.clientRequestId))];
@@ -80,18 +93,29 @@ export default function JobStockScreen() {
   const offered: JobStockItem[] = mode === 'RETURN' ? takenForJob(data.taken, waiting) : placeId ? truckStock(data.stock, placeId, waiting) : [];
   const { lines, named } = slipLines(offered, quantities);
   const problem = lines.length ? jobStockProblem(mode, lines, new Map(offered.map((item) => [item.itemId, item.quantity])), (itemId) => offered.find((item) => item.itemId === itemId)?.name ?? 'that item') : null;
+  const shown = findOnTruck(offered, search);
+  // Found by name and none in the truck, by the office's stock: shown greyed, not offered (taking out, only).
+  const noneHere = mode === 'WITHDRAWAL' && search.trim() ? findOnTruck(data.catalog, search).filter((item) => !offered.some((one) => one.itemId === item.itemId)).slice(0, 5) : [];
+  const units = lines.reduce((sum, line) => sum + line.quantity, 0);
 
   const change = (next: PhoneSlipKind) => {
     setMode(next);
     setQuantities({});
+    setTyping({});
     setError(null);
     setSaid(null);
   };
   /** A scanned label is one more of that item, exactly as a tap on + is. */
   const scanned = (code: string) => {
-    const next = scanOntoSlip(offered, quantities, code, mode);
+    const next = scanOntoSlip(offered, quantities, code, mode, { catalog: data.catalog, placeName });
     setQuantities(next.quantities);
     setSaid(next.said);
+  };
+  /** A number typed: kept to what there is. */
+  const typed = (item: JobStockItem, text: string) => {
+    setTyping((all) => ({ ...all, [item.itemId]: text }));
+    const value = readTyped(text);
+    if (value !== null) setQuantities((all) => ({ ...all, [item.itemId]: Math.min(value, item.quantity) }));
   };
 
   const record = () => {
@@ -100,6 +124,7 @@ export default function JobStockScreen() {
     // Answered on the tap: the steppers clear and the slip is listed before the server has said anything.
     setSending((all) => [...all, slip]);
     setQuantities({});
+    setTyping({});
     setError(null);
     setSaid(null);
     setScanning(false);
@@ -111,11 +136,12 @@ export default function JobStockScreen() {
       onSettled: () => setSending((all) => all.filter((one) => one.clientRequestId !== slip.clientRequestId)),
     });
   };
+  const recordLabel = `${mode === 'RETURN' ? 'Record what is going back' : 'Record what I took'}${units ? ` · ${units} ${units === 1 ? 'item' : 'items'}` : ''}`;
 
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-5 pb-10 pt-2" contentInsetAdjustmentBehavior="automatic">
+      <ScrollView contentContainerClassName="gap-5 pb-10 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
         {data.places.length ? (
           <>
             <SegmentedControl accessibilityLabel="What you are recording" onChange={change} options={MODES} value={mode} />
@@ -135,6 +161,7 @@ export default function JobStockScreen() {
                         onPress={() => {
                           setChosenPlace(place.id);
                           setQuantities({});
+                          setTyping({});
                           setSaid(null);
                         }}
                       >
@@ -146,21 +173,30 @@ export default function JobStockScreen() {
               </View>
             ) : null}
 
-            {scanning ? (
-              <ItemScanner onClose={() => setScanning(false)} onCode={scanned} said={said} />
-            ) : offered.length ? (
-              <Button className="mx-5" label="Scan a label" onPress={() => setScanning(true)} variant="secondary" />
+            {offered.length ? <Button className="mx-5" label="Scan a label" onPress={() => setScanning(true)} /> : null}
+            {offered.length ? (
+              <View className="mx-5 gap-1.5">
+                <Text className="text-xs font-semibold text-muted-foreground">{mode === 'RETURN' ? 'Or find what is going back' : `Or find it in ${placeName}`}</Text>
+                <TextInput
+                  accessibilityLabel={mode === 'RETURN' ? 'Find what is going back' : `Find it in ${placeName}`}
+                  autoCorrect={false}
+                  className="min-h-12 rounded-xl border border-input bg-card px-4 text-base text-foreground"
+                  onChangeText={setSearch}
+                  placeholder="Item code or name"
+                  value={search}
+                />
+              </View>
             ) : null}
 
             <Card className="mx-5 gap-4">
               <View className="gap-1">
-                <Text className="text-base font-semibold text-foreground">{mode === 'RETURN' ? 'What is going back' : `In ${data.places.find((place) => place.id === placeId)?.name ?? 'the truck'}`}</Text>
+                <Text className="text-base font-semibold text-foreground">{mode === 'RETURN' ? 'What is going back' : `In ${placeName}`}</Text>
                 <Text className="text-xs text-muted-foreground">
-                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job, or scan its label.'}
+                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job, or tap the number to type it.'}
                 </Text>
               </View>
               {offered.length ? (
-                offered.map((item) => {
+                shown.map((item) => {
                   const count = quantities[item.itemId] ?? 0;
                   return (
                     <View className="flex-row items-center gap-3" key={item.itemId}>
@@ -175,19 +211,32 @@ export default function JobStockScreen() {
                         accessibilityRole="button"
                         className="h-11 w-11 items-center justify-center rounded-xl border border-border bg-card active:opacity-70"
                         disabled={count <= 0}
-                        onPress={() => setQuantities((all) => stepped(all, item.itemId, -1, item.quantity))}
+                        onPress={() => {
+                          setTyping((all) => without(all, item.itemId));
+                          setQuantities((all) => stepped(all, item.itemId, -1, item.quantity));
+                        }}
                       >
                         <MinusIcon className={count <= 0 ? 'text-muted-foreground' : 'text-foreground'} size={16} />
                       </Pressable>
-                      <Text accessibilityLabel={`${count} ${item.name}`} className="w-7 text-center text-base font-bold text-foreground">
-                        {count}
-                      </Text>
+                      <TextInput
+                        accessibilityLabel={`How many ${item.name}`}
+                        className="h-11 w-14 rounded-xl border border-input bg-card text-center text-base font-bold text-foreground"
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        onBlur={() => setTyping((all) => without(all, item.itemId))}
+                        onChangeText={(text) => typed(item, text)}
+                        selectTextOnFocus
+                        value={typing[item.itemId] ?? String(count)}
+                      />
                       <Pressable
                         accessibilityLabel={`One more ${item.name}`}
                         accessibilityRole="button"
                         className="h-11 w-11 items-center justify-center rounded-xl border border-border bg-card active:opacity-70"
                         disabled={count >= item.quantity}
-                        onPress={() => setQuantities((all) => stepped(all, item.itemId, 1, item.quantity))}
+                        onPress={() => {
+                          setTyping((all) => without(all, item.itemId));
+                          setQuantities((all) => stepped(all, item.itemId, 1, item.quantity));
+                        }}
                       >
                         <PlusIcon className={count >= item.quantity ? 'text-muted-foreground' : 'text-foreground'} size={16} />
                       </Pressable>
@@ -199,12 +248,24 @@ export default function JobStockScreen() {
                   {mode === 'RETURN' ? 'Nothing has been taken for this job, so there is nothing to put back.' : 'This truck is empty. The office fills it from the storeroom.'}
                 </Text>
               )}
+              {offered.length && !shown.length && !noneHere.length ? <Text className="text-sm text-muted-foreground">Nothing in the list has those words.</Text> : null}
+              {noneHere.map((item) => (
+                <View className="gap-0.5" key={item.itemId}>
+                  <Text className="text-sm font-semibold text-muted-foreground">{item.name}</Text>
+                  <Text className="text-xs text-muted-foreground">
+                    {item.code} · none in {placeName} by the office&apos;s stock
+                  </Text>
+                  <Pressable accessibilityRole="link" className="min-h-9 justify-center active:opacity-60" onPress={() => router.push('/my-truck')}>
+                    <Text className="text-xs font-semibold text-primary">Have one anyway? Tell the office on My truck.</Text>
+                  </Pressable>
+                </View>
+              ))}
               {problem || error ? (
                 <Text accessibilityRole="alert" className="text-xs text-destructive">
                   {problem ?? error}
                 </Text>
               ) : null}
-              <Button disabled={!lines.length || Boolean(problem)} label={mode === 'RETURN' ? 'Record what is going back' : 'Record what I took'} onPress={record} />
+              <Button disabled={!lines.length || Boolean(problem)} label={recordLabel} onPress={record} />
             </Card>
           </>
         ) : (
@@ -250,6 +311,34 @@ export default function JobStockScreen() {
           </Card>
         ) : null}
       </ScrollView>
+
+      {scanning ? (
+        <ItemScanner
+          hint="Point the camera at the label. Scan the same label again for one more."
+          onClose={() => setScanning(false)}
+          onCode={scanned}
+          said={said}
+          title={mode === 'RETURN' ? 'Scan what goes back' : `Scan to take · ${placeName}`}
+          tray={
+            lines.length ? (
+              <View className="gap-2">
+                <Text className="text-sm font-semibold text-foreground">
+                  {mode === 'RETURN' ? 'Going back' : 'Taking for this job'} · {units} {units === 1 ? 'item' : 'items'}
+                </Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {named.map((item) => (
+                    <View className="rounded-full bg-card px-3 py-1.5" key={item.itemId}>
+                      <Text className="text-sm text-foreground">
+                        <Text className="font-bold">{item.quantity}</Text> {item.name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null
+          }
+        />
+      ) : null}
     </BelowHeader>
   );
 }

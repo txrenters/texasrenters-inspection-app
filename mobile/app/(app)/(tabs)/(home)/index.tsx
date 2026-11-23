@@ -17,6 +17,7 @@ import { useCurrentUser, useDashboard, useDayRoute } from '@/src/features/querie
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { HomeEmptyState } from '@/src/components/HomeEmptyState';
 import { DayRouteSummary } from '@/src/components/DayRouteSummary';
+import { MyTruckCard } from '@/src/components/MyTruckCard';
 import { TruckCountCard } from '@/src/components/TruckCountCard';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
@@ -173,6 +174,8 @@ export default function HomeScreen() {
 
         {/* A truck count the office has opened for this technician: nothing at all when there is none. */}
         <TruckCountCard className="mx-5 mt-4" onOpen={(countId) => router.push(`/truck-count/${countId}`)} />
+        {/* My truck (2026-11-24): for anybody the office has put on a truck; nothing at all otherwise. */}
+        <MyTruckCard className="mx-5 mt-3" onOpen={() => router.push('/my-truck')} />
 
         {dashboard.isError ? (
           <View className="mx-5 mt-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">

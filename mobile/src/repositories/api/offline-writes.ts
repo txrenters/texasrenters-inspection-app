@@ -10,8 +10,10 @@ import {
 } from '../../storage/mutation-queue';
 import { noteCountRefusal } from '../../storage/count-refusals';
 import { noteStockRefusal } from '../../storage/stock-refusals';
+import { noteAskRefusal } from '../../storage/truck-ask-refusals';
 import { useNetworkStore } from '../../stores/network.store';
 import type { PendingSlip } from '../../utils/job-stock';
+import type { PendingAsk } from '../../utils/truck-stock';
 import type { PendingCount } from '../../utils/truck-count';
 
 /** Why a write is being held, in the only terms a technician can act on. */
@@ -240,6 +242,24 @@ export async function savedJobStockSlips(inspectionId: string): Promise<PendingS
   return slips;
 }
 
+/** The kind an ask for more is queued under (2026-11-24). One an ask: an ask adds, it does not set. */
+export const TRUCK_ASK_KIND = 'truck-ask';
+export const truckAskEntryId = (clientRequestId: string) => `truck-ask:${clientRequestId}`;
+
+const isPendingAsk = (payload: Record<string, unknown>): payload is Record<string, unknown> & PendingAsk =>
+  typeof payload.placeId === 'string' && typeof payload.placeName === 'string' && typeof payload.clientRequestId === 'string' && Array.isArray(payload.lines) && Array.isArray(payload.named);
+
+/** The asks made on this phone that the server has not confirmed, oldest first. */
+export async function savedTruckAsks(): Promise<PendingAsk[]> {
+  const asks: PendingAsk[] = [];
+  for (const entry of await readQueue()) {
+    if (entry.kind !== TRUCK_ASK_KIND || !isPendingAsk(entry.payload)) continue;
+    const { placeId, placeName, lines, note, clientRequestId, named } = entry.payload;
+    asks.push({ placeId, placeName, lines, note: typeof note === 'string' ? note : null, clientRequestId, named, queuedAt: entry.queuedAt });
+  }
+  return asks;
+}
+
 /** The kind a truck count's numbers are queued under. */
 export const TRUCK_COUNT_KIND = 'truck-count';
 /**
@@ -256,8 +276,8 @@ const isPendingCount = (payload: Record<string, unknown>): payload is Record<str
 export async function savedTruckCount(countId: string): Promise<PendingCount | null> {
   for (const entry of await readQueue()) {
     if (entry.kind !== TRUCK_COUNT_KIND || !isPendingCount(entry.payload) || entry.payload.countId !== countId) continue;
-    const { title, lines, handIn } = entry.payload;
-    return { countId, title, lines, handIn, queuedAt: entry.queuedAt };
+    const { title, lines, handIn, found } = entry.payload;
+    return { countId, title, lines, handIn, ...(Array.isArray(found) && found.length ? { found } : {}), queuedAt: entry.queuedAt };
   }
   return null;
 }
@@ -563,10 +583,36 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
      */
     [TRUCK_COUNT_KIND]: async (payload, send) => {
       try {
-        await send(`/api/v1/technician/stock-counts/${encodeURIComponent(String(payload.countId))}`, 'POST', { lines: payload.lines, handIn: payload.handIn });
+        // What was found and not listed (2026-11-24) goes with the lines; an older phone's entry has none.
+        await send(`/api/v1/technician/stock-counts/${encodeURIComponent(String(payload.countId))}`, 'POST', {
+          lines: payload.lines,
+          handIn: payload.handIn,
+          ...(Array.isArray(payload.found) && payload.found.length ? { found: payload.found } : {}),
+        });
       } catch (error) {
         if (!(error instanceof ApiConnectionError) && isPendingCount(payload))
           await noteCountRefusal({ countId: payload.countId, title: payload.title, reason: error instanceof Error && error.message ? error.message : 'The office could not take the count.', at: new Date().toISOString() });
+        throw error;
+      }
+    },
+    /**
+     * An ask for more for a truck (2026-11-24). Safe to replay: it carries its
+     * own key, and the server asks a key once. A refusal has nobody watching
+     * (five asks already waiting, or the technician was taken off the truck),
+     * so the reason is written down first and My truck says it was not sent.
+     */
+    [TRUCK_ASK_KIND]: async (payload, send) => {
+      try {
+        await send('/api/v1/technician/truck/asks', 'POST', { placeId: payload.placeId, lines: payload.lines, note: payload.note ?? null, clientRequestId: payload.clientRequestId });
+      } catch (error) {
+        if (!(error instanceof ApiConnectionError) && isPendingAsk(payload))
+          await noteAskRefusal({
+            clientRequestId: payload.clientRequestId,
+            placeName: payload.placeName,
+            named: payload.named,
+            reason: error instanceof Error && error.message ? error.message : 'The office could not take the ask.',
+            at: new Date().toISOString(),
+          });
         throw error;
       }
     },

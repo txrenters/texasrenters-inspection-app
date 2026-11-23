@@ -107,9 +107,17 @@ describe('the steppers', () => {
 describe('scanning a label (2026-11-19)', () => {
   const OFFERED = [filter(2), battery(6)];
 
+  // 2026-11-24: with every item in use known, a code that is no item is said apart from one not in the truck.
+  it('says a code that is no item apart from an item that is not in this truck', () => {
+    const known = { catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }, { itemId: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }], placeName: 'Truck 1' };
+    expect(scanOntoSlip(OFFERED, {}, 'SMK-0010', 'WITHDRAWAL', known).said).toEqual({ words: 'SMK-0010 is not in Truck 1.', bad: true });
+    expect(scanOntoSlip(OFFERED, {}, 'XYZ-999', 'WITHDRAWAL', known).said).toEqual({ words: 'XYZ-999 is not an item code. Check the label, or type it.', bad: true });
+    expect(scanOntoSlip(OFFERED, {}, 'SMK-0010', 'RETURN', known).said.words).toBe('SMK-0010 was not taken for this job.');
+  });
+
   it('is one more of that item, exactly as a tap on + is', () => {
     const first = scanOntoSlip(OFFERED, {}, 'FLT-0003', 'WITHDRAWAL');
-    expect(first).toEqual({ quantities: { 'item-filter': 1 }, said: { words: 'Filter 20x25x1: 1', bad: false } });
+    expect(first).toEqual({ quantities: { 'item-filter': 1 }, said: { words: 'FLT-0003 · Filter 20x25x1: 1 taken. 1 left. Scan it again for one more.', bad: false } });
     // The label's letters as a scanner or a hand might give them.
     expect(scanOntoSlip(OFFERED, first.quantities, ' flt-0003 ', 'WITHDRAWAL').quantities).toEqual({ 'item-filter': 2 });
   });

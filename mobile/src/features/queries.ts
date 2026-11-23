@@ -20,6 +20,7 @@ import { QueuedOfflineError } from '../repositories/api/offline-writes';
 import { checklistAnswerOptions, withPendingAnswers } from './checklist-answers';
 import type { ClosingComments } from '../utils/closing-comments';
 import type { PendingSlip } from '../utils/job-stock';
+import type { PendingAsk } from '../utils/truck-stock';
 import type { PendingCount } from '../utils/truck-count';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
@@ -136,6 +137,8 @@ export const queryKeys = {
   truckCounts: ['truckCounts'] as const,
   truckCountLocal: (countId: string) => ['truckCountLocal', countId] as const,
   truckCountRefusals: ['truckCountLocal', 'refusals'] as const,
+  myTrucks: ['myTrucks'] as const,
+  myTruckLocal: ['myTruckLocal'] as const,
 };
 
 export function useDemoUsers() {
@@ -1298,6 +1301,42 @@ export function useTruckCountActions() {
     }),
     dismiss: useMutation({
       mutationFn: (countId: string) => repositories.counts.dismissRefusal(countId),
+      onSettled: () => void readLocal(),
+    }),
+  };
+}
+
+/**
+ * My truck (2026-11-24): what is on the technician's trucks, what has run low,
+ * their asks and latest slips. Asked when Home or My truck opens, and kept: not
+ * on a timer, since a truck changes when somebody records something.
+ */
+export function useMyTrucks() {
+  return useQuery({ queryKey: queryKeys.myTrucks, queryFn: () => repositories.stock.myTrucks() });
+}
+
+/** What this phone holds that the server does not: asks not yet sent, and asks and slips the server refused after the phone had kept them. */
+export function useMyTruckLocal() {
+  return useQuery({
+    queryKey: queryKeys.myTruckLocal,
+    queryFn: async () => ({ pending: await repositories.stock.pendingAsks(), refused: await repositories.stock.refusedAsks(), refusedSlips: await repositories.stock.refusedSlips() }),
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+export function useTruckAskActions() {
+  const client = useQueryClient();
+  const readLocal = () => client.invalidateQueries({ queryKey: queryKeys.myTruckLocal });
+  return {
+    /** Saved on the phone before it is sent; held for want of signal it throws `QueuedOfflineError`, which the screen treats as kept. */
+    ask: useMutation({
+      mutationFn: (ask: PendingAsk) => repositories.stock.ask(ask),
+      onSuccess: (trucks) => client.setQueryData(queryKeys.myTrucks, trucks),
+      onSettled: () => void readLocal(),
+    }),
+    dismiss: useMutation({
+      mutationFn: (clientRequestId: string) => repositories.stock.dismissAskRefusal(clientRequestId),
       onSettled: () => void readLocal(),
     }),
   };

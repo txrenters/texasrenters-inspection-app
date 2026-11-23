@@ -1,12 +1,18 @@
-import type { JobStock } from '@texasrenters/shared';
+import type { JobStock, MyTrucks, PhoneCatalogItem } from '@texasrenters/shared';
 
 import { cachedApiRecord, storeApiRecord } from '../../storage/offline-record-cache';
 import { dismissStockRefusal, readStockRefusals } from '../../storage/stock-refusals';
+import { dismissAskRefusal, readAskRefusals } from '../../storage/truck-ask-refusals';
 import type { PendingSlip, RefusedSlip } from '../../utils/job-stock';
+import type { PendingAsk, RefusedAsk } from '../../utils/truck-stock';
 import type { StockRepository } from '../contracts';
 import { jobStockSchema } from './job-stock-schema';
-import { JOB_STOCK_KIND, jobStockEntryId, savedJobStockSlips, sendSavedFirst } from './offline-writes';
+import { myTrucksSchema } from './my-truck-schema';
+import { JOB_STOCK_KIND, TRUCK_ASK_KIND, jobStockEntryId, savedJobStockSlips, savedTruckAsks, sendSavedFirst, truckAskEntryId } from './offline-writes';
 import { requestJson } from './repositories';
+
+const MY_TRUCKS = '/api/v1/technician/truck';
+const MY_TRUCKS_RECORD = 'my-trucks';
 
 const path = (inspectionId: string) => `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/stock`;
 const recordKey = (inspectionId: string) => `job-stock:${inspectionId}`;
@@ -45,5 +51,39 @@ export class ApiStockRepository implements StockRepository {
 
   dismissRefusal(clientRequestId: string): Promise<void> {
     return dismissStockRefusal(clientRequestId);
+  }
+
+  /** My truck (2026-11-24): read with a copy kept, so the truck shows with no signal once it has been read. */
+  async myTrucks(): Promise<MyTrucks> {
+    return cachedApiRecord(MY_TRUCKS_RECORD, myTrucksSchema, () => requestJson(MY_TRUCKS));
+  }
+
+  async catalog(): Promise<PhoneCatalogItem[]> {
+    return (await this.myTrucks()).catalog;
+  }
+
+  /** An ask is saved on the phone before it is sent, like a slip: one made in a basement goes when there is signal. */
+  async ask(ask: PendingAsk): Promise<MyTrucks> {
+    const { placeId, lines, note, clientRequestId } = ask;
+    const reply = await sendSavedFirst({ id: truckAskEntryId(clientRequestId), kind: TRUCK_ASK_KIND, payload: { ...ask } }, () =>
+      requestJson(`${MY_TRUCKS}/asks`, { method: 'POST', body: JSON.stringify({ placeId, lines, note, clientRequestId }) }),
+    );
+    return storeApiRecord(MY_TRUCKS_RECORD, myTrucksSchema, reply);
+  }
+
+  pendingAsks(): Promise<PendingAsk[]> {
+    return savedTruckAsks();
+  }
+
+  refusedAsks(): Promise<RefusedAsk[]> {
+    return readAskRefusals();
+  }
+
+  dismissAskRefusal(clientRequestId: string): Promise<void> {
+    return dismissAskRefusal(clientRequestId);
+  }
+
+  refusedSlips(): Promise<RefusedSlip[]> {
+    return readStockRefusals();
   }
 }

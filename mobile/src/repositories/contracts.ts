@@ -5,11 +5,14 @@ import type {
   NavigationLeg,
   ReportableVisitService,
   VisitServicesReport,
+  MyTrucks,
+  PhoneCatalogItem,
 } from '@texasrenters/shared';
 
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type { ClosingComments } from '../utils/closing-comments';
 import type { PendingSlip, RefusedSlip } from '../utils/job-stock';
+import type { PendingAsk, RefusedAsk } from '../utils/truck-stock';
 import type { PendingCount, RefusedCount } from '../utils/truck-count';
 import type {
   AreaEnvironment,
@@ -438,6 +441,16 @@ export interface StockRepository {
   pending(inspectionId: string): Promise<PendingSlip[]>;
   refused(inspectionId: string): Promise<RefusedSlip[]>;
   dismissRefusal(clientRequestId: string): Promise<void>;
+  /** My truck (2026-11-24): the trucks this technician may use, what is on them and has run low, their asks and latest slips. */
+  myTrucks(): Promise<MyTrucks>;
+  /** Every item in use, for a search on My truck and Ask for more; the copy kept with the last job's materials or count. */
+  catalog(): Promise<PhoneCatalogItem[]>;
+  ask(ask: PendingAsk): Promise<MyTrucks>;
+  pendingAsks(): Promise<PendingAsk[]>;
+  refusedAsks(): Promise<RefusedAsk[]>;
+  dismissAskRefusal(clientRequestId: string): Promise<void>;
+  /** Every slip the server refused after the phone had kept it, across jobs. */
+  refusedSlips(): Promise<RefusedSlip[]>;
 }
 
 /**

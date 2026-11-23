@@ -1,4 +1,4 @@
-import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg, type PhoneCatalogItem, type PhoneCounts, type SavePhoneCountResult } from '@texasrenters/shared';
+import { jobStockProblem, jobStockTaken, type JobStock, type MyTrucks, type NavigationLeg, type PhoneCatalogItem, type PhoneCounts, type SavePhoneCountResult } from '@texasrenters/shared';
 
 import type {
   AddAreaInput,
@@ -19,6 +19,7 @@ import type {
   UploadRepository,
 } from '../contracts';
 import type { PendingSlip, RefusedSlip } from '../../utils/job-stock';
+import type { PendingAsk, RefusedAsk } from '../../utils/truck-stock';
 import type { PendingCount, RefusedCount } from '../../utils/truck-count';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import type {
@@ -646,6 +647,12 @@ export class MockCountRepository implements CountRepository {
   }
 
   async save(count: PendingCount): Promise<SavePhoneCountResult> {
+    // What was found and not listed becomes a line, as the server does (2026-11-24).
+    for (const found of count.found ?? []) {
+      if (this.lines.some((line) => line.itemId === found.itemId)) continue;
+      const item = DEMO_CATALOG.find((one) => one.itemId === found.itemId);
+      if (item) this.lines.push({ lineId: `demo-line-${item.itemId}`, itemId: item.itemId, code: item.code, name: item.name, unit: item.unit, counted: found.counted, second: false });
+    }
     this.lines = this.lines.map((line) => ({ ...line, counted: count.lines.find((sent) => sent.lineId === line.lineId)?.counted ?? line.counted }));
     this.handedIn = count.handIn;
     return { ...(await this.mine()), outcome: count.handIn ? 'handed-in' : 'saved', recounts: 0 };
@@ -673,9 +680,64 @@ export class MockStockRepository implements StockRepository {
   ];
   private slips = new Map<string, JobStock['slips']>();
 
+  private asks: MyTrucks['trucks'][number]['asks'] = [];
+
   async forJob(inspectionId: string): Promise<JobStock> {
     const slips = this.slips.get(inspectionId) ?? [];
     return { places: [{ id: 'demo-truck', name: 'Truck 1' }], stock: this.truck.filter((item) => item.quantity > 0), slips, taken: jobStockTaken(slips), catalog: DEMO_CATALOG };
+  }
+
+  async myTrucks(): Promise<MyTrucks> {
+    const kept: Record<string, number> = { 'demo-filter': 16, 'demo-battery': 6 };
+    return {
+      trucks: [
+        {
+          id: 'demo-truck',
+          name: 'Truck 1',
+          mine: true,
+          lastCountedOn: null,
+          items: this.truck.map((item) => ({ itemId: item.itemId, code: item.code, name: item.name, unit: item.unit, onHand: item.quantity, keepAtLeast: kept[item.itemId] ?? null })),
+          asks: this.asks,
+        },
+      ],
+      slips: [...this.slips.values()].flat().map((slip) => ({ id: slip.id, number: slip.number, kind: slip.kind, at: slip.at, place: slip.place, job: null, lines: slip.lines.map((line) => ({ code: line.code, name: line.name, quantity: line.quantity })), reversed: slip.reversed })),
+      catalog: DEMO_CATALOG,
+    };
+  }
+
+  async catalog(): Promise<PhoneCatalogItem[]> {
+    return DEMO_CATALOG;
+  }
+
+  async ask(ask: PendingAsk): Promise<MyTrucks> {
+    this.asks = [
+      {
+        id: ask.clientRequestId,
+        place: { id: ask.placeId, name: ask.placeName },
+        askedBy: { id: 'demo', name: 'You' },
+        at: new Date().toISOString(),
+        note: ask.note,
+        status: 'ASKED',
+        lines: ask.named.map((line) => ({ itemId: line.itemId, code: line.code, name: line.name, unit: 'each', quantity: line.quantity })),
+        filled: null,
+      },
+      ...this.asks,
+    ];
+    return this.myTrucks();
+  }
+
+  async pendingAsks(): Promise<PendingAsk[]> {
+    return [];
+  }
+
+  async refusedAsks(): Promise<RefusedAsk[]> {
+    return [];
+  }
+
+  async dismissAskRefusal(): Promise<void> {}
+
+  async refusedSlips(): Promise<RefusedSlip[]> {
+    return [];
   }
 
   async record(slip: PendingSlip): Promise<JobStock> {

@@ -66,6 +66,9 @@ export default function AppLayout() {
         <Stack.Screen name="job-inspection/[id]" />
         <Stack.Screen name="job-stock/[id]" />
         <Stack.Screen name="truck-count/[id]" />
+        {/* The truck on the phone, round 2 (2026-11-24): what is on it, and asking the office for more. */}
+        <Stack.Screen name="my-truck" />
+        <Stack.Screen name="truck-ask/[placeId]" />
         <Stack.Screen name="findings/[id]" />
         {/* Full screen: the viewfinder is the whole page. */}
         <Stack.Screen name="camera/[inspectionId]/[areaId]" options={{ headerShown: false }} />
