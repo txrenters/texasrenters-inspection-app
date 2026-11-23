@@ -5823,6 +5823,7 @@ model StockPlace {
   @@unique([organizationId, id])
   @@unique([organizationId, code])
   requisitionLines PurchaseRequisitionLine[] @relation("RequisitionLinePlace")
+  purchaseOrderLines PurchaseOrderLine[] @relation("PurchaseOrderLinePlace")
 }
 
 /// Who the office buys from. Purchase orders name one from phase 3.
@@ -6058,6 +6059,7 @@ model PurchaseRequisition {
   notes            PurchaseRequisitionNote[]
   links            PurchaseRequisitionLink[]
   orders           PurchaseOrder[]
+  orderSources     PurchaseOrderSource[]
 
   @@unique([organizationId, number])
   @@unique([organizationId, id])
@@ -6086,6 +6088,7 @@ model PurchaseRequisitionLine {
   notes                  String?
 
   requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  orderSources PurchaseOrderSource[]
   item        StockItem?          @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
   place       StockPlace?         @relation("RequisitionLinePlace", fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
   vendor      Vendor?             @relation("RequisitionLineVendor", fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
@@ -6256,6 +6259,7 @@ model PurchaseOrder {
   approvedBy       UserProfile?            @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
   cancelledBy      UserProfile?            @relation("PurchaseOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
   lines            PurchaseOrderLine[]
+  sources      PurchaseOrderSource[]
   deliveries       PurchaseOrderDelivery[]
 
   @@unique([organizationId, number])
@@ -6275,13 +6279,16 @@ model PurchaseOrderLine {
   unitPriceCents Int
   /// How much has arrived: never more than was ordered (checked). Kept by each receipt and its reversal.
   receivedQuantity Int  @default(0)
+  /// Where it goes (2026-11-23): one order a vendor may carry lines for several places. One line an item and place
+  /// (a unique index NULLS NOT DISTINCT, in the migration).
+  placeId        String? @db.Uuid
 
   order        PurchaseOrder      @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
   item         StockItem          @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place        StockPlace?        @relation("PurchaseOrderLinePlace", fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
   receiptLines GoodsReceiptLine[]
   billLines    VendorBillLine[]
 
-  @@unique([orderId, itemId])
   @@unique([organizationId, id])
   @@index([organizationId, orderId, position])
 }
@@ -6692,4 +6699,29 @@ model PurchasingCodeXeroOption {
 
   @@id([codeId, xeroTenantId])
   @@index([organizationId, xeroTenantId])
+}
+
+/// Which requisition lines an order carries, and how many of each (2026-11-23: one order from several requisitions).
+/// Kept at the order, matched to its line by item and place, so changing a draft's lines keeps them. A requisition line is
+/// on one live order at most (a partial unique index, in the migration); cancelling the order releases it.
+model PurchaseOrderSource {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @db.Uuid
+  orderId           String    @db.Uuid
+  requisitionId     String    @db.Uuid
+  requisitionLineId String    @db.Uuid
+  itemId            String    @db.Uuid
+  placeId           String?   @db.Uuid
+  /// What the requisition line asked for: its share of the order line.
+  quantity          Int
+  /// Set when the order is cancelled or the line taken off it: the requisition line waits to be ordered again.
+  releasedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  order           PurchaseOrder           @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
+  requisition     PurchaseRequisition     @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  requisitionLine PurchaseRequisitionLine @relation(fields: [requisitionLineId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, orderId])
+  @@index([organizationId, requisitionId])
 }

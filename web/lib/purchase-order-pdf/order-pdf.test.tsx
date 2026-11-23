@@ -19,6 +19,7 @@ const ORDER = {
   status: 'APPROVED',
   vendor: { id: 'vendor-hill', number: 'V00003', name: 'Hill Country Supply' },
   requisition: { id: 'req-12', number: 'PR-0012' },
+  requisitions: [{ id: 'req-12', number: 'PR-0012' }],
   company: { tenantId: 'tenant-thmp', name: 'Example Company', purchaserCode: 'THMP' },
   expectedOn: '2026-11-24',
   lineCount: 2,
@@ -32,8 +33,8 @@ const ORDER = {
   taxBasisPoints: 825,
   notes: 'Deliver to the back door.',
   lines: [
-    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0 },
-    { id: 'ol-2', item: { id: 'item-glue', code: 'PST-0001', name: 'Glue boards', unit: 'pack' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0 },
+    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0, place: { id: 'place-stockroom', name: 'Stockroom', code: 'STORE' }, shares: [{ requisition: { id: 'req-12', number: 'PR-0012' }, department: null, quantity: 36, receivedQuantity: 0 }] },
+    { id: 'ol-2', item: { id: 'item-glue', code: 'PST-0001', name: 'Glue boards', unit: 'pack' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0, place: { id: 'place-stockroom', name: 'Stockroom', code: 'STORE' }, shares: [{ requisition: { id: 'req-12', number: 'PR-0012' }, department: null, quantity: 24, receivedQuantity: 0 }] },
   ],
   subtotalCents: 18480,
   taxCents: 1525,
@@ -49,6 +50,7 @@ const ORDER = {
   shortCloseReason: null,
   history: [],
   can: { edit: false, change: false, submit: false, approve: false, sendBack: false, send: true, cancel: true, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null },
+  requisitionsOn: [],
   approvalSteps: stepsFromLimit(50000, 2),
   reapproveChangedOrders: false,
 } satisfies PurchaseOrderDetail;
@@ -108,6 +110,18 @@ describe('a purchase order as a PDF', () => {
   it('names the vendor by number, and whoever the office deals with there', () => {
     expect(orderVendorLines(ORDER)).toEqual(['V00003 · Hill Country Supply', 'Attn: A Person', 'orders@hill.example']);
     expect(orderVendorLines({ ...ORDER, vendor: null, vendorContact: null })).toEqual(['No vendor chosen']);
+  });
+
+  // One order to several places (2026-11-23): each line prints its Location Code, and the facts say so.
+  it('prints each line where it goes when they go to several places', async () => {
+    const truck = { id: 'place-truck', name: 'Truck 1', code: 'TRK-01' };
+    const split = { ...ORDER, deliverTo: null, requisitions: [{ id: 'req-12', number: 'PR-0012' }, { id: 'req-15', number: 'PR-0015' }], lines: [ORDER.lines[0]!, { ...ORDER.lines[1]!, place: truck }] };
+    expect(orderFacts(split)).toEqual(expect.arrayContaining([{ label: 'Location Code', value: 'Each line' }, { label: 'Requisition No.', value: 'PR-0012, PR-0015' }]));
+    expect(orderShipToLines(split)[0]).toBe("Each line's Location Code");
+    const [page] = await pageTexts(await renderToBuffer(<PurchaseOrderDocument order={split} />));
+    expect(page).toContain('Location Code');
+    expect(page).toContain('TRK-01');
+    expect(page).toContain('STORE');
   });
 
   it('ships to the place by its code, at the office, for the order\'s company', () => {

@@ -99,8 +99,15 @@ function database() {
   /** Notes, comments and links (2026-11-20). */
   const notes: Row[] = [];
   const links: Row[] = [];
-  /** Live orders made from requisitions, by requisition: none unless a test says so. */
+  /**
+   * Live orders made from requisitions, by requisition: none unless a test says so. Each carries its
+   * requisition's lines to its vendor, or every line when it names none (2026-11-23: the lines an order carries).
+   */
   const liveOrders: Row[] = [];
+  const carried = (order: Row) =>
+    lines.filter((line) => line.requisitionId === order.requisitionId && line.itemId && (order.vendorId === undefined || line.vendorId === order.vendorId));
+  const onLiveOrders = (requisitionId: unknown) =>
+    liveOrders.filter((order) => order.requisitionId === requisitionId && order.status !== 'CANCELLED').flatMap((order) => carried(order).map((line) => ({ order, line })));
   let series = 0;
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
@@ -112,8 +119,14 @@ function database() {
     requestCode: codes.find((code) => code.id === requisition.requestCodeId) ?? null,
     costCenter: codes.find((code) => code.id === requisition.costCenterId) ?? null,
     department: codes.find((code) => code.id === requisition.departmentId) ?? null,
-    // Its live orders' statuses, for where it is (2026-11-21).
-    orders: liveOrders.filter((order) => order.requisitionId === requisition.id && order.status !== 'CANCELLED').map((order) => ({ status: order.status })),
+    // Its lines on live orders, for where it is (2026-11-21; by its lines since 2026-11-23).
+    orderSources: onLiveOrders(requisition.id).map(({ order, line }, n) => ({
+      id: `source-${n}`,
+      itemId: line.itemId,
+      placeId: null,
+      quantity: line.quantity,
+      order: { id: `order-${liveOrders.indexOf(order)}`, status: order.status ?? 'DRAFT', lines: [], sources: [] },
+    })),
     lines: lines
       .filter((line) => line.requisitionId === requisition.id)
       .sort((left, right) => (left.position as number) - (right.position as number))
@@ -153,6 +166,11 @@ function database() {
       deleteMany: jest.fn(async ({ where }: { where: Where }) => {
         for (let index = lines.length - 1; index >= 0; index -= 1) if (matches(lines[index]!, where)) lines.splice(index, 1);
       }),
+      // Its lines with an item on no live order: what Make orders may still order.
+      count: jest.fn(async ({ where }: { where: Where }) => {
+        const on = new Set(onLiveOrders(where.requisitionId).map(({ line }) => line));
+        return lines.filter((line) => line.requisitionId === where.requisitionId && line.itemId && !on.has(line)).length;
+      }),
     },
     purchaseRequisitionQuote: {
       createMany: jest.fn(async ({ data }: { data: Row[] }) => quotes.push(...data.map((quote, index) => ({ id: id(400 + quotes.length + index), ...quote })))),
@@ -163,12 +181,15 @@ function database() {
     // No order has been made from any of these.
     purchaseOrder: {
       findFirst: jest.fn(async () => null),
-      count: jest.fn(async ({ where }: { where: Where }) => liveOrders.filter((row) => row.requisitionId === where.requisitionId).length),
-      // Its live orders, one a vendor (2026-11-20).
-      findMany: jest.fn(async ({ where }: { where: Where }) =>
-        liveOrders.filter((row) => row.requisitionId === where.requisitionId).map((row, n) => ({ id: `order-${n}`, number: null, status: 'DRAFT', vendorId: row.vendorId ?? null, vendor: vendors.find((vendor) => vendor.id === row.vendorId) ?? null })),
+      // The live orders carrying its lines (2026-11-23).
+      findMany: jest.fn(async ({ where }: { where: { sources: { some: { requisitionId: string } } } }) =>
+        liveOrders
+          .filter((row) => row.requisitionId === where.sources.some.requisitionId && row.status !== 'CANCELLED' && carried(row).length)
+          .map((row) => ({ id: `order-${liveOrders.indexOf(row)}`, number: null, status: 'DRAFT', vendorId: row.vendorId ?? null, vendor: vendors.find((vendor) => vendor.id === row.vendorId) ?? null })),
       ),
     },
+    // Its lines on live orders.
+    purchaseOrderSource: { count: jest.fn(async ({ where }: { where: Where }) => onLiveOrders(where.requisitionId).length) },
     // Who it is from, for its PDF.
     invoiceSettings: { findUnique: jest.fn(async () => ({ companyName: 'Example Office', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: null })) },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))), count: jest.fn(async () => items.length) },

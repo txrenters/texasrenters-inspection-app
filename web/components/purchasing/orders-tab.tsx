@@ -5,19 +5,23 @@ import { PackageIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { PendingProcessing } from '@/components/purchasing/pending-processing';
 import { PurchaseOrderStatusBadge } from '@/components/purchasing/requisition-parts';
 import { EmptyState, ErrorState } from '@/components/states';
 import { buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatDay } from '@/lib/format';
-import { usePurchaseOrders } from '@/lib/purchasing-queries';
+import { usePendingOrderLines, usePurchaseOrders } from '@/lib/purchasing-queries';
 
 /**
  * The purchase orders (2026-11-19, phase 3): one read of the open ones, or of
  * the latest cancelled ones, when the tab is opened; the search works on the
- * rows in hand. An order is made from an approved requisition's own page.
+ * rows in hand. Beside them, for a purchaser, Pending Processing (2026-11-23):
+ * the approved requisition lines not ordered yet, made into orders there.
  */
 
 const COLUMNS: Array<Column<PurchaseOrderRow>> = [
@@ -30,7 +34,7 @@ const COLUMNS: Array<Column<PurchaseOrderRow>> = [
       <span className="grid gap-0.5">
         <span className="font-medium">{row.vendor?.name ?? 'No vendor chosen yet'}</span>
         <span className="text-muted-foreground text-xs">
-          {row.lineCount} item{row.lineCount === 1 ? '' : 's'} · from {row.requisition.number ?? 'a requisition'}
+          {row.lineCount} item{row.lineCount === 1 ? '' : 's'} · from {fromRequisitions(row)}
         </span>
       </span>
     ),
@@ -42,14 +46,55 @@ const COLUMNS: Array<Column<PurchaseOrderRow>> = [
   { key: 'status', header: 'Status', cell: (row) => <PurchaseOrderStatusBadge status={row.status} /> },
 ];
 
-export function OrdersTab({ state, setState }: { state: { show: string; q: string }; setState: (next: Partial<{ show: string; q: string }>) => void }) {
+/** "PR-0012", "PR-0012 and PR-0014", "PR-0012 and 2 more" (2026-11-23: an order may carry several). */
+function fromRequisitions(row: PurchaseOrderRow): string {
+  const numbers = (row.requisitions?.length ? row.requisitions : [row.requisition]).map((one) => one.number ?? 'a requisition');
+  return numbers.length <= 2 ? numbers.join(' and ') : `${numbers[0]} and ${numbers.length - 1} more`;
+}
+
+type OrdersState = { show: string; q: string; view: string };
+
+export function OrdersTab({ state, setState }: { state: OrdersState; setState: (next: Partial<OrdersState>) => void }) {
+  // Pending Processing is a purchaser's: whoever makes orders.
+  const { has } = usePermissions();
+  const buys = has('purchasing:order');
+  const pending = usePendingOrderLines(buys);
+  const view = buys && state.view === 'pending' ? 'pending' : 'orders';
+  const lineCount = pending.data?.lines.length;
+
+  return (
+    <div className="grid gap-4">
+      {buys ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <SegmentedControl
+            aria-label="Orders, or the lines still to order"
+            onChange={(next) => setState({ view: next })}
+            options={[
+              { value: 'orders', label: 'Orders' },
+              { value: 'pending', label: 'Pending Processing', count: lineCount },
+            ]}
+            value={view}
+          />
+          {view === 'pending' ? (
+            <span className="text-muted-foreground flex-[1_1_22rem] text-sm">
+              Every approved requisition line not ordered yet, by company and vendor. Tick lines, or a whole vendor, and make one purchase order for each vendor and company.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {view === 'pending' ? <PendingProcessing onMade={() => setState({ view: 'orders' })} /> : <OrderList setState={setState} state={state} />}
+    </div>
+  );
+}
+
+function OrderList({ state, setState }: { state: OrdersState; setState: (next: Partial<OrdersState>) => void }) {
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = usePurchaseOrders(show, true);
   if (list.isLoading) return <DataTableSkeleton columns={COLUMNS} label="Loading orders" rows={5} />;
   if (list.isError || !list.data) return <ErrorState error={list.error} retry={() => void list.refetch()} />;
 
   const words = state.q.trim().toLowerCase();
-  const rows = list.data.orders.filter((row) => !words || `${row.number ?? ''} ${row.vendor?.name ?? ''} ${row.requisition.number ?? ''} ${row.madeBy.name}`.toLowerCase().includes(words));
+  const rows = list.data.orders.filter((row) => !words || `${row.number ?? ''} ${row.vendor?.name ?? ''} ${fromRequisitions(row)} ${row.madeBy.name}`.toLowerCase().includes(words));
 
   return (
     <div className="grid gap-4">
@@ -79,7 +124,7 @@ export function OrdersTab({ state, setState }: { state: { show: string; q: strin
             list.data.orders.length
               ? 'No order matches the search.'
               : show === 'open'
-                ? 'An order is made from an approved requisition, Pending Processing: open it and choose Make Purchase Order.'
+                ? 'An order is made from approved requisitions on Pending Processing, or from one requisition with Make Purchase Order.'
                 : 'No order has been cancelled.'
           }
           icon={PackageIcon}

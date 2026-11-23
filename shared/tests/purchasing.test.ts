@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
+import { allocateReceived, formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
 import { REQUISITION_STAGE_LABEL, orderGroups, requisitionNumber, requisitionStage, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
 import { departmentRefusal } from '../src/contracts/purchasing-roles';
 import { DEFAULT_PAGE_LAYOUT } from '../src/contracts/purchasing-page';
@@ -144,5 +144,25 @@ describe("an approver's departments", () => {
     expect(departmentRefusal({ departments: ['maint'] }, 'maint')).toBeNull();
     expect(departmentRefusal({ departments: ['maint'] }, 'hvac')).toBe("You approve only for your own departments, and this is another department's.");
     expect(departmentRefusal({ departments: ['maint'] }, null)).toBe('You approve only for your own departments: its department is to be chosen first.');
+  });
+});
+
+describe('one order from several requisitions (2026-11-23)', () => {
+  it('gives what arrives of a line to its requisitions, the oldest first', () => {
+    const shares = [{ quantity: 12 }, { quantity: 24 }, { quantity: 6 }];
+    expect(allocateReceived(0, shares)).toEqual([0, 0, 0]);
+    expect(allocateReceived(20, shares)).toEqual([12, 8, 0]);
+    expect(allocateReceived(42, shares)).toEqual([12, 24, 6]);
+    // Never more than each asked, and never less than none.
+    expect(allocateReceived(50, shares)).toEqual([12, 24, 6]);
+    expect(allocateReceived(-3, shares)).toEqual([0, 0, 0]);
+  });
+
+  it('calls a requisition Received once all of its share has arrived, though its order waits for others', () => {
+    expect(requisitionStage('ORDERED', ['PARTLY_RECEIVED'])).toBe('ORDERED');
+    expect(requisitionStage('ORDERED', ['PARTLY_RECEIVED'], true)).toBe('RECEIVED');
+    // Not before its order is out, and not while some of it is still to order.
+    expect(requisitionStage('ORDERED', ['DRAFT'], true)).toBe('PENDING_PROCESSING');
+    expect(requisitionStage('APPROVED', ['SENT'], true)).toBe('PENDING_PROCESSING');
   });
 });

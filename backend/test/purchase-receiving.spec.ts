@@ -89,9 +89,15 @@ function database() {
     { ...base, id: DRAFT_ORDER, requisitionId: id(13), number: null, status: 'DRAFT', approvedById: null, approvedAt: null, sentAt: null, createdAt: new Date('2026-11-18T15:30:00.000Z') },
   ];
   const orderLines: Row[] = [
-    { id: FILTER_LINE, organizationId: ORG, orderId: ORDER, position: 0, itemId: FILTER, quantity: 36, unitPriceCents: 390, receivedQuantity: 0 },
-    { id: BATTERY_LINE, organizationId: ORG, orderId: ORDER, position: 1, itemId: BATTERY, quantity: 24, unitPriceCents: 185, receivedQuantity: 0 },
-    { id: id(53), organizationId: ORG, orderId: DRAFT_ORDER, position: 0, itemId: FILTER, quantity: 5, unitPriceCents: 390, receivedQuantity: 0 },
+    { id: FILTER_LINE, organizationId: ORG, orderId: ORDER, position: 0, itemId: FILTER, placeId: STOCKROOM, quantity: 36, unitPriceCents: 390, receivedQuantity: 0 },
+    { id: BATTERY_LINE, organizationId: ORG, orderId: ORDER, position: 1, itemId: BATTERY, placeId: STOCKROOM, quantity: 24, unitPriceCents: 185, receivedQuantity: 0 },
+    { id: id(53), organizationId: ORG, orderId: DRAFT_ORDER, position: 0, itemId: FILTER, placeId: STOCKROOM, quantity: 5, unitPriceCents: 390, receivedQuantity: 0 },
+  ];
+  /** The requisition lines each order carries (2026-11-23). */
+  const sources: Row[] = [
+    { id: id(61), organizationId: ORG, orderId: ORDER, requisitionId: REQUISITION, requisitionLineId: id(71), itemId: FILTER, placeId: STOCKROOM, quantity: 36, releasedAt: null },
+    { id: id(62), organizationId: ORG, orderId: ORDER, requisitionId: REQUISITION, requisitionLineId: id(72), itemId: BATTERY, placeId: STOCKROOM, quantity: 24, releasedAt: null },
+    { id: id(63), organizationId: ORG, orderId: DRAFT_ORDER, requisitionId: id(13), requisitionLineId: id(73), itemId: FILTER, placeId: STOCKROOM, quantity: 5, releasedAt: null },
   ];
   const receipts: Row[] = [];
   const receiptLines: Row[] = [];
@@ -115,11 +121,14 @@ function database() {
     approvedBy: nameOf(order.approvedById),
     vendor: { id: id(21), name: 'Hill Country Supply', contactName: null, email: 'orders@hill.example', phone: null },
     deliverTo: { id: STOCKROOM, name: 'Stockroom' },
-    requisition: { id: REQUISITION, number: 'PR-0012', requestedById: id(899), lines: [{ itemId: FILTER, quantity: 36 }, { itemId: BATTERY, quantity: 24 }] },
+    requisition: { id: order.requisitionId, number: order.requisitionId === REQUISITION ? 'PR-0012' : 'PR-0013', requestedById: id(899) },
     lines: orderLines
       .filter((line) => line.orderId === order.id)
       .sort((left, right) => (left.position as number) - (right.position as number))
-      .map((line) => ({ ...line, item: item(line.itemId) })),
+      .map((line) => ({ ...line, item: item(line.itemId), place: { id: STOCKROOM, name: 'Stockroom', code: null } })),
+    sources: sources
+      .filter((source) => source.orderId === order.id)
+      .map((source) => ({ ...source, requisition: { id: source.requisitionId, number: source.requisitionId === REQUISITION ? 'PR-0012' : 'PR-0013' }, requisitionLine: { department: null } })),
     bill: billOf(order.id),
   });
   const wholeReceipt = (receipt: Row) => ({
@@ -152,7 +161,23 @@ function database() {
       count: jest.fn(async ({ where }: { where: Where }) => orders.filter((row) => matches(row, where)).length),
     },
     purchaseOrderLine: { updateMany: updateMany(orderLines) },
-    purchaseRequisition: { updateMany: updateMany(requisitions) },
+    purchaseRequisition: {
+      updateMany: updateMany(requisitions),
+      // The requisitions on an order, for its page.
+      findMany: jest.fn(async () => requisitions.map((row) => ({ ...row, requestedBy: { displayName: 'Sample Requester' }, department: null, _count: { lines: 2 }, orderSources: [] }))),
+    },
+    // A requisition closes with the last of the orders carrying its lines (2026-11-20; by its lines since 2026-11-23).
+    purchaseOrderSource: {
+      count: jest.fn(async ({ where }: { where: { requisitionId: string; orderId: { not: string }; order: { status: { notIn: string[] } } } }) =>
+        sources.filter(
+          (source) =>
+            source.requisitionId === where.requisitionId &&
+            source.releasedAt === null &&
+            source.orderId !== where.orderId.not &&
+            !where.order.status.notIn.includes(orders.find((one) => one.id === source.orderId)!.status as string),
+        ).length,
+      ),
+    },
     stockPlace: { count: jest.fn(async ({ where }: { where: Where }) => places.filter((row) => matches(row, where)).length) },
     goodsReceipt: {
       findMany: jest.fn(async ({ where }: { where: Where }) => receipts.filter((row) => matches(row, where)).map(wholeReceipt).reverse()),
@@ -217,7 +242,7 @@ function database() {
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
   const ordersService = new PurchaseOrdersService(db as never, {} as never, {} as never);
-  return { db, orders, orderLines, receipts, movements, bills, requisitions, audits, service: new PurchaseReceivingService(db as never, ordersService) };
+  return { sources, db, orders, orderLines, receipts, movements, bills, requisitions, audits, service: new PurchaseReceivingService(db as never, ordersService) };
 }
 
 const arrival = (lines: ReceiveGoodsInput['lines'], over: Partial<ReceiveGoodsInput> = {}): ReceiveGoodsInput => ({ receivedOn: '2026-11-19', packingSlip: 'PS-44817', note: null, requestKey: key(1), lines, ...over });
@@ -453,16 +478,36 @@ describe('paying and closing', () => {
     await expect(service.payBill(clerk, ORDER, payment)).rejects.toMatchObject({ code: 'VENDOR_BILL_NOT_APPROVED', message: 'This bill is already paid.' });
   });
 
-  it('closes the order but keeps its requisition Ordered while another vendor order from it is open (2026-11-20)', async () => {
-    const { service, orders, requisitions } = database();
+  it('closes the order but keeps its requisition Ordered while another order carrying its lines is open (2026-11-20)', async () => {
+    const { service, orders, requisitions, sources } = database();
     // A second vendor's order from the same requisition, sent and not yet received.
     orders.push({ ...orders[0]!, id: id(44), number: 'PO-0010', vendorId: id(22), status: 'SENT' });
+    sources.push({ id: id(64), organizationId: ORG, orderId: id(44), requisitionId: REQUISITION, requisitionLineId: id(74), itemId: FILTER, placeId: STOCKROOM, quantity: 6, releasedAt: null });
     await service.receive(keeper, ORDER, everything());
     await service.saveBill(clerk, ORDER, fullBill());
     await service.approveBill(clerk, ORDER);
 
     expect(await service.payBill(clerk, ORDER, payment)).toMatchObject({ status: 'CLOSED' });
     expect(requisitions[0]).toMatchObject({ status: 'ORDERED' });
+  });
+
+  it('closes each requisition it carries lines of once none of their other orders is open (2026-11-23)', async () => {
+    const { service, requisitions, sources } = database();
+    // PR-0013's filters are on this order too, and its draft order is still open; PR-0015 has only this one.
+    requisitions.push({ id: id(13), organizationId: ORG, number: 'PR-0013', status: 'ORDERED', requestedById: id(898) });
+    requisitions.push({ id: id(15), organizationId: ORG, number: 'PR-0015', status: 'ORDERED', requestedById: id(898) });
+    sources.push({ id: id(65), organizationId: ORG, orderId: ORDER, requisitionId: id(13), requisitionLineId: id(75), itemId: FILTER, placeId: STOCKROOM, quantity: 6, releasedAt: null });
+    sources.push({ id: id(66), organizationId: ORG, orderId: ORDER, requisitionId: id(15), requisitionLineId: id(76), itemId: BATTERY, placeId: STOCKROOM, quantity: 4, releasedAt: null });
+    await service.receive(keeper, ORDER, everything());
+    await service.saveBill(clerk, ORDER, fullBill());
+    await service.approveBill(clerk, ORDER);
+
+    expect(await service.payBill(clerk, ORDER, payment)).toMatchObject({ status: 'CLOSED' });
+    expect(requisitions.map((one) => [one.number, one.status])).toEqual([
+      ['PR-0012', 'CLOSED'],
+      ['PR-0013', 'ORDERED'],
+      ['PR-0015', 'CLOSED'],
+    ]);
   });
 
   it('stays open when it is paid before everything has arrived, and closes when the rest does', async () => {

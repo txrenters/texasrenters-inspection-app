@@ -92,7 +92,7 @@ export default function PurchasingPage() {
   const canApprove = approvesRequisitions || approvesOrders;
   // The codes live in Setup since 2026-11-21: read by anybody in purchasing, changed by each list's keeper.
   const seesSetup = canSetup || canCode;
-  const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
+  const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '', view: 'orders' });
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = useRequisitions(show, canRequest);
   const data = list.data;

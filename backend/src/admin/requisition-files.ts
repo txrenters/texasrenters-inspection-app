@@ -63,9 +63,10 @@ export async function requisitionFiles(db: Pick<Db, 'purchaseRequisitionFile' | 
 }
 
 /** The requisition's files ticked to go to the vendor, oldest first: what a purchase order's email carries beside its PDF. */
-export function vendorFilesOf(db: Pick<Db, 'purchaseRequisitionFile'>, organizationId: string, requisitionId: string) {
+/** The files of an order's requisitions ticked for the vendor (2026-11-23: an order may carry several requisitions). */
+export function vendorFilesOf(db: Pick<Db, 'purchaseRequisitionFile'>, organizationId: string, requisitionIds: readonly string[]) {
   return db.purchaseRequisitionFile.findMany({
-    where: { organizationId, requisitionId, forVendor: true },
+    where: { organizationId, requisitionId: { in: [...requisitionIds] }, forVendor: true },
     select: { id: true, fileName: true, contentType: true, sizeBytes: true, storageKey: true },
     orderBy: [{ attachedAt: 'asc' }, { id: 'asc' }],
   });

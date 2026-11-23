@@ -33,6 +33,7 @@ const order = (over: Partial<PurchaseOrderRow> = {}): PurchaseOrderRow => ({
   status: 'AWAITING_APPROVAL',
   vendor: { id: 'vendor-alamo', name: 'Alamo Trade Parts' },
   requisition: { id: 'req-1', number: 'PR-00001' },
+  requisitions: [{ id: 'req-1', number: 'PR-00001' }],
   company: { tenantId: 'tenant-thmp', name: 'THMP' },
   expectedOn: null,
   lineCount: 2,

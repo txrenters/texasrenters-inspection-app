@@ -27,7 +27,7 @@ import { DataTable, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
 import { BillInXeroSection } from '@/components/purchasing/bill-in-xero';
 import { BillSection, ReceivingSection } from '@/components/purchasing/order-receiving';
-import { PurchaseOrderStatusBadge, PurchaseOrderSteps } from '@/components/purchasing/requisition-parts';
+import { PurchaseOrderStatusBadge, PurchaseOrderSteps, RequisitionStageBadge } from '@/components/purchasing/requisition-parts';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -41,6 +41,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { EMPTY, formatCount, formatDateTime, formatDay } from '@/lib/format';
+import { andList } from '@/lib/pending-processing';
 import { downloadOrder, orderAttachment } from '@/lib/purchase-order-pdf/download-order';
 import { usePurchaseOrder, usePurchaseOrderEdits, useRequisitionChoices, type PurchaseOrderStep } from '@/lib/purchasing-queries';
 
@@ -51,11 +52,39 @@ import { usePurchaseOrder, usePurchaseOrderEdits, useRequisitionChoices, type Pu
  * may do. The PDF is made in the browser; emailing it to the vendor is the one
  * thing here that costs, so it happens only on its own button, once a press.
  * What has arrived and the vendor's bill (phase 4) sit under its lines.
+ *
+ * An order may carry the lines of several requisitions (2026-11-23): each line
+ * says where it goes and whose it is, and what arrives of it goes to its
+ * requisitions, the oldest first.
  */
 
 const NONE = 'none';
 const chosen = (value: string) => (value === NONE ? null : value);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
+
+/** The requisitions on it, oldest first; an order made before 2026-11-23, its own. */
+const requisitionsOf = (data: Pick<PurchaseOrderDetail, 'requisitions' | 'requisition'>) => (data.requisitions?.length ? data.requisitions : [data.requisition]);
+/** Where its lines go: one place, or each line's own. */
+const placesOf = (data: Pick<PurchaseOrderDetail, 'lines' | 'deliverTo'>) => [...new Map(data.lines.map((line) => [line.place?.id ?? data.deliverTo?.id ?? '', line.place ?? data.deliverTo])).values()];
+
+/** Whose a line is: each requisition's share, oldest first, and what has arrived of it once anything has. */
+function Shares({ line }: { line: PurchaseOrderLine }) {
+  if (!line.shares?.length) return <>{formatCount(line.requestedQuantity)}</>;
+  return (
+    <span className="grid gap-0.5 text-xs">
+      {line.shares.map((share) => (
+        <span className="whitespace-nowrap" key={share.requisition.id}>
+          <Link className="font-medium underline-offset-4 hover:underline" href={`/purchasing/requisitions/${share.requisition.id}`}>
+            {share.requisition.number ?? 'A requisition'}
+          </Link>
+          {` × ${formatCount(share.quantity)}`}
+          {share.department ? ` · ${share.department}` : ''}
+          {line.receivedQuantity ? <span className="text-muted-foreground">{` · ${formatCount(share.receivedQuantity)} arrived`}</span> : null}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 const LINE_COLUMNS: Array<Column<PurchaseOrderLine>> = [
   {
@@ -71,7 +100,8 @@ const LINE_COLUMNS: Array<Column<PurchaseOrderLine>> = [
       </span>
     ),
   },
-  { key: 'asked', header: 'Asked for', numeric: true, hideBelow: 'md', cell: (line) => formatCount(line.requestedQuantity) },
+  { key: 'place', header: 'Location', hideBelow: 'md', cell: (line) => line.place?.name ?? EMPTY, className: 'whitespace-nowrap' },
+  { key: 'for', header: 'For', hideBelow: 'md', cell: (line) => <Shares line={line} /> },
   { key: 'quantity', header: 'Ordered', numeric: true, cell: (line) => formatCount(line.quantity) },
   { key: 'received', header: 'Received', numeric: true, cell: (line) => formatCount(line.receivedQuantity) },
   {
@@ -110,9 +140,14 @@ export default function PurchaseOrderPage() {
               Purchasing
             </Link>
             {` · ${data.vendor?.name ?? 'No vendor chosen yet'} · ${data.company?.name ?? 'No company'} · from `}
-            <Link className="underline-offset-4 hover:underline" href={`/purchasing/requisitions/${data.requisition.id}`}>
-              {data.requisition.number ?? 'its requisition'}
-            </Link>
+            {requisitionsOf(data).map((requisition, index, all) => (
+              <span key={requisition.id}>
+                {index ? (index === all.length - 1 ? ' and ' : ', ') : ''}
+                <Link className="underline-offset-4 hover:underline" href={`/purchasing/requisitions/${requisition.id}`}>
+                  {requisition.number ?? 'its requisition'}
+                </Link>
+              </span>
+            ))}
           </>
         }
         prominent
@@ -158,7 +193,9 @@ export default function PurchaseOrderPage() {
 // ── The draft, as its purchaser fills it in ───────────────────────────────
 
 interface LineDraft {
+  lineId: string;
   itemId: string;
+  placeId: string | null;
   quantity: string;
   price: string;
   kept: boolean;
@@ -187,8 +224,12 @@ function OrderForm({
   const [terms, setTerms] = useState(order.terms ?? '');
   const [tax, setTax] = useState(order.taxBasisPoints ? String(order.taxBasisPoints / 100) : '');
   const [notes, setNotes] = useState(order.notes ?? '');
-  const [lines, setLines] = useState<LineDraft[]>(() => order.lines.map((line) => ({ itemId: line.item.id, quantity: String(line.quantity), price: dollars(line.unitPriceCents), kept: true })));
-  const setLine = (itemId: string, change: Partial<LineDraft>) => setLines((rows) => rows.map((row) => (row.itemId === itemId ? { ...row, ...change } : row)));
+  const [lines, setLines] = useState<LineDraft[]>(() =>
+    order.lines.map((line) => ({ lineId: line.id, itemId: line.item.id, placeId: line.place?.id ?? null, quantity: String(line.quantity), price: dollars(line.unitPriceCents), kept: true })),
+  );
+  const setLine = (lineId: string, change: Partial<LineDraft>) => setLines((rows) => rows.map((row) => (row.lineId === lineId ? { ...row, ...change } : row)));
+  // Going to one place, the order goes all of it where Deliver to says; going to several, each line keeps its own (2026-11-23).
+  const several = placesOf(order).length > 1;
 
   // "8.25" is 825 hundredths of a percent; empty is no tax.
   const rate = tax.trim() === '' ? 0 : Number(tax);
@@ -197,7 +238,7 @@ function OrderForm({
     if (!line.kept) return 'left out' as const;
     const quantity = /^\d+$/.test(line.quantity.trim()) && Number(line.quantity) > 0 ? Number(line.quantity) : null;
     const price = line.price.trim() ? parseMoney(line.price) : null;
-    return quantity !== null && price !== null && price >= 0 ? { itemId: line.itemId, quantity, unitPriceCents: price } : null;
+    return quantity !== null && price !== null && price >= 0 ? { itemId: line.itemId, placeId: line.placeId, quantity, unitPriceCents: price } : null;
   });
   const complete = taxBasisPoints !== null && parsed.every((line) => line !== null);
   const input: SavePurchaseOrderInput = {
@@ -247,7 +288,7 @@ function OrderForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>Not decided</SelectItem>
+                  <SelectItem value={NONE}>{several ? "Each line's location" : 'Not decided'}</SelectItem>
                   {choices.places.map((option) => (
                     <SelectItem key={option.id} value={option.id}>
                       {option.name}
@@ -255,6 +296,7 @@ function OrderForm({
                   ))}
                 </SelectContent>
               </Select>
+              {several ? <FieldDescription>Its lines go to {andList(placesOf(order).map((place) => place?.name ?? 'no location'))}, each where its line says.</FieldDescription> : null}
             </Field>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
@@ -286,6 +328,7 @@ function OrderForm({
               <TableHeader>
                 <TableRow>
                   <TableHead>Item</TableHead>
+                  <TableHead>Location</TableHead>
                   <TableHead className="text-right">Asked for</TableHead>
                   <TableHead className="text-right">Quantity</TableHead>
                   <TableHead className="text-right">Price each</TableHead>
@@ -307,14 +350,17 @@ function OrderForm({
                           <span className="text-muted-foreground text-xs">{line.item.code}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">{formatCount(line.requestedQuantity)}</TableCell>
+                      <TableCell className="whitespace-nowrap">{line.place?.name ?? EMPTY}</TableCell>
+                      <TableCell className="text-right">
+                        <Shares line={line} />
+                      </TableCell>
                       <TableCell className="text-right">
                         <Input
                           aria-label={`Quantity of ${line.item.name}`}
                           className="ml-auto w-20 text-right"
                           disabled={!draft.kept}
                           inputMode="numeric"
-                          onChange={(event) => setLine(draft.itemId, { quantity: event.target.value })}
+                          onChange={(event) => setLine(draft.lineId, { quantity: event.target.value })}
                           value={draft.quantity}
                         />
                       </TableCell>
@@ -324,13 +370,13 @@ function OrderForm({
                           className="ml-auto w-24 text-right"
                           disabled={!draft.kept}
                           inputMode="decimal"
-                          onChange={(event) => setLine(draft.itemId, { price: event.target.value })}
+                          onChange={(event) => setLine(draft.lineId, { price: event.target.value })}
                           value={draft.price}
                         />
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">{row && row !== 'left out' ? formatMoney(row.quantity * row.unitPriceCents) : ''}</TableCell>
                       <TableCell className="text-right">
-                        <Button aria-label={`${draft.kept ? 'Leave out' : 'Put back'} ${line.item.name}`} onClick={() => setLine(draft.itemId, { kept: !draft.kept })} size="sm" type="button" variant="outline">
+                        <Button aria-label={`${draft.kept ? 'Leave out' : 'Put back'} ${line.item.name}`} onClick={() => setLine(draft.lineId, { kept: !draft.kept })} size="sm" type="button" variant="outline">
                           {draft.kept ? 'Leave out' : 'Put back'}
                         </Button>
                       </TableCell>
@@ -340,7 +386,9 @@ function OrderForm({
               </TableBody>
             </Table>
           </div>
-          <p className="text-muted-foreground text-xs">An order holds only what its requisition asked for. The quantity and the price are what was agreed with the vendor.</p>
+          <p className="text-muted-foreground text-xs">
+            An order holds only what its requisitions asked for. The quantity and the price are what was agreed with the vendor. A line left out goes back to Pending Processing.
+          </p>
         </section>
       </div>
 
@@ -451,7 +499,9 @@ function OrderView({ data, onChange }: { data: PurchaseOrderDetail; onChange?: (
           <div className="ml-auto w-full max-w-xs">
             <Totals subtotalCents={data.subtotalCents} taxBasisPoints={data.taxBasisPoints} taxCents={data.taxCents} totalCents={data.totalCents} />
           </div>
+          <ArrivalNote data={data} />
         </section>
+        <RequisitionsOn data={data} />
         {data.notes ? (
           <AsideCard title="Notes for the vendor">
             <p className="whitespace-pre-wrap">{data.notes}</p>
@@ -505,6 +555,69 @@ function OrderView({ data, onChange }: { data: PurchaseOrderDetail; onChange?: (
   );
 }
 
+/** When it carries more than one requisition's share of a line: where what arrives goes (2026-11-23). */
+function ArrivalNote({ data }: { data: PurchaseOrderDetail }) {
+  const shared = data.lines.find((line) => (line.shares?.length ?? 0) > 1);
+  if (!shared || data.status === 'CANCELLED') return null;
+  const [first, ...rest] = shared.shares;
+  return (
+    <Alert variant="info">
+      <AlertDescription>
+        <span>
+          <strong>When it arrives:</strong> each line is put where it says. What arrives of a line goes to its requisitions, the oldest first: of the {formatCount(shared.quantity)} {shared.item.name}
+          {shared.place ? ` for ${shared.place.name}` : ''}, the first {formatCount(first!.quantity)} are {first!.requisition.number ?? 'the oldest'}&apos;s
+          {rest.map((share) => `, the next ${formatCount(share.quantity)} ${share.requisition.number ?? 'the next'}'s`).join('')}. A requisition is Received once all of its share has arrived, and
+          Closed once the bill is paid.
+        </span>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** The requisitions on it (2026-11-23): who asked, how many of their lines are here, and where each is. */
+function RequisitionsOn({ data }: { data: PurchaseOrderDetail }) {
+  if (!data.requisitionsOn?.length) return null;
+  return (
+    <section className="grid gap-3">
+      <h2 className="text-heading text-base font-bold">The requisitions on this order</h2>
+      <div className="bg-card overflow-x-auto rounded-xl border">
+        <Table aria-label="The requisitions on this order">
+          {/* Static: this box scrolls sideways, and a sticky header inside it is shoved down over the first row (see components/ui/table.tsx). */}
+          <TableHeader className="lg:static">
+            <TableRow>
+              <TableHead>Requisition</TableHead>
+              <TableHead>Asked by</TableHead>
+              <TableHead>Department</TableHead>
+              <TableHead>Its lines here</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.requisitionsOn.map((requisition) => (
+              <TableRow key={requisition.id}>
+                <TableCell>
+                  <Link className="font-medium underline-offset-4 hover:underline" href={`/purchasing/requisitions/${requisition.id}`}>
+                    {requisition.number ?? 'Draft'}
+                  </Link>
+                </TableCell>
+                <TableCell>{requisition.requestedBy}</TableCell>
+                <TableCell>{requisition.department ?? EMPTY}</TableCell>
+                <TableCell>
+                  {requisition.linesHere} of {requisition.lineCount}
+                  {requisition.linesHere < requisition.lineCount && requisition.stage === 'PENDING_PROCESSING' ? <span className="text-muted-foreground"> (the rest are still to order)</span> : null}
+                </TableCell>
+                <TableCell>
+                  <RequisitionStageBadge stage={requisition.stage} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </section>
+  );
+}
+
 /** What both the form and the view show beside the order: its details, the emails sent, its history, and send and cancel. */
 function OrderAside({ data, onChange }: { data: PurchaseOrderDetail; onChange?: () => void }) {
   const [sending, setSending] = useState(false);
@@ -518,7 +631,11 @@ function OrderAside({ data, onChange }: { data: PurchaseOrderDetail; onChange?: 
             { label: 'Made by', value: data.madeBy.name, detail: formatDay(data.createdAt) },
             ...(data.approvedBy ? [{ label: 'Approved by', value: data.approvedBy, detail: data.approvedAt ? formatDateTime(data.approvedAt) : undefined }] : []),
             ...(data.terms ? [{ label: 'Terms', value: data.terms }] : []),
-            ...(data.deliverTo ? [{ label: 'Deliver to', value: data.deliverTo.name }] : []),
+            ...(placesOf(data).length > 1
+              ? [{ label: 'Deliver to', value: `Each line's location: ${placesOf(data).map((place) => place?.name ?? 'none').join(', ')}` }]
+              : data.deliverTo
+                ? [{ label: 'Deliver to', value: data.deliverTo.name }]
+                : []),
             ...(data.expectedOn ? [{ label: 'Expected', value: formatDay(data.expectedOn) }] : []),
           ]}
           label="Order details"
@@ -697,7 +814,7 @@ function CancelDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: (
             {data.status === 'SENT'
               ? 'The vendor already has it. Cancelling here does not tell them: do that yourself. '
               : ''}
-            Its requisition becomes approved again, so another order can be made from it. This cannot be undone.
+            Its requisitions' lines go back to Pending Processing, to be ordered again. This cannot be undone.
           </DialogDescription>
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
