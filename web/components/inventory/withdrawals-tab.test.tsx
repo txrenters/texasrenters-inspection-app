@@ -1,4 +1,4 @@
-import type { StockSlipChoices, StockSlipRow } from '@texasrenters/shared';
+import type { StockSlipChoices, StockSlipRow, TruckAsk } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,7 +6,7 @@ import { WithdrawalsTab } from './withdrawals-tab';
 
 /** Withdrawals, returns and moves, phase 5 (2026-11-19). Every item, place, person and visit invented. */
 
-const hooks = vi.hoisted(() => ({ useStockSlips: vi.fn(), useStockSlipChoices: vi.fn(), useStockSlipEdits: vi.fn() }));
+const hooks = vi.hoisted(() => ({ useStockSlips: vi.fn(), useStockSlipChoices: vi.fn(), useStockSlipEdits: vi.fn(), useTruckAsks: vi.fn(), useTruckKeepLevels: vi.fn(), useTruckKeepEdits: vi.fn() }));
 vi.mock('@/lib/inventory-queries', () => hooks);
 
 const choices = (over: Partial<StockSlipChoices> = {}): StockSlipChoices => ({
@@ -64,6 +64,8 @@ beforeEach(() => {
   reverse = mutation();
   hooks.useStockSlipEdits.mockReturnValue({ post, reverse });
   hooks.useStockSlips.mockReturnValue({ isError: false, data: { slips: [] } });
+  // No truck waits on an ask unless a test says so (2026-11-24).
+  hooks.useTruckAsks.mockReturnValue({ isError: false, data: { asks: [] } });
   hooks.useStockSlipChoices.mockReset();
   // The chosen technician's visits come with the technician, as the server sends them.
   hooks.useStockSlipChoices.mockImplementation((_enabled: boolean, technicianId: string | null) => ({
@@ -105,6 +107,7 @@ describe('recording a withdrawal', () => {
       note: 'upstairs unit',
       requestKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       lines: [{ itemId: 'item-filter', quantity: 4 }],
+      askId: null,
     });
     // The form is ready for the next slip, which is a new one.
     expect(await screen.findByText('WD-0031 is posted.')).toBeTruthy();
@@ -250,11 +253,62 @@ describe('the latest slips', () => {
     expect(screen.queryByRole('form', { name: 'Record a slip' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Reverse/ })).toBeNull();
     expect(screen.getByText('WD-0031')).toBeTruthy();
-    expect(hooks.useStockSlipChoices).not.toHaveBeenCalled();
+    // Asked for with the read switched off: nothing is read (2026-11-24, the asks panel holds the hook).
+    expect(hooks.useStockSlipChoices.mock.calls.every(([enabled]) => !enabled)).toBe(true);
   });
 
   it('says so when there are none yet', () => {
     render(<WithdrawalsTab canWithdraw={false} />);
     expect(screen.getByText('No slips yet')).toBeTruthy();
+  });
+});
+
+// Asks from the trucks (the office, 2026-11-24): filled with a move from the Storeroom.
+describe('an ask from a truck', () => {
+  const ask = (over: Partial<TruckAsk> = {}): TruckAsk => ({
+    id: 'ask-1',
+    place: { id: 'place-van', name: 'Van 1' },
+    askedBy: { id: 'tech-ana', name: 'Ana Sample' },
+    at: '2026-11-24T16:40:00.000Z',
+    note: 'I can pick up Wednesday morning',
+    status: 'ASKED',
+    lines: [
+      { itemId: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', quantity: 4 },
+      { itemId: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each', quantity: 5 },
+    ],
+    filled: null,
+    ...over,
+  });
+
+  it('is filled from the Storeroom into its truck, as much as the Storeroom has, and posting the move fills it', async () => {
+    hooks.useTruckAsks.mockReturnValue({ isError: false, data: { asks: [ask(), ask({ id: 'ask-0', status: 'FILLED', filled: { slipNumber: 'TR-0019', at: '2026-11-21T15:00:00.000Z', by: 'Office Coordinator' } })] } });
+    render(<WithdrawalsTab canWithdraw />);
+
+    const asks = screen.getByRole('table', { name: 'Asks from the trucks' });
+    expect(within(asks).getAllByRole('row')).toHaveLength(2);
+    expect(within(asks).getByRole('row', { name: /Van 1/ }).textContent).toContain('4 × FLT-0003, 5 × PRT-0001');
+    fireEvent.click(within(asks).getByRole('button', { name: "Fill Ana Sample's ask from the Storeroom" }));
+
+    expect(screen.getByText("Filling Ana Sample's ask for Van 1.")).toBeTruthy();
+    expect(screen.getByText(/PRT-0001: 1 of 5 in Stockroom/)).toBeTruthy();
+    fireEvent.click(postButton('Post move'));
+    await waitFor(() => expect(post.mutateAsync).toHaveBeenCalledTimes(1));
+    expect(post.mutateAsync.mock.calls[0]![0]).toMatchObject({
+      kind: 'TRANSFER',
+      fromPlaceId: 'place-stockroom',
+      toPlaceId: 'place-van',
+      lines: [
+        { itemId: 'item-filter', quantity: 4 },
+        { itemId: 'item-battery', quantity: 1 },
+      ],
+      askId: 'ask-1',
+    });
+  });
+
+  it('shows the waiting asks to somebody who may only look, with nothing to fill', () => {
+    hooks.useTruckAsks.mockReturnValue({ isError: false, data: { asks: [ask()] } });
+    render(<WithdrawalsTab canWithdraw={false} />);
+    expect(screen.getByRole('table', { name: 'Asks from the trucks' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Fill/ })).toBeNull();
   });
 });

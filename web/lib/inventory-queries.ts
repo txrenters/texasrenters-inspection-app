@@ -16,6 +16,7 @@ import type {
   SaveStockCountInput,
   SaveStockItemInput,
   SaveStockPlaceInput,
+  SaveTruckKeepLevelsInput,
   SaveVendorInput,
   StartStockCountInput,
   StockCountChoices,
@@ -26,6 +27,8 @@ import type {
   StockPlaces,
   StockSlipChoices,
   StockSlipList,
+  TruckAskList,
+  TruckKeepLevels,
   UsagePeriod,
   Vendors,
 } from '@texasrenters/shared';
@@ -54,7 +57,43 @@ export const inventoryKeys = {
   countChoices: ['inventory', 'count-choices'] as const,
   count: (countId: string) => ['inventory', 'count', countId] as const,
   slipChoices: (technicianId: string | null) => ['inventory', 'slip-choices', technicianId] as const,
+  truckAsks: ['inventory', 'truck-asks'] as const,
+  keepLevels: (placeId: string) => ['inventory', 'keep', placeId] as const,
 };
+
+/**
+ * Asks from the trucks (2026-11-24): read when the Withdrawals tab opens, kept
+ * a minute, and read again after a move is posted (it may fill one). Never
+ * polled. Nothing it reads is billed.
+ */
+export function useTruckAsks(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.truckAsks, queryFn: ({ signal }) => api<TruckAskList>(`${BASE}/truck-asks`, { signal }), enabled, ...KEPT });
+}
+
+/** What the office keeps on one truck (2026-11-24): read when its editor opens. */
+export function useTruckKeepLevels(placeId: string | null) {
+  return useQuery({
+    queryKey: inventoryKeys.keepLevels(placeId ?? 'none'),
+    queryFn: ({ signal }) => api<TruckKeepLevels>(`${BASE}/places/${encodeURIComponent(placeId!)}/keep`, { signal }),
+    enabled: Boolean(placeId),
+    ...KEPT,
+  });
+}
+
+/** Saving what is kept on a truck answers with the levels; the asks and the places are read again when next looked at. */
+export function useTruckKeepEdits() {
+  const client = useQueryClient();
+  return {
+    save: useMutation({
+      mutationFn: ({ placeId, input }: { placeId: string; input: SaveTruckKeepLevelsInput }) =>
+        api<TruckKeepLevels>(`${BASE}/places/${encodeURIComponent(placeId)}/keep`, { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: (levels) => {
+        client.setQueryData(inventoryKeys.keepLevels(levels.place.id), levels);
+        void client.invalidateQueries({ queryKey: inventoryKeys.truckAsks });
+      },
+    }),
+  };
+}
 
 export function useStock() {
   return useQuery({ queryKey: inventoryKeys.stock, queryFn: ({ signal }) => api<StockList>(`${BASE}/items`, { signal }), ...KEPT });

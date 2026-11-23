@@ -127,7 +127,7 @@ export default function InventoryPage() {
           )}
         </TabsContent>
         <TabsContent value="withdrawals">
-          <WithdrawalsTab canWithdraw={canWithdraw} technicianId={state.technician} />
+          <WithdrawalsTab canKeep={keeps.places} canWithdraw={canWithdraw} technicianId={state.technician} />
         </TabsContent>
         <TabsContent value="counts">
           <CountsTab canCount={canCount} />

@@ -1,4 +1,5 @@
 import type { StockPlaceKind } from './inventory.js';
+import type { PhoneCatalogItem } from './truck-stock.js';
 
 /**
  * Withdrawals, returns and moves (2026-11-19, phase 5 of the inventory and
@@ -48,6 +49,8 @@ export interface PostStockSlipInput {
   /** Made once by the page for this slip, so a second click or a retry posts nothing twice. */
   requestKey: string;
   lines: { itemId: string; quantity: number }[];
+  /** A move made from a truck's ask (2026-11-24): posting it marks the ask filled. */
+  askId?: string | null;
 }
 
 export interface ReverseStockSlipInput {
@@ -149,6 +152,11 @@ export interface JobStock {
   slips: JobStockSlip[];
   /** What they took for this job less what came back: what can still be brought back. */
   taken: JobStockItem[];
+  /**
+   * Every item in use (2026-11-24): a search finds one with none in the truck, and a
+   * scan tells a code that is no item from one that is not in the truck.
+   */
+  catalog: PhoneCatalogItem[];
 }
 
 /**

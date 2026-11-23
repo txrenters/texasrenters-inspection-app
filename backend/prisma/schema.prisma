@@ -428,6 +428,9 @@ model Organization {
   vendorBills VendorBill[]
   stockSlips StockSlip[]
   stockCounts StockCount[]
+  stockKeepLevels StockKeepLevel[]
+  truckStockAsks TruckStockAsk[]
+  truckStockAskLines TruckStockAskLine[]
   jobs Job[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
@@ -672,6 +675,7 @@ model UserProfile {
   vendorBillsApproved        VendorBill[]          @relation("VendorBillApprovedBy")
   vendorBillsPaid            VendorBill[]          @relation("VendorBillPaidBy")
   stockSlips                 StockSlip[]           @relation("StockSlipTechnician")
+  truckStockAsks             TruckStockAsk[]       @relation("TruckStockAskAskedBy")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -5860,6 +5864,8 @@ model StockItem {
   receiptLines     GoodsReceiptLine[]
   slipLines        StockSlipLine[]
   countLines       StockCountLine[]
+  keepLevels       StockKeepLevel[]
+  truckAskLines    TruckStockAskLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5893,6 +5899,8 @@ model StockPlace {
   slipsTo      StockSlip[]     @relation("StockSlipTo")
   counts       StockCount[]
   countLines   StockCountLine[]
+  keepLevels   StockKeepLevel[]
+  truckAsks    TruckStockAsk[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -6548,6 +6556,7 @@ model StockSlip {
   toPlace      StockPlace?     @relation("StockSlipTo", fields: [organizationId, toPlaceId], references: [organizationId, id], onDelete: Restrict)
   inspection   Inspection?     @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
   lines        StockSlipLine[]
+  truckAsk     TruckStockAsk?
 
   @@unique([organizationId, number])
   @@unique([organizationId, requestKey])
@@ -6799,4 +6808,77 @@ model PurchaseOrderSource {
 
   @@index([organizationId, orderId])
   @@index([organizationId, requisitionId])
+}
+
+/// What the office keeps on a truck of an item (2026-11-24, the truck on the phone): below it the phone says the
+/// item is running low and puts it on an ask. Set on Places. No row: nothing is kept of it there.
+model StockKeepLevel {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  placeId        String   @db.Uuid
+  itemId         String   @db.Uuid
+  /// More than 0 (checked): keeping none is no row.
+  keepAtLeast    Int
+  updatedById    String?  @db.Uuid
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  place        StockPlace   @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Cascade)
+  item         StockItem    @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([placeId, itemId])
+  @@index([organizationId, placeId])
+}
+
+/// Asks from the trucks (2026-11-24): a technician asks the office for more on the phone, and the office fills it
+/// with a move from the Storeroom on the console. The phone never moves stock itself.
+enum TruckStockAskStatus {
+  ASKED
+  FILLED
+}
+
+model TruckStockAsk {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  placeId        String              @db.Uuid
+  askedById      String              @db.Uuid
+  note           String?
+  status         TruckStockAskStatus @default(ASKED)
+  /// `phone:<technician>:<the phone's key>`: an ask sent twice asks once.
+  requestKey     String
+  /// The move that filled it (checked: set exactly when it is filled).
+  filledSlipId   String?             @db.Uuid
+  filledById     String?             @db.Uuid
+  filledByName   String?
+  filledAt       DateTime?
+  createdAt      DateTime            @default(now())
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  place        StockPlace          @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  askedBy      UserProfile         @relation("TruckStockAskAskedBy", fields: [askedById], references: [id], onDelete: Restrict)
+  filledSlip   StockSlip?          @relation(fields: [organizationId, filledSlipId], references: [organizationId, id], onDelete: Restrict)
+  lines        TruckStockAskLine[]
+
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, filledSlipId])
+  @@unique([organizationId, id])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, placeId, status])
+}
+
+model TruckStockAskLine {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  askId          String @db.Uuid
+  position       Int
+  itemId         String @db.Uuid
+  /// More than 0 (checked).
+  quantity       Int
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ask          TruckStockAsk @relation(fields: [organizationId, askId], references: [organizationId, id], onDelete: Cascade)
+  item         StockItem     @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([askId, itemId])
+  @@index([organizationId, askId])
 }

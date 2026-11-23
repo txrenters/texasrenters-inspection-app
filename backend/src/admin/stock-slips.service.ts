@@ -17,6 +17,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { nextDocumentCode } from './purchasing-settings';
 import { assertStockNotFrozen } from './stock-freeze';
+import { TruckStockService } from './truck-stock.service';
 
 /**
  * Withdrawals, returns and moves (2026-11-19, phase 5 of the inventory and
@@ -98,7 +99,10 @@ function row(slip: Slip): StockSlipRow {
 
 @Injectable()
 export class StockSlipsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(TruckStockService) private readonly trucks: TruckStockService,
+  ) {}
 
   /** The latest slips, newest first; one technician's when asked. */
   async list(user: AuthenticatedUser, technicianId?: string): Promise<StockSlipList> {
@@ -228,6 +232,11 @@ export class StockSlipsService {
         await tx.auditLog.create({
           data: { organizationId, ...auditActor(user), action: 'STOCK_SLIP_POSTED', entityType: ENTITY, entityId: slip.id, metadata: { number, kind, technician: technicianName, lines: input.lines.length, costCents } },
         });
+        // A move made from a truck's ask (2026-11-24): the ask is filled by it, or neither is written.
+        if (input.askId) {
+          if (!move) throw new ApplicationError(400, 'TRUCK_ASK_NEEDS_A_MOVE', 'An ask from a truck is filled with a move into that truck.');
+          await this.trucks.markFilled(tx, user, input.askId, slip.id, toPlaceId);
+        }
       });
     } catch (error) {
       if (outOfStock(error)) throw new ApplicationError(409, 'STOCK_NOT_ENOUGH', 'Somebody has just taken some of that stock. Open the tab again to see what is there.');

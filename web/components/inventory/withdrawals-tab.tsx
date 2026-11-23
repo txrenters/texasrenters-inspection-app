@@ -9,11 +9,13 @@ import {
   type StockSlipChoices,
   type StockSlipKind,
   type StockSlipRow,
+  type TruckAsk,
 } from '@texasrenters/shared';
 import { ArrowRightIcon, ClipboardListIcon, PlusIcon, XIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
+import { KeepLevelsDialog } from '@/components/inventory/keep-levels';
 import { ScanField } from '@/components/inventory/scan-field';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
@@ -28,8 +30,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { EMPTY, formatCount, formatDay } from '@/lib/format';
-import { useStockSlipChoices, useStockSlipEdits, useStockSlips } from '@/lib/inventory-queries';
+import { EMPTY, formatCount, formatDateTime, formatDay } from '@/lib/format';
+import { useStockSlipChoices, useStockSlipEdits, useStockSlips, useTruckAsks } from '@/lib/inventory-queries';
 
 /**
  * Withdrawals, returns and moves (2026-11-19, phase 5). The office records
@@ -51,14 +53,67 @@ const whole = (value: string) => (/^\d+$/.test(value.trim()) ? Number(value.trim
 const KIND_ACTION: Record<StockSlipKind, string> = { WITHDRAWAL: 'Take out', RETURN: 'Bring back', TRANSFER: 'Move between places' };
 const POST_LABEL: Record<StockSlipKind, string> = { WITHDRAWAL: 'Post withdrawal', RETURN: 'Post return', TRANSFER: 'Post move' };
 
-export function WithdrawalsTab({ canWithdraw, technicianId }: { canWithdraw: boolean; /** Only this technician's slips: opened from "Materials used, by technician". */ technicianId?: string }) {
+/** A move the form starts from (2026-11-24): a truck's ask, filled from the Storeroom. */
+interface SlipStart {
+  askId: string;
+  title: string;
+  /** What the Storeroom cannot give now, in words. */
+  short: string | null;
+  fromPlaceId: string;
+  toPlaceId: string;
+  lines: { itemId: string; quantity: number }[];
+}
+
+export function WithdrawalsTab({
+  canWithdraw,
+  canKeep = false,
+  technicianId,
+}: {
+  canWithdraw: boolean;
+  /** Sets what is kept on a truck (Places' keeper). */
+  canKeep?: boolean;
+  /** Only this technician's slips: opened from "Materials used, by technician". */ technicianId?: string;
+}) {
   const slips = useStockSlips(true, technicianId || undefined);
   const only = technicianId ? (slips.data?.slips.find((slip) => slip.technician?.id === technicianId)?.technician?.name ?? 'this technician') : null;
   const [reversing, setReversing] = useState<StockSlipRow | null>(null);
+  // Asks from the trucks (2026-11-24): filling one starts the move form from it.
+  const asks = useTruckAsks(true);
+  const moveChoices = useStockSlipChoices(canWithdraw, null);
+  const [start, setStart] = useState<SlipStart | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const [keeping, setKeeping] = useState<string | null>(null);
+  const waiting = asks.data?.asks.filter((ask) => ask.status === 'ASKED') ?? [];
+
+  const fill = (ask: TruckAsk) => {
+    const data = moveChoices.data;
+    const storeroom = data?.places.find((place) => place.kind === 'STOCKROOM');
+    if (!data || !storeroom) return;
+    const there = new Map(data.levels.filter((level) => level.placeId === storeroom.id).map((level) => [level.itemId, level.quantity]));
+    const lines = ask.lines.map((line) => ({ itemId: line.itemId, quantity: Math.min(line.quantity, there.get(line.itemId) ?? 0) })).filter((line) => line.quantity > 0);
+    const shortOf = ask.lines.filter((line) => (there.get(line.itemId) ?? 0) < line.quantity);
+    setStart({
+      askId: ask.id,
+      title: `Filling ${ask.askedBy.name}'s ask for ${ask.place.name}`,
+      short: shortOf.length
+        ? `${shortOf.map((line) => `${line.code}: ${formatCount(there.get(line.itemId) ?? 0)} of ${formatCount(line.quantity)}`).join(', ')} in ${storeroom.name}. The rest waits on Reorder and usage.`
+        : null,
+      fromPlaceId: storeroom.id,
+      toPlaceId: ask.place.id,
+      lines: lines.length ? lines : [],
+    });
+    setFormKey((key) => key + 1);
+  };
+  const done = () => {
+    setStart(null);
+    setFormKey((key) => key + 1);
+  };
 
   return (
     <div className="grid gap-6">
-      {canWithdraw ? <SlipForm /> : null}
+      {waiting.length ? <TruckAsksPanel asks={waiting} canFill={canWithdraw && Boolean(moveChoices.data)} filling={start?.askId ?? null} onFill={fill} onKeep={canKeep ? setKeeping : undefined} /> : null}
+      {canWithdraw ? <SlipForm key={formKey} onPosted={start ? done : undefined} onStop={start ? done : undefined} start={start} /> : null}
+      {keeping ? <KeepLevelsDialog onClose={() => setKeeping(null)} placeId={keeping} /> : null}
       <section aria-labelledby="slips-heading" className="grid gap-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-base font-semibold" id="slips-heading">
@@ -101,6 +156,62 @@ export function WithdrawalsTab({ canWithdraw, technicianId }: { canWithdraw: boo
       </section>
       {reversing ? <ReverseSlipDialog onClose={() => setReversing(null)} slip={reversing} /> : null}
     </div>
+  );
+}
+
+// ── Asks from the trucks (2026-11-24) ───────────────────────────────────
+
+function TruckAsksPanel({ asks, canFill, filling, onFill, onKeep }: { asks: TruckAsk[]; canFill: boolean; filling: string | null; onFill: (ask: TruckAsk) => void; onKeep?: (placeId: string) => void }) {
+  return (
+    <section aria-labelledby="truck-asks-heading" className="bg-card grid gap-3 rounded-xl border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="flex-1 text-base font-semibold" id="truck-asks-heading">
+          Asks from the trucks
+        </h2>
+        <Badge variant="warning">{asks.length} waiting</Badge>
+      </div>
+      <div className="min-w-0 overflow-x-auto rounded-xl border">
+        <Table aria-label="Asks from the trucks">
+          <TableHeader className="lg:static">
+            <TableRow>
+              <TableHead>Asked</TableHead>
+              <TableHead>Truck</TableHead>
+              <TableHead>By</TableHead>
+              <TableHead>What</TableHead>
+              <TableHead>Note</TableHead>
+              <TableHead>
+                <span className="sr-only">Fill</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {asks.map((ask) => (
+              <TableRow className={filling === ask.id ? 'bg-accent/60' : undefined} key={ask.id}>
+                <TableCell className="whitespace-nowrap">{formatDateTime(ask.at)}</TableCell>
+                <TableCell className="whitespace-nowrap">{ask.place.name}</TableCell>
+                <TableCell className="whitespace-nowrap">{ask.askedBy.name}</TableCell>
+                <TableCell>{ask.lines.map((line) => `${formatCount(line.quantity)} × ${line.code}`).join(', ')}</TableCell>
+                <TableCell className="text-muted-foreground">{ask.note ?? EMPTY}</TableCell>
+                <TableCell>
+                  <span className="flex flex-wrap justify-end gap-2">
+                    {onKeep ? (
+                      <Button aria-label={`Keep at least on ${ask.place.name}`} onClick={() => onKeep(ask.place.id)} size="sm" variant="outline">
+                        Keep at least
+                      </Button>
+                    ) : null}
+                    {canFill ? (
+                      <Button aria-label={`Fill ${ask.askedBy.name}'s ask from the Storeroom`} onClick={() => onFill(ask)} size="sm" variant={filling === ask.id ? 'outline' : 'default'}>
+                        Fill from the Storeroom
+                      </Button>
+                    ) : null}
+                  </span>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </section>
   );
 }
 
@@ -182,15 +293,17 @@ interface Line {
   quantity: string;
 }
 
-function SlipForm() {
-  const [kind, setKind] = useState<StockSlipKind>('WITHDRAWAL');
+function SlipForm({ start, onPosted, onStop }: { start?: SlipStart | null; onPosted?: () => void; onStop?: () => void }) {
+  const [kind, setKind] = useState<StockSlipKind>(start ? 'TRANSFER' : 'WITHDRAWAL');
   const [technicianId, setTechnicianId] = useState(NONE);
-  const [fromPlaceId, setFromPlaceId] = useState(NONE);
-  const [toPlaceId, setToPlaceId] = useState(NONE);
+  const [fromPlaceId, setFromPlaceId] = useState(start?.fromPlaceId ?? NONE);
+  const [toPlaceId, setToPlaceId] = useState(start?.toPlaceId ?? NONE);
   const [inspectionId, setInspectionId] = useState(NONE);
   const [note, setNote] = useState('');
-  const [lines, setLines] = useState<Line[]>([{ key: 0, itemId: NONE, quantity: '' }]);
-  const [nextKey, setNextKey] = useState(1);
+  const [lines, setLines] = useState<Line[]>(() =>
+    start?.lines.length ? start.lines.map((line, key) => ({ key, itemId: line.itemId, quantity: String(line.quantity) })) : [{ key: 0, itemId: NONE, quantity: '' }],
+  );
+  const [nextKey, setNextKey] = useState(() => (start?.lines.length ?? 0) + 1);
   // One key a slip: a second click or a retry posts nothing twice. A new one once it has posted.
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const [posted, setPosted] = useState<string | null>(null);
@@ -245,13 +358,16 @@ function SlipForm() {
     event.preventDefault();
     if (problem || post.isPending) return;
     try {
-      const list = await post.mutateAsync({ ...slip, inspectionId: move ? null : chosen(inspectionId), note: note.trim() || null, requestKey });
+      // Filling an ask: only a move into its own truck fills it.
+      const askId = start && move && slip.toPlaceId === start.toPlaceId ? start.askId : null;
+      const list = await post.mutateAsync({ ...slip, inspectionId: move ? null : chosen(inspectionId), note: note.trim() || null, requestKey, askId });
       setPosted(list.slips[0]?.number ?? 'It');
       setLines([{ key: nextKey, itemId: NONE, quantity: '' }]);
       setNextKey((key) => key + 1);
       setInspectionId(NONE);
       setNote('');
       setRequestKey(crypto.randomUUID());
+      onPosted?.();
     } catch {
       // The mutation holds the API's message; it is shown below.
     }
@@ -278,6 +394,19 @@ function SlipForm() {
 
   return (
     <form aria-label="Record a slip" className="bg-card grid gap-4 rounded-xl border p-4" onSubmit={(event) => void submit(event)}>
+      {start ? (
+        <Alert>
+          <AlertDescription>
+            <span className="font-medium">{start.title}.</span>
+            <span>Posting this move marks the ask filled, and the technician&apos;s phone shows it. {start.short ?? ''}</span>
+            {onStop ? (
+              <Button className="justify-self-start" onClick={onStop} size="sm" type="button" variant="outline">
+                Not now
+              </Button>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <div aria-label="What happened" className="flex flex-wrap gap-2" role="group">
         {STOCK_SLIP_KINDS.map((option) => (
           <Button aria-pressed={kind === option} key={option} onClick={() => choose(option)} size="sm" type="button" variant={kind === option ? 'default' : 'outline'}>

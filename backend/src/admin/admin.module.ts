@@ -65,6 +65,8 @@ import { VendorBillsXeroService } from './vendor-bills-xero.service';
 import { StockCountsService } from './stock-counts.service';
 import { StockSlipsController } from './stock-slips.controller';
 import { StockSlipsService } from './stock-slips.service';
+import { TruckStockController } from './truck-stock.controller';
+import { TruckStockService } from './truck-stock.service';
 import { PurchasingController } from './purchasing.controller';
 import { PurchasingService } from './purchasing.service';
 import { RequisitionFilesService } from './requisition-files.service';
@@ -139,6 +141,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     ActualVsBudgetController,
     // Before InventoryController: `inventory/slips` must not be read as an item's id.
     StockSlipsController,
+    // Before InventoryController too: `inventory/truck-asks` and `inventory/places/:id/keep` (2026-11-24).
+    TruckStockController,
     StockCountsController,
     PurchasingCodesController,
     PurchasingSetupController,
@@ -203,6 +207,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryService,
     InventoryImportService,
     StockSlipsService,
+    TruckStockService,
     StockCountsService,
     PurchasingCodesService,
     PurchasingSetupService,

@@ -3,9 +3,10 @@ import { StockCountStatus, StockPlaceKind } from '@prisma/client';
 import { stockCountTitle, type PhoneCount, type PhoneCounts, type SavePhoneCountInput, type SavePhoneCountResult } from '@texasrenters/shared';
 
 import { StockCountsService } from '../admin/stock-counts.service';
-import type { AuthenticatedUser } from '../common/auth';
+import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { phoneCatalog } from './phone-catalog';
 
 /**
  * Counting a truck from the phone (2026-11-19). The office starts the count
@@ -30,6 +31,10 @@ import { PrismaService } from '../common/prisma.service';
  * count of that line, and a send that no longer matches the line is
  * recognised as one already received, and writes nothing. Nothing here calls
  * anything billed.
+ *
+ * Found on the truck (the office, 2026-11-24): an item the count did not list
+ * is added to it with what was found, so the office sees it among the
+ * differences. Its expected number is taken at hand-in, like every line's.
  */
 
 const COUNTING: StockCountStatus[] = [StockCountStatus.OPEN, StockCountStatus.COUNTING];
@@ -48,7 +53,8 @@ export class TechnicianCountsService {
   async mine(user: AuthenticatedUser): Promise<PhoneCounts> {
     const { organizationId } = user;
     const trucks = await this.trucks(user);
-    if (!trucks.length) return { counts: [] };
+    if (!trucks.length) return { counts: [], catalog: [] };
+    const catalog = phoneCatalog(this.prisma, organizationId);
     const counts = await this.prisma.stockCount.findMany({
       where: { organizationId, status: { in: COUNTING }, placeId: { in: trucks.map((truck) => truck.id) }, OR: [{ countedById: null }, { countedById: user.id }] },
       select: {
@@ -68,6 +74,7 @@ export class TechnicianCountsService {
       take: MOST_COUNTS,
     });
     return {
+      catalog: await catalog,
       counts: counts.flatMap((count): PhoneCount[] =>
         count.place
           ? [
@@ -89,6 +96,10 @@ export class TechnicianCountsService {
     const { organizationId } = user;
     const ids = input.lines.map((line) => line.lineId);
     if (new Set(ids).size !== ids.length) throw new ApplicationError(400, 'STOCK_COUNT_LINE_TWICE', 'A line is in the count twice.');
+    const found = input.found ?? [];
+    const foundIds = found.map((item) => item.itemId);
+    if (new Set(foundIds).size !== foundIds.length) throw new ApplicationError(400, 'STOCK_COUNT_LINE_TWICE', 'An item found is in the count twice.');
+    if (!input.lines.length && !found.length) throw new ApplicationError(400, 'STOCK_COUNT_NOTHING', 'Count at least one item.');
 
     const count = await this.prisma.stockCount.findFirst({ where: { id: countId, organizationId }, select: { status: true, placeId: true, countedById: true } });
     const trucks = await this.trucks(user);
@@ -108,7 +119,28 @@ export class TechnicianCountsService {
     // A line that is no longer waiting, or is on another count of itself than the phone saw: this was received before.
     if (input.lines.some((line) => secondOf.get(line.lineId) !== line.second)) return already();
 
-    const saved = await this.counts.save(user, countId, { lines: input.lines.map((line) => ({ lineId: line.lineId, counted: line.counted })) }, input.handIn);
+    // What was found and not listed becomes a line of the count; sent again, the line is there and only takes the number.
+    const lines = input.lines.map((line) => ({ lineId: line.lineId, counted: line.counted }));
+    if (found.length) {
+      const items = await this.prisma.stockItem.findMany({
+        where: { organizationId, id: { in: foundIds }, active: true, OR: [{ lineTypeId: null }, { lineType: { keepsStock: true } }] },
+        select: { id: true, code: true },
+      });
+      if (items.length !== foundIds.length) throw new ApplicationError(400, 'STOCK_ITEM_NOT_FOUND', 'One of the items is not in the inventory, or is switched off.');
+      const listed = await this.prisma.stockCountLine.findMany({ where: { organizationId, countId, itemId: { in: foundIds }, placeId: count.placeId }, select: { itemId: true } });
+      const added = items.filter((item) => !listed.some((line) => line.itemId === item.id));
+      if (added.length) {
+        await this.prisma.stockCountLine.createMany({ data: added.map((item) => ({ organizationId, countId, itemId: item.id, placeId: count.placeId! })), skipDuplicates: true });
+        await this.prisma.auditLog.create({
+          data: { organizationId, ...auditActor(user), action: 'STOCK_COUNT_ITEMS_FOUND', entityType: 'StockCount', entityId: countId, metadata: { items: added.map((item) => item.code).join(', ') } },
+        });
+      }
+      // Only a line still waiting takes a number: one already handed in keeps what it had.
+      const now = await this.prisma.stockCountLine.findMany({ where: { organizationId, countId, itemId: { in: foundIds }, placeId: count.placeId, expectedQuantity: null }, select: { id: true, itemId: true } });
+      for (const line of now) if (!lines.some((one) => one.lineId === line.id)) lines.push({ lineId: line.id, counted: found.find((item) => item.itemId === line.itemId)!.counted });
+    }
+
+    const saved = await this.counts.save(user, countId, { lines }, input.handIn);
     return { ...(await this.mine(user)), outcome: !input.handIn ? 'saved' : saved.recounts ? 'recount' : 'handed-in', recounts: saved.recounts };
   }
 
