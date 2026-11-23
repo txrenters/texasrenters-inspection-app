@@ -716,6 +716,37 @@ describe('one order', () => {
     return render(<PurchaseOrderPage />);
   };
 
+  // The office, 2026-11-24: "Email the vendor again" opened empty for a vendor with no email saved.
+  it('emails the vendor again at the address it last went to when the vendor has none saved', () => {
+    mount(
+      orderDetail({
+        status: 'SENT',
+        vendorContact: null,
+        deliveries: [
+          { id: 'd-2', recipient: 'wrong@hill.example', status: 'FAILED', failure: 'The mail provider did not take it.', at: '2026-11-19T16:00:00.000Z', by: 'Sample Purchaser' },
+          { id: 'd-1', recipient: 'orders@hill.example', status: 'SENT', failure: null, at: '2026-11-18T16:40:00.000Z', by: 'Sample Purchaser' },
+        ],
+        can: { ...NOTHING, send: true },
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Email the vendor again' }));
+    const dialog = screen.getByRole('dialog');
+    expect((within(dialog).getByLabelText('To') as HTMLInputElement).value).toBe('orders@hill.example');
+    expect(within(dialog).getByText(/The address it was last sent to/)).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('says to type the address when the vendor has none saved and it was never sent', () => {
+    mount(orderDetail({ status: 'APPROVED', vendorContact: null, deliveries: [], can: { ...NOTHING, send: true } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send to the vendor' }));
+    const dialog = screen.getByRole('dialog');
+    expect((within(dialog).getByLabelText('To') as HTMLInputElement).value).toBe('');
+    expect(within(dialog).getByText('Hill Country Supply has no email saved. Type the address to send it to, or add it on Inventory, under Vendors, to have it filled in.')).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('To'), { target: { value: 'orders@hill.example' } });
+    expect((within(dialog).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   // One order from several requisitions (2026-11-23).
   it('carries several requisitions: each line where it goes and whose it is, and the requisitions on it', () => {
     const truck = { id: 'place-truck', name: 'Truck 1', code: 'TRK-01' };
