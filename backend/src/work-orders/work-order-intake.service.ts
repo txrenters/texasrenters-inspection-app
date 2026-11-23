@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   InspectionSource,
   InspectionStatus,
@@ -13,6 +13,7 @@ import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { workOrderHandoffSchema, type WorkOrderHandoff } from './work-order-handoff.schema';
+import { WorkOrderTriageService } from './work-order-triage.service';
 
 /**
  * The receiving window for work orders the maintenance app hands over.
@@ -42,7 +43,12 @@ const CLOSED_STATUSES = new Set(['closed', 'canceled by tenant', 'cancelled', 'c
 export class WorkOrderIntakeService {
   private readonly logger = new Logger(WorkOrderIntakeService.name);
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(WorkOrderTriageService)
+    private readonly triage?: WorkOrderTriageService,
+  ) {}
 
   async receive(user: AuthenticatedUser, body: unknown) {
     const parsed = workOrderHandoffSchema.safeParse(body);
@@ -108,6 +114,10 @@ export class WorkOrderIntakeService {
           failureMessage: null,
         },
       });
+      // Put on the technician who fits, once the sender has its answer. A
+      // cancelled or closed work order has nobody to send.
+      if (filed.inspectionId && (filed.outcome === 'created' || filed.outcome === 'updated'))
+        this.triage?.runInBackground(user, filed.inspectionId, handoff);
       return { id: filed.inspectionId, importId: staged.id, outcome: filed.outcome };
     } catch (error) {
       const refusal =

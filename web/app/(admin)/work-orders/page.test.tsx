@@ -21,6 +21,9 @@ const url = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
+// The skill-matching buttons have their own test; here they would need a
+// signed-in session and a query client the page's tests do not set up.
+vi.mock('@/components/work-order-matching-actions', () => ({ WorkOrderMatchingActions: () => null }));
 
 const DEFAULTS = { page: 1, q: '' };
 

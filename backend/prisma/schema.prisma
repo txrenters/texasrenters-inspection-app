@@ -471,6 +471,7 @@ model Organization {
   jobberVisitImports   JobberVisitImport[]
   jobberOutboundTasks  JobberOutboundTask[]
   workOrderImports     WorkOrderImport[]
+  workOrderTriages     WorkOrderTriage[]
   inspectionImportJobs InspectionImportJob[]
   clientErrorReports   ClientErrorReport[]
   tenants              PropertywareTenant[]
@@ -717,6 +718,7 @@ model UserProfile {
   skillGrants          TechnicianSkillGrant[]   @relation("TechnicianSkillHolder")
   skillGrantsIssued    TechnicianSkillGrant[]   @relation("TechnicianSkillGrantedBy")
   skillGrantsRevoked   TechnicianSkillGrant[]   @relation("TechnicianSkillRevokedBy")
+  workOrderTriagesPicked WorkOrderTriage[]      @relation("WorkOrderTriageTechnician")
   tbpPlansPublished    TbpQuarterPlan[]         @relation("TbpPlanPublishedBy")
   tbpPlanStops         TbpQuarterPlanStop[]     @relation("TbpStopTechnician")
   tbpPlanDays          TbpQuarterPlanDay[]      @relation("TbpPlanDayTechnician")
@@ -1425,6 +1427,7 @@ model Inspection {
   workOrderKey               String?
   workOrderNumber            Int?
   workOrderImports           WorkOrderImport[]
+  workOrderTriage            WorkOrderTriage?
   /// The Jobber visit this inspection was created from, and the job it belongs
   /// to. Null for anything booked here.
   jobberVisitId              String?
@@ -4028,6 +4031,73 @@ enum SkillRequirementLevel {
   PREFERRED
 }
 
+/// How far a technician is trusted with a skill they hold. Ranked in this
+/// order by the work-order matcher; see `rankWorkOrderTechnicians`.
+enum TechnicianSkillLevel {
+  FULL
+  /// Minor work only, or only under a stated condition. Skipped for a major job.
+  LIMITED
+  /// Held, but chosen only when nobody holds the skill at a better level.
+  NEEDS_IMPROVEMENT
+}
+
+/// What the work-order matcher made of one work order, and who it picked.
+enum WorkOrderTriageOutcome {
+  /// The best-fit technician was assigned.
+  ASSIGNED
+  /// Trial mode (`WORK_ORDER_AUTO_ASSIGN` not "assign"): who would have been
+  /// assigned. Nobody is assigned, notified or pushed to Jobber.
+  SUGGESTED
+  /// Somebody was already on the visit; the reading is kept, nobody is moved.
+  ALREADY_ASSIGNED
+  /// Nobody holds every skill the job needs at a level it allows.
+  NO_FIT
+  /// The AI was not sure enough of what the job is to send anyone.
+  LOW_CONFIDENCE
+  /// The AI could not be asked, did not answer, or answered outside the list.
+  AI_FAILED
+  /// Today's ceiling of AI readings was spent.
+  DAILY_LIMIT
+  /// No skills are set up yet, so there is nothing to match on.
+  NOT_CONFIGURED
+}
+
+/// The AI's reading of a work order -- which skills from the catalog it needs
+/// and whether it is a minor or a major job -- and the ranking that followed.
+///
+/// One row per visit. `inputHash` is the work order text the reading was made
+/// from: a re-send with the same text is not read again, so a work order costs
+/// one AI call however often the maintenance app sends it.
+model WorkOrderTriage {
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @db.Uuid
+  inspectionId   String                 @unique @db.Uuid
+  inputHash      String
+  promptVersion  String
+  outcome        WorkOrderTriageOutcome
+  /// The catalog keys the AI chose, already checked against the catalog.
+  skillKeys      String[]
+  /// "MINOR" or "MAJOR"; null when there was no reading.
+  scope          String?
+  /// 0-100, as the AI gave it.
+  confidence     Int?
+  /// One sentence: what the AI understood the problem to be.
+  summary        String?
+  /// The office-facing why: who was picked and on what, or why nobody was.
+  reason         String
+  technicianId   String?                @db.Uuid
+  /// Every technician considered, with the tier and level that placed them.
+  ranking        Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection   Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  technician   UserProfile? @relation("WorkOrderTriageTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, outcome])
+}
+
 /// A capability a technician can hold -- "HVAC certified", "Lead-safe".
 ///
 /// A catalog row rather than an enum, because these are the office's words and
@@ -4076,6 +4146,11 @@ model TechnicianSkillGrant {
   revokedAt   DateTime?
   revokedById String?   @db.Uuid
   note        String?
+  /// How far the office trusts this person with the work, from the Technicians'
+  /// Scope of Work sheet: a plain Y is FULL, a Y with a limit ("MINOR REPAIRS
+  /// ONLY") is LIMITED, a Y marked "NEEDS IMPROVEMENT" is NEEDS_IMPROVEMENT. An N
+  /// is no grant at all. The work-order matcher ranks on it.
+  level       TechnicianSkillLevel @default(FULL)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

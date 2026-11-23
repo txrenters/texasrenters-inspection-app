@@ -58,7 +58,7 @@ import {
   type AdminWorkOrder,
 } from '@texasrenters/shared';
 
-import type { AuthenticatedUser } from '../common/auth';
+import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { eraseInspectionRows } from '../common/erase-inspection';
@@ -2221,7 +2221,29 @@ export class AdminService {
     const view = handoff ? workOrderView(handoff.payload, handoff.lastReceivedAt) : null;
     if (!view)
       throw new ApplicationError(404, 'WORK_ORDER_NOT_FOUND', 'This visit has no work order from the maintenance app.');
-    return view;
+    const triage = await this.prisma.workOrderTriage.findFirst({
+      where: { organizationId: user.organizationId, inspectionId: id },
+      select: { outcome: true, reason: true, summary: true, skillKeys: true, scope: true, confidence: true, updatedAt: true },
+    });
+    if (!triage) return { ...view, matching: null };
+    const labels = triage.skillKeys.length
+      ? await this.prisma.technicianSkill.findMany({
+          where: { organizationId: user.organizationId, key: { in: triage.skillKeys } },
+          select: { key: true, label: true },
+        })
+      : [];
+    return {
+      ...view,
+      matching: {
+        outcome: triage.outcome,
+        reason: triage.reason,
+        summary: triage.summary,
+        skills: triage.skillKeys.map((key) => labels.find((skill) => skill.key === key)?.label ?? key),
+        scope: triage.scope === 'MINOR' || triage.scope === 'MAJOR' ? triage.scope : null,
+        confidence: triage.confidence,
+        matchedAt: triage.updatedAt.toISOString(),
+      },
+    };
   }
 
   /**
@@ -4364,6 +4386,69 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return outcome.assignment;
+  }
+
+  /**
+   * A work order put on the technician the matcher picked, as it arrives.
+   *
+   * The office chose this (2026-11-24): assigned and notified at once, moved
+   * by hand afterwards if it is wrong. So it behaves as `assign` does -- the
+   * audit row, the Jobber push, the realtime event and the email -- except that
+   * nobody pressed anything: `assignedById` is null, as for an assignment the
+   * Jobber sync copies, and the audit row names the sender and the reason.
+   *
+   * Never moves anyone. A visit the office has already put someone on keeps
+   * them, and so does one that is no longer scheduled; the answer is false.
+   */
+  async autoAssignWorkOrder(
+    actor: AuthenticatedUser,
+    inspectionId: string,
+    technicianId: string,
+    metadata: Prisma.InputJsonObject,
+  ): Promise<boolean> {
+    const assigned = await this.prisma.$transaction(async (tx) => {
+      const inspection = await tx.inspection.findFirst({
+        where: { id: inspectionId, organizationId: actor.organizationId },
+        select: { status: true },
+      });
+      if (inspection?.status !== InspectionStatus.SCHEDULED) return false;
+      const current = await tx.inspectionAssignment.findFirst({
+        where: { inspectionId, isCurrent: true },
+        select: { id: true },
+      });
+      if (current) return false;
+      await this.requireTechnician(actor.organizationId, technicianId, tx);
+      const assignment = await tx.inspectionAssignment.create({
+        data: { inspectionId, technicianId, assignedById: null, reason: 'Matched to the work order' },
+        select: { id: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: actor.organizationId,
+          ...auditActor(actor),
+          action: 'WORK_ORDER_AUTO_ASSIGNED',
+          entityType: 'Inspection',
+          entityId: inspectionId,
+          metadata: { assignmentId: assignment.id, technicianId, ...metadata },
+        },
+      });
+      if (getJobberConfig().pushEditsEnabled)
+        await requestVisitPush(tx, {
+          organizationId: actor.organizationId,
+          inspectionId,
+          kind: JobberOutboundKind.VISIT_ASSIGN,
+          requestedById: null,
+        });
+      return true;
+    }, ADMIN_TRANSACTION_OPTIONS);
+    if (!assigned) return false;
+    this.technicianEvents?.publish(technicianId, inspectionId, 'ASSIGNED');
+    this.notifyAssignmentByEmail(actor.organizationId, inspectionId, technicianId);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: actor.organizationId,
+    });
+    return true;
   }
 
   async reassign(user: AuthenticatedUser, inspectionId: string, input: AssignmentDto) {

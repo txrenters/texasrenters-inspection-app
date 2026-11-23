@@ -151,12 +151,23 @@ Then an `Inspection` with `source = WORK_ORDER`:
 - `internalNotes` carries what the technician needs: number, category, urgency,
   occupancy, tenant contact, vendors, the description, and links back to the
   work order and the Jobber job.
-- Nobody is assigned. The office does that, as for any visit. The audit row
-  names the API client as the actor.
+- The audit row names the API client as the actor.
+- After the answer is sent, the work order is matched to a technician by skill
+  (`WorkOrderTriageService`): the AI reads the category, description, notes and
+  messages summary and names job types from the office's Technicians' Scope of
+  Work sheet, minor or major; `rankWorkOrderTechnicians` picks the person (N
+  never; a plain Y before a limited Y before "needs improvement"; limited never
+  on a major job). One AI reading per work order text, under
+  `WORK_ORDER_TRIAGE_DAILY_CEILING` (300).
+- **Trial by default.** Unless `WORK_ORDER_AUTO_ASSIGN=assign`, the pick is only
+  recorded ("Would assign ...", shown on the work order dialog): nobody is
+  assigned, notified or pushed to Jobber. With `assign`, the visit is assigned
+  as the office would, and moved by hand if wrong.
 
 ## Not done here, on purpose
 
-- No technician assignment and no Jobber write. Scheduling is the office's.
+- No Jobber write from the hand-off itself, and no assignment unless
+  `WORK_ORDER_AUTO_ASSIGN=assign` (above). Scheduling the day is the office's.
 - No visit for an outside customer (Crystal Creek Air at a non-Propertyware
   home); refused with `WORK_ORDER_OUTSIDE_PROPERTY` until there is a record to
   hang it on.

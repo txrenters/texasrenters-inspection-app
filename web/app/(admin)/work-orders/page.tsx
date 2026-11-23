@@ -11,6 +11,7 @@ import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { WorkOrderDialog } from '@/components/work-order-dialog';
+import { WorkOrderMatchingActions } from '@/components/work-order-matching-actions';
 import { EMPTY, formatScheduledDate, humanize } from '@/lib/format';
 import { useInspections } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
@@ -116,6 +117,7 @@ export default function WorkOrdersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Work orders"
+        actions={<WorkOrderMatchingActions />}
         description="Repair and pest-control work orders handed over by the maintenance app for the in-house crews."
       />
 
