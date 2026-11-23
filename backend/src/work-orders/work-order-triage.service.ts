@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
 import { PrismaService } from '../common/prisma.service';
 import { withTenant } from '../database/tenant-context';
+import { crewFilter } from './work-order-crew';
 import { askAi, jsonIn } from '../technician/ai-text';
 import { workOrderHandoffSchema, type WorkOrderHandoff } from './work-order-handoff.schema';
 import {
@@ -367,10 +368,13 @@ export class WorkOrderTriageService {
   private async rank(organizationId: string, day: Date, skills: MatchSkill[], scope: JobScope) {
     const dayStart = new Date(`${day.toISOString().slice(0, 10)}T00:00:00.000Z`);
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    // The office's work-order crew, when it has picked one; everyone otherwise.
+    const crew = await crewFilter(this.prisma, organizationId);
     const technicians = await this.prisma.userProfile.findMany({
       where: {
         isActive: true,
         memberships: { some: { organizationId, role: UserRole.INSPECTION_TECHNICIAN } },
+        ...(crew ? { id: { in: crew } } : {}),
       },
       select: { id: true, displayName: true },
     });

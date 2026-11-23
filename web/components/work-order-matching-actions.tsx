@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { WorkOrderCrewButton } from '@/components/work-order-crew-dialog';
 import { api } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
 import { humanize } from '@/lib/format';
@@ -84,6 +85,7 @@ export function WorkOrderMatchingActions() {
           {status.data.live ? 'Auto-assign on' : 'Auto-assign trial: suggests only'}
         </Badge>
       ) : null}
+      <WorkOrderCrewButton />
       <Button disabled={importSheet.isPending} onClick={() => importSheet.mutate(false)} size="sm" variant="outline">
         <SheetIcon />
         Load skills sheet
