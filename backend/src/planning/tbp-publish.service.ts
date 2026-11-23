@@ -10,7 +10,12 @@ import {
   TbpPlanStatus,
   TbpStopStatus,
 } from '@prisma/client';
-import { withInspectionLink } from '@texasrenters/shared';
+import {
+  detailsNamingInspection,
+  managementPlanExcludesHvac,
+  tbpServicesLineFromTenancy,
+  withInspectionLink,
+} from '@texasrenters/shared';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
@@ -305,6 +310,7 @@ export class TbpPublishService {
   ): Promise<'UNSCHEDULED' | 'FAILED'> {
     if (!stop.propertywareBuildingId || !stop.visitTitle)
       return this.fail(stop.id, 'NOT_ROUTED', 'This visit has no property or no title to book with.');
+    stop = await this.occupiedWhereHvacIsExcluded(user, planId, stop);
 
     /**
      * Already in Jobber's Unscheduled list, or on its way there: unscheduled
@@ -381,6 +387,7 @@ export class TbpPublishService {
     stop: PublishableStop,
   ): Promise<'PUBLISHED' | 'ADOPTED' | 'WAITING' | 'FAILED'> {
     if (!stop.propertywareBuildingId) return this.fail(stop.id, 'NOT_ROUTED', 'This stop has no property.');
+    stop = await this.occupiedWhereHvacIsExcluded(user, planId, stop);
 
     // Unscheduled here and not in Jobber's Unscheduled list yet: Jobber still
     // has it on its old day, so it is published once it is there.
@@ -627,6 +634,73 @@ export class TbpPublishService {
       select: { id: true },
     });
     return existing?.id ?? null;
+  }
+
+  /**
+   * A visit about to be booked as an HVAC inspection for a BX or MX tenancy,
+   * made the occupied inspection it is.
+   *
+   * BX and MX never take the HVAC inspection (the office, 2026-11-04). The
+   * planner applies that when it writes a stop, and a stop is written long
+   * before it is booked: ten BX visits of Q4 2026 were decided HVAC before the
+   * office gave the rule, and every one was walked as an HVAC inspection, four
+   * of them after the rule was live (the office, 2026-11-24: "that should not
+   * happen"). So the rule is asked once more here, at the last moment a visit
+   * is still only a line in a plan -- booking is what makes its kind final
+   * (`BOOKED_KIND_FIXED`).
+   *
+   * The stop is corrected rather than refused: a refusal would leave a tenancy
+   * unvisited over a word. Its Details keep what was written, with the
+   * inspection on the services line renamed, as a coordinator's change of kind
+   * does.
+   */
+  private async occupiedWhereHvacIsExcluded<Stop extends PublishableStop>(
+    user: AuthenticatedUser,
+    planId: string,
+    stop: Stop,
+  ): Promise<Stop> {
+    if (stop.inspectionType !== 'HVAC') return stop;
+    const row = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: { id: stop.id, organizationId: user.organizationId },
+      select: {
+        hvacFilterSizes: true,
+        onSiteMinutesOverriddenAt: true,
+        plan: { select: { occupiedVisitMinutes: true } },
+        tenant: { select: { managementPlan: true, hvacPlan: true, hvacFilterLocation: true } },
+      },
+    });
+    if (!row || !managementPlanExcludesHvac(row.tenant.managementPlan)) return stop;
+
+    const visitDetails = stop.visitDetails
+      ? detailsNamingInspection(
+          stop.visitDetails,
+          'OCCUPIED',
+          tbpServicesLineFromTenancy({ ...row.tenant, hvacFilterSizes: row.hvacFilterSizes }, 'OCCUPIED'),
+        )
+      : stop.visitDetails;
+    await this.prisma.tbpQuarterPlanStop.update({
+      where: { id: stop.id },
+      data: {
+        inspectionType: 'OCCUPIED',
+        inspectionTypeReason: 'MANAGEMENT_PLAN_WITHOUT_HVAC',
+        inspectionTypeNeedsReview: false,
+        inspectionTypeOverriddenAt: null,
+        visitDetails,
+        ...(row.onSiteMinutesOverriddenAt ? {} : { onSiteMinutes: row.plan.occupiedVisitMinutes }),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_STOP_TYPE_SET',
+        entityType: 'TbpQuarterPlanStop',
+        entityId: stop.id,
+        metadata: { planId, from: 'HVAC', to: 'OCCUPIED', reason: 'MANAGEMENT_PLAN_WITHOUT_HVAC', at: 'PUBLISH' },
+      },
+    });
+    this.logger.warn(`Stop ${stop.id} was an HVAC inspection for a BX or MX tenancy; booked as an occupied inspection.`);
+    return { ...stop, inspectionType: 'OCCUPIED', visitDetails };
   }
 
   private async fail(stopId: string, code: string, message: string) {

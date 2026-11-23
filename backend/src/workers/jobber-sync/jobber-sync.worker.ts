@@ -13,7 +13,7 @@ import {
   TbpStopStatus,
 } from '@prisma/client';
 import { InspectionType } from '@prisma/client';
-import { withoutVisitServices } from '@texasrenters/shared';
+import { managementPlanExcludesHvac, withoutVisitServices } from '@texasrenters/shared';
 
 import {
   insertInspection,
@@ -943,6 +943,29 @@ export class JobberSyncWorker {
       return;
     }
     /**
+     * A benefit-package visit naming an HVAC inspection, for a BX or MX tenancy:
+     * an occupied inspection.
+     *
+     * BX and MX never take the HVAC inspection, even "On our AC Plan" (the
+     * office, 2026-11-04). The planner knows it, but a visit reaches here by
+     * its words alone, and the words on ten BX visits of Q4 2026 said "HVAC
+     * Inspection" -- every one was walked as that (2026-11-24: "that should not
+     * happen"). The benefit package is the wrapper and its inspection follows
+     * the plan, so the plan settles it here too. And such a visit booking both
+     * is the occupied inspection alone, not two jobs.
+     *
+     * Only a benefit-package visit. An HVAC inspection the office names in a
+     * title of its own -- "Inspect AC" on a work order -- is work somebody
+     * asked for, not the package's, and comes in as it is named.
+     */
+    const hvacExcluded =
+      (packaged === InspectionType.HVAC || paired !== null) &&
+      (await this.managementPlanWithoutHvac(organizationId, link.propertywareBuildingId));
+    if (hvacExcluded)
+      this.logger.warn(`Jobber visit ${visit.id} names an HVAC inspection for a BX or MX tenancy; imported as occupied.`);
+    const bookedType = hvacExcluded ? InspectionType.OCCUPIED : type.inspectionType;
+    const pair = hvacExcluded ? null : paired;
+    /**
      * Booked by hand already: the office does not wait for a release.
      *
      * The first visit to book both jobs (2026-10-13) was refused for days, so
@@ -958,14 +981,14 @@ export class JobberSyncWorker {
      * Refused with the reason, which re-reads on every sync: cancel the
      * hand-made one and the visit comes in.
      */
-    if (paired) {
+    if (pair) {
       const day = dayOf(visit.startAt!);
       const week = 7 * 24 * 60 * 60 * 1000;
       const byHand = await this.prisma.inspection.findFirst({
         where: {
           organizationId,
           propertywareBuildingId: link.propertywareBuildingId,
-          inspectionType: { in: [paired.primary, paired.companion] },
+          inspectionType: { in: [pair.primary, pair.companion] },
           jobberVisitId: null,
           jobberCompanionOfId: null,
           status: { not: InspectionStatus.CANCELLED },
@@ -993,11 +1016,11 @@ export class JobberSyncWorker {
           buildingId: link.propertywareBuildingId!,
           unitId: link.propertywareUnitId,
           leaseId: link.propertywareLeaseId,
-          inspectionType: type.inspectionType,
+          inspectionType: bookedType,
           // Only for the off-cycle types — see allowsTechnicianCapture. Without
           // it these are refused outright on a property with no approved plan,
           // which is currently every property in this portfolio.
-          allowTechnicianAreaCapture: allowsTechnicianCapture(type.inspectionType),
+          allowTechnicianAreaCapture: allowsTechnicianCapture(bookedType),
           scheduledAt: dayOf(visit.startAt!),
           scheduledStartAt: visitWindow(visit).start,
           scheduledEndAt: visitWindow(visit).end,
@@ -1050,7 +1073,7 @@ export class JobberSyncWorker {
                 id: inspection.id,
                 propertywareBuildingId: link.propertywareBuildingId,
                 propertywareUnitId: link.propertywareUnitId,
-                inspectionType: type.inspectionType,
+                inspectionType: bookedType,
                 scheduledAt: dayOf(visit.startAt!),
               },
             });
@@ -1064,7 +1087,7 @@ export class JobberSyncWorker {
             metadata: {
               jobberVisitId: visit.id,
               jobberJobId: visit.job?.id ?? null,
-              inspectionType: type.inspectionType,
+              inspectionType: bookedType,
               areasInspected: plan.scopedAreas.length,
               ...(rebookOf ? { answeredRescheduleRequest: rebookOf } : {}),
             },
@@ -1079,14 +1102,14 @@ export class JobberSyncWorker {
          * answers.
          */
         let companionId: string | null = null;
-        if (paired) {
+        if (pair) {
           const companionPlan = await resolveInspectionPlan(tx, {
             organizationId,
             buildingId: link.propertywareBuildingId!,
             unitId: link.propertywareUnitId,
             leaseId: link.propertywareLeaseId,
-            inspectionType: paired.companion,
-            allowTechnicianAreaCapture: allowsTechnicianCapture(paired.companion),
+            inspectionType: pair.companion,
+            allowTechnicianAreaCapture: allowsTechnicianCapture(pair.companion),
             scheduledAt: dayOf(visit.startAt!),
             scheduledStartAt: visitWindow(visit).start,
             scheduledEndAt: visitWindow(visit).end,
@@ -1117,7 +1140,7 @@ export class JobberSyncWorker {
               metadata: {
                 jobberVisitId: visit.id,
                 jobberJobId: visit.job?.id ?? null,
-                inspectionType: paired.companion,
+                inspectionType: pair.companion,
                 companionOf: inspection.id,
                 areasInspected: companionPlan.scopedAreas.length,
               },
@@ -2002,6 +2025,15 @@ export class JobberSyncWorker {
       });
     });
     result.assigned += 1;
+  }
+
+  /** Whether a tenancy at this building is on BX or MX, the plans that never take the HVAC inspection. */
+  private async managementPlanWithoutHvac(organizationId: string, propertywareBuildingId: string): Promise<boolean> {
+    const tenancies = await this.prisma.propertywareTenant.findMany({
+      where: { organizationId, propertywareBuildingId, isActive: true },
+      select: { managementPlan: true },
+    });
+    return tenancies.some((tenancy) => managementPlanExcludesHvac(tenancy.managementPlan));
   }
 
   private async reject(

@@ -98,10 +98,17 @@ function includesHvac(plan: string | null): boolean {
  * Whether the management plan never takes the HVAC inspection: BX and MX.
  *
  * The plan's own name, so "BX Plan" counts and "BXL" would not.
+ *
+ * Exported because the rule is not the planner's alone. Ten BX visits of Q4
+ * 2026 were HVAC inspections: decided before the office gave this rule, then
+ * published, and nothing that books a visit asked again (2026-11-24). So
+ * everything that makes a benefit-package visit an inspection asks here.
  */
-function excludesHvac(plan: string | null): boolean {
-  return /^[bm]x\b/.test(planName(plan));
+export function managementPlanExcludesHvac(plan: string | null | undefined): boolean {
+  return /^[bm]x\b/.test(planName(plan ?? null));
 }
+
+const excludesHvac = managementPlanExcludesHvac;
 
 function planName(plan: string | null): string {
   return (plan ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/ plan$/, '');
