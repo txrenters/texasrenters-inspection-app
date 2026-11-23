@@ -19,6 +19,7 @@ import {
   insertInspection,
   resolveInspectionPlan,
 } from '../../admin/inspection-creation';
+import { followJobber } from '../../admin/actual-vs-budget-follow-jobber';
 import { CacheInvalidationService } from '../../cache/cache-invalidation.service';
 import { businessDate } from '../../common/business-day';
 import { ApplicationError } from '../../common/errors';
@@ -305,9 +306,10 @@ export class JobberSyncWorker {
         409,
       );
 
+    const startedAt = new Date();
     await this.prisma.jobberConnection.update({
       where: { organizationId },
-      data: { lastSyncStartedAt: new Date(), lastSyncError: null },
+      data: { lastSyncStartedAt: startedAt, lastSyncError: null },
     });
 
     try {
@@ -389,6 +391,23 @@ export class JobberSyncWorker {
             reason: error instanceof Error ? error.message : String(error),
           }),
         );
+
+      // A row the office typed in Actual vs Budget for a day still to come, for a job Jobber has moved since, goes
+      // where Jobber has it now (2026-11-23). Only after the rolling window was read to the end: the visits it did not read are the ones
+      // Jobber no longer has, and a backfill's slice says nothing about where a job is now. Nor does it fail the run.
+      if (!over && !result.truncated)
+        await followJobber(this.prisma, organizationId, { since: startedAt, to: businessDate(new Date(window.startBefore)) })
+          .then((followed) => {
+            if (followed.moved || followed.folded || followed.failed)
+              this.logger.log({ event: 'revenue_rows_followed_jobber', correlationId, ...followed });
+          })
+          .catch((error) =>
+            this.logger.warn({
+              event: 'revenue_rows_follow_failed',
+              correlationId,
+              reason: error instanceof Error ? error.message : String(error),
+            }),
+          );
 
       await this.prisma.jobberConnection.update({
         where: { organizationId },
