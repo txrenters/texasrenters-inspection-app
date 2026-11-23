@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   tbpInspectionFor,
   detailsNamingInspection,
+  managementPlanExcludesHvac,
   tbpServicesLine,
   unitFilterSizes,
   tbpServicesLineFromTenancy,
@@ -98,6 +99,13 @@ describe('which inspection a benefit-package visit is', () => {
 
   it('does not read a plan that only starts with the letters as BX or MX', () => {
     expect(tbpInspectionFor(4, plan('BXL', 'On our AC Plan'))).toMatchObject({ inspectionType: 'HVAC' });
+  });
+
+  /** Asked by everything that books a benefit-package visit, not the planner alone (2026-11-24). */
+  it('says which management plans never take the HVAC inspection', () => {
+    for (const name of ['BX', 'MX', 'bx', ' BX Plan ', 'MX plan']) expect(managementPlanExcludesHvac(name)).toBe(true);
+    for (const name of ['BXL', 'Premium', 'Premium (w/o HVAC)', 'Basic', '', null, undefined])
+      expect(managementPlanExcludesHvac(name)).toBe(false);
   });
 
   it('flags Premium with no HVAC plan recorded rather than guessing', () => {

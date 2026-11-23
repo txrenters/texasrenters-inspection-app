@@ -40,6 +40,11 @@ interface StopRow {
   inspectionType: InspectionType;
   visitTitle: string | null;
   visitDetails: string | null;
+  /** Read only for an HVAC stop, to ask whether its tenancy takes the HVAC inspection at all. */
+  hvacFilterSizes: string[];
+  onSiteMinutesOverriddenAt: Date | null;
+  plan: { occupiedVisitMinutes: number };
+  tenant: { managementPlan: string | null; hvacPlan: string | null; hvacFilterLocation: string | null };
 }
 
 const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): StopRow => ({
@@ -57,6 +62,10 @@ const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): 
     'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
     'Instruction for completion\n• Note the size of any filters that were not replaced.',
   ].join('\n\n'),
+  hvacFilterSizes: ['20x25x1'],
+  onSiteMinutesOverriddenAt: null,
+  plan: { occupiedVisitMinutes: 30 },
+  tenant: { managementPlan: 'Premium', hvacPlan: 'On our AC Plan', hvacFilterLocation: null },
   ...overrides,
 });
 
@@ -129,6 +138,7 @@ const build = (
       updateMany: stopUpdateMany,
     },
     tbpQuarterPlan: { updateMany: planUpdateMany, update: planUpdate },
+    auditLog: { create: auditCreate },
     inspection: {
       findFirst: jest
         .fn()
@@ -433,6 +443,92 @@ describe('publishing the quarter’s kinds of visit', () => {
   });
 
   /** The phone shows the Details before the visit exists in Jobber, and the booking sends what is on the inspection. */
+  /**
+   * Ten BX visits of Q4 2026 were decided HVAC before the office said BX and MX
+   * never take the HVAC inspection, and all ten were walked as one -- four after
+   * the rule was live, because nothing asked again once a stop was written (the
+   * office, 2026-11-24: "that should not happen").
+   */
+  describe('an HVAC stop for a BX or MX tenancy', () => {
+    const hvacDetails = [
+      'Filter Change: 20x25x4 MEDIA + Pest Control + HVAC Inspection',
+      'Management Plan: BX',
+      'Instruction for completion\n• Note the size of any filters that were not replaced.',
+    ].join('\n\n');
+    const bxStop = (overrides: Partial<StopRow> = {}) =>
+      aStop('s1', 1, {
+        inspectionType: InspectionType.HVAC,
+        visitDetails: hvacDetails,
+        tenant: { managementPlan: 'BX', hvacPlan: 'On our AC Plan', hvacFilterLocation: null },
+        ...overrides,
+      });
+
+    it.each(['BX', 'MX', 'BX Plan'])('is booked as an occupied inspection (%s)', async (managementPlan) => {
+      const { service, stopUpdate, auditCreate } = build([
+        bxStop({ tenant: { managementPlan, hvacPlan: 'On our AC Plan', hvacFilterLocation: null } }),
+      ]);
+
+      const summary = await service.publish(USER, 'plan-1');
+
+      expect(summary).toMatchObject({ published: 1, failed: 0 });
+      expect(creation.resolveInspectionPlan.mock.calls[0][1].inspectionType).toBe(InspectionType.OCCUPIED);
+      // The stop says what was booked, and why, with the visit's length an occupied one's.
+      expect(stopUpdate.mock.calls[0][0].data).toMatchObject({
+        inspectionType: InspectionType.OCCUPIED,
+        inspectionTypeReason: 'MANAGEMENT_PLAN_WITHOUT_HVAC',
+        inspectionTypeOverriddenAt: null,
+        onSiteMinutes: 30,
+      });
+      expect(auditCreate.mock.calls[0][0].data).toMatchObject({
+        action: 'TBP_PLAN_STOP_TYPE_SET',
+        entityId: 's1',
+        metadata: { from: 'HVAC', to: 'OCCUPIED', reason: 'MANAGEMENT_PLAN_WITHOUT_HVAC' },
+      });
+    });
+
+    it('sends Jobber Details that name the occupied inspection, and keeps the rest of them', async () => {
+      const { service } = build([bxStop()]);
+
+      await service.publish(USER, 'plan-1');
+
+      const details = creation.insertInspection.mock.calls[0][2].jobberVisitDetails as string;
+      expect(details).toContain('Filter Change: 20x25x4 MEDIA + Pest Control + Occupied Inspection');
+      expect(details).toContain('Management Plan: BX');
+      expect(details).not.toContain('HVAC Inspection');
+    });
+
+    it('keeps a length a coordinator set', async () => {
+      const { service, stopUpdate } = build([bxStop({ onSiteMinutesOverriddenAt: new Date('2026-10-01T00:00:00.000Z') })]);
+
+      await service.publish(USER, 'plan-1');
+
+      expect(stopUpdate.mock.calls[0][0].data).not.toHaveProperty('onSiteMinutes');
+    });
+
+    it('goes to Jobber’s Unscheduled list as an occupied inspection when it has no day', async () => {
+      const { service, stopUpdate } = build([bxStop({ scheduledOn: null, assignedTechnicianId: null })]);
+
+      await service.publish(USER, 'plan-1');
+
+      expect(stopUpdate.mock.calls[0][0].data).toMatchObject({ inspectionType: InspectionType.OCCUPIED });
+      expect(creation.insertInspection).not.toHaveBeenCalled();
+    });
+
+    it('leaves every other plan’s HVAC stop an HVAC inspection', async () => {
+      const { service, stopUpdate } = build([
+        aStop('s1', 1, {
+          inspectionType: InspectionType.HVAC,
+          tenant: { managementPlan: 'BXL', hvacPlan: 'On our AC Plan', hvacFilterLocation: null },
+        }),
+      ]);
+
+      await service.publish(USER, 'plan-1');
+
+      expect(creation.resolveInspectionPlan.mock.calls[0][1].inspectionType).toBe(InspectionType.HVAC);
+      expect(stopUpdate.mock.calls.some(([call]) => 'inspectionType' in call.data)).toBe(false);
+    });
+  });
+
   it('writes the visit’s title and Details on the inspection, linked back to it', async () => {
     const { service, inspectionUpdate } = build([aStop('s1', 1)]);
 

@@ -22,6 +22,7 @@ import {
   carryForwardOrder,
   detailsNamingInspection,
   isTbpZone,
+  managementPlanExcludesHvac,
   monthOfPlan,
   previousQuarter,
   quarterLabel,
@@ -925,7 +926,9 @@ export class TbpPlanService {
    * A coordinator deciding a stop is an HVAC or an occupied inspection.
    *
    * The rule reads a tenant report typed by hand, and some tenancies are
-   * flagged for exactly this -- a BX plan "On our AC Plan", say. The choice
+   * flagged for exactly this -- a Premium plan whose HVAC plan is blank, say.
+   * Not a BX or MX tenancy's HVAC inspection, though: that one is the office's
+   * rule, not a reading of the report, and is refused. The choice
    * sticks through regeneration, and the Details follow it: Details a
    * coordinator wrote keep their words, with only the inspection on their
    * services line renamed. A length a coordinator set stays. The day it sits on
@@ -955,6 +958,14 @@ export class TbpPlanService {
         409,
         'STOP_NOT_EDITABLE',
         'Only a stop in a draft plan that has not been published or excluded can change type.',
+      );
+    // Not a coordinator's to choose: BX and MX never take the HVAC inspection
+    // (the office, 2026-11-04, and again 2026-11-24: "that should not happen").
+    if (inspectionType === 'HVAC' && managementPlanExcludesHvac(stop.tenant.managementPlan))
+      throw new ApplicationError(
+        422,
+        'MANAGEMENT_PLAN_WITHOUT_HVAC',
+        'BX and MX properties do not get an HVAC inspection: this visit stays an occupied inspection.',
       );
 
     const reason: TbpInspectionReason = 'SET_BY_COORDINATOR';
@@ -1300,8 +1311,13 @@ export class TbpPlanService {
       : null;
 
     // A coordinator who chose the type decided it; the rule does not get to
-    // undo that on the next run.
-    const decided = existing?.inspectionTypeOverriddenAt
+    // undo that on the next run. Except an HVAC inspection chosen for a BX or
+    // MX tenancy, which nobody may choose: the rule takes it back.
+    const hvacAgainstPlan =
+      Boolean(existing?.inspectionTypeOverriddenAt) &&
+      existing?.inspectionType === 'HVAC' &&
+      managementPlanExcludesHvac(tenant.managementPlan);
+    const decided = existing?.inspectionTypeOverriddenAt && !hvacAgainstPlan
       ? {
           inspectionType: existing.inspectionType as TbpInspectionType,
           reason: 'SET_BY_COORDINATOR' as const,
@@ -1338,6 +1354,7 @@ export class TbpPlanService {
       inspectionType: decided.inspectionType,
       inspectionTypeReason: decided.reason,
       inspectionTypeNeedsReview: decided.needsReview,
+      ...(hvacAgainstPlan ? { inspectionTypeOverriddenAt: null } : {}),
       previousTechnicianId: context.previousTechnicianId,
       officeDetails: context.officeDetails,
       ...(existing?.visitTitleOverriddenAt

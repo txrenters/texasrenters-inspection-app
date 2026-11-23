@@ -237,6 +237,7 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
       visitDetails: string | null;
       visitDetailsOverriddenAt: Date | null;
       onSiteMinutesOverriddenAt: Date | null;
+      managementPlan: string;
     }> = {},
   ) => {
     const stopUpdate = jest.fn((args: { data: Record<string, unknown> }) => Promise.resolve({ id: 's1', ...args.data }));
@@ -249,13 +250,13 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
           status: stop.status ?? TbpStopStatus.PLANNED,
           inspectionId: stop.inspectionId ?? null,
           inspectionType: InspectionType.OCCUPIED,
-          officeDetails: stop.officeDetails ?? 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection (BX Plan)',
+          officeDetails: stop.officeDetails ?? 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection (Basic Plan)',
           visitDetails: stop.visitDetails ?? null,
           visitDetailsOverriddenAt: stop.visitDetailsOverriddenAt ?? null,
           onSiteMinutesOverriddenAt: stop.onSiteMinutesOverriddenAt ?? null,
           hvacFilterSizes: ['16x25x1'],
           plan: { status: stop.planStatus ?? TbpPlanStatus.DRAFT, occupiedVisitMinutes: 30, hvacVisitMinutes: 45 },
-          tenant: { ...tenancy('t1', '19412 Lookalike Bridge Ln'), managementPlan: 'BX' },
+          tenant: { ...tenancy('t1', '19412 Lookalike Bridge Ln'), managementPlan: stop.managementPlan ?? 'Basic' },
         }),
         update: stopUpdate,
       },
@@ -277,7 +278,7 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
       onSiteMinutes: 45,
     });
     expect(data.inspectionTypeOverriddenAt).toBeInstanceOf(Date);
-    expect(String(data.visitDetails).split('\n')[0]).toBe('Filter Change: 20x25x1 + Pest Control + HVAC Inspection (BX Plan)');
+    expect(String(data.visitDetails).split('\n')[0]).toBe('Filter Change: 20x25x1 + Pest Control + HVAC Inspection (Basic Plan)');
     expect(auditCreate.mock.calls[0][0].data).toMatchObject({
       action: 'TBP_PLAN_STOP_TYPE_SET',
       metadata: { planId: 'plan-1', from: 'OCCUPIED', to: 'HVAC' },
@@ -297,6 +298,30 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
     const data = stopUpdate.mock.calls[0][0].data;
     expect(data.visitDetails).toBe('Filter Change: 20x25x1 + Pest Control + HVAC Inspection\nCall the tenant first');
     expect(data).not.toHaveProperty('onSiteMinutes');
+  });
+
+  /**
+   * BX and MX never take the HVAC inspection, even "On our AC Plan" (the office,
+   * 2026-11-04), so it is not a coordinator's to choose either: ten BX visits of
+   * Q4 2026 were walked as HVAC inspections (2026-11-24: "that should not happen").
+   */
+  it.each(['BX', 'MX', 'BX Plan'])('refuses an HVAC inspection for a %s tenancy, writing nothing', async (managementPlan) => {
+    const { service, stopUpdate, auditCreate } = build({ managementPlan });
+
+    await expect(service.setInspectionType(USER, 's1', 'HVAC')).rejects.toMatchObject({
+      status: 422,
+      code: 'MANAGEMENT_PLAN_WITHOUT_HVAC',
+    });
+    expect(stopUpdate).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('still lets a BX visit be made an occupied inspection', async () => {
+    const { service, stopUpdate } = build({ managementPlan: 'BX' });
+
+    await service.setInspectionType(USER, 's1', 'OCCUPIED');
+
+    expect(stopUpdate.mock.calls[0][0].data).toMatchObject({ inspectionType: 'OCCUPIED' });
   });
 
   it('refuses a stop that is already an inspection', async () => {
@@ -324,7 +349,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     const tenant = {
       ...tenancy('t1', '4815 N Fictional St', '77009'),
       ...fromReport,
-      managementPlan: 'Basic',
+      managementPlan: (fromReport.managementPlan as string | undefined) ?? 'Basic',
       hvacPlan: 'On our AC Plan',
       hvacFilterSizes: [
         '20x20x1 (N Fictional)',
@@ -416,6 +441,47 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     expect(update.inspectionType).toBe('HVAC');
     expect(update.visitDetails).toBe('Filter Change: 16x20x1 + HVAC Inspection\nCall the tenant first');
     expect(update.visitTitle).toBe('4815 1/2 N Fictional St - Zone 1 - Q4 2026 Tenant Benefit Package');
+  });
+
+  /**
+   * A coordinator's choice of kind stands through a rebuild -- except an HVAC
+   * inspection chosen for a BX or MX tenancy, which nobody may choose. The rule
+   * takes it back, the Details follow, and the stop is no longer marked as a
+   * person's choice.
+   */
+  it('takes back an HVAC inspection a coordinator chose for a BX tenancy', async () => {
+    const { service, stopUpsert } = build(
+      {
+        inspectionType: InspectionType.HVAC,
+        inspectionTypeOverriddenAt: new Date('2026-10-01'),
+        visitDetails: 'Filter Change: 16x20x1 + HVAC Inspection\nCall the tenant first',
+        visitDetailsOverriddenAt: new Date('2026-09-16'),
+      },
+      { managementPlan: 'BX' },
+    );
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    const update = stopUpsert.mock.calls[0][0].update;
+    expect(update).toMatchObject({
+      inspectionType: 'OCCUPIED',
+      inspectionTypeReason: 'MANAGEMENT_PLAN_WITHOUT_HVAC',
+      inspectionTypeOverriddenAt: null,
+    });
+    expect(update.visitDetails).toBe('Filter Change: 16x20x1 + Occupied Inspection\nCall the tenant first');
+  });
+
+  it('keeps an HVAC inspection a coordinator chose for any other plan', async () => {
+    const { service, stopUpsert } = build({
+      inspectionType: InspectionType.HVAC,
+      inspectionTypeOverriddenAt: new Date('2026-10-01'),
+    }, { hvacPlan: 'Not Completed' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    const update = stopUpsert.mock.calls[0][0].update;
+    expect(update).toMatchObject({ inspectionType: 'HVAC', inspectionTypeReason: 'SET_BY_COORDINATOR' });
+    expect(update).not.toHaveProperty('inspectionTypeOverriddenAt');
   });
 
   /**

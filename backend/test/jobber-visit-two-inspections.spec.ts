@@ -89,6 +89,8 @@ function importer() {
       update: jest.fn().mockResolvedValue({}),
     },
     inspection: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
+    // The building's tenancy, asked for a visit naming an HVAC inspection: BX and MX never take one.
+    propertywareTenant: { findMany: jest.fn().mockResolvedValue([{ managementPlan: 'Premium' }]) },
     $transaction: jest.fn((work: (client: typeof tx) => Promise<unknown>) => work(tx)),
   };
   const mapping = {
@@ -146,6 +148,80 @@ describe('importing a visit that books two jobs', () => {
     });
     expect(worker.applyAssignment.mock.calls.map((call) => call[2])).toEqual(['inspection-hvac', 'inspection-occupied']);
     expect(result.imported).toBe(2);
+  });
+
+  /**
+   * BX and MX never take the HVAC inspection, even "On our AC Plan" (the office,
+   * 2026-11-04). Ten BX visits of Q4 2026 said "HVAC Inspection" and were walked
+   * as one (2026-11-24: "that should not happen"), so the tenancy's plan settles
+   * what a benefit-package visit is, whatever its words say.
+   */
+  describe('for a BX or MX tenancy', () => {
+    const PACKAGE = '9 Example St - Zone 1 - Q4 2026 Tenant Benefit Package';
+    const HVAC_LINE = 'Filter Change: 20x25x1 + Pest Control + HVAC Inspection';
+
+    it.each(['BX', 'MX'])('makes a visit booking both the occupied inspection alone (%s)', async (managementPlan) => {
+      const { worker, prisma, result } = importer();
+      prisma.propertywareTenant.findMany.mockResolvedValue([{ managementPlan }]);
+      (insertInspection as jest.Mock).mockReset().mockResolvedValueOnce({ id: 'inspection-occupied' });
+
+      await worker.processVisit(ORG, visit(), {}, resolveRules(), result);
+
+      expect(prisma.propertywareTenant.findMany).toHaveBeenCalledWith({
+        where: { organizationId: ORG, propertywareBuildingId: 'building-1', isActive: true },
+        select: { managementPlan: true },
+      });
+      expect((resolveInspectionPlan as jest.Mock).mock.calls.map((call) => call[1].inspectionType)).toEqual([
+        InspectionType.OCCUPIED,
+      ]);
+      // It holds the visit itself: there is no HVAC job for it to follow.
+      expect((insertInspection as jest.Mock).mock.calls[0][2]).toMatchObject({ jobberVisitId: 'visit-1' });
+      expect(insertInspection).toHaveBeenCalledTimes(1);
+      expect(result.imported).toBe(1);
+    });
+
+    it('makes a benefit-package visit naming an HVAC inspection an occupied one', async () => {
+      const { worker, prisma, result } = importer();
+      prisma.propertywareTenant.findMany.mockResolvedValue([{ managementPlan: 'BX' }]);
+      (insertInspection as jest.Mock).mockReset().mockResolvedValueOnce({ id: 'inspection-occupied' });
+
+      await worker.processVisit(ORG, visit({ title: PACKAGE, instructions: HVAC_LINE }), {}, resolveRules(), result);
+
+      expect((resolveInspectionPlan as jest.Mock).mock.calls.map((call) => call[1].inspectionType)).toEqual([
+        InspectionType.OCCUPIED,
+      ]);
+    });
+
+    it('leaves the same visit an HVAC inspection for any other plan', async () => {
+      const { worker, result } = importer();
+      (insertInspection as jest.Mock).mockReset().mockResolvedValueOnce({ id: 'inspection-hvac' });
+
+      await worker.processVisit(ORG, visit({ title: PACKAGE, instructions: HVAC_LINE }), {}, resolveRules(), result);
+
+      expect((resolveInspectionPlan as jest.Mock).mock.calls.map((call) => call[1].inspectionType)).toEqual([
+        InspectionType.HVAC,
+      ]);
+    });
+
+    /** An HVAC inspection named in a title of its own is work somebody asked for, not the package's. */
+    it('leaves an HVAC inspection booked on its own as it is named, without asking', async () => {
+      const { worker, prisma, result } = importer();
+      prisma.propertywareTenant.findMany.mockResolvedValue([{ managementPlan: 'BX' }]);
+      (insertInspection as jest.Mock).mockReset().mockResolvedValueOnce({ id: 'inspection-hvac' });
+
+      await worker.processVisit(
+        ORG,
+        visit({ title: '9 Example St - HVAC Inspection', instructions: 'Check the outdoor unit' }),
+        {},
+        resolveRules(),
+        result,
+      );
+
+      expect((resolveInspectionPlan as jest.Mock).mock.calls.map((call) => call[1].inspectionType)).toEqual([
+        InspectionType.HVAC,
+      ]);
+      expect(prisma.propertywareTenant.findMany).not.toHaveBeenCalled();
+    });
   });
 
   /**
