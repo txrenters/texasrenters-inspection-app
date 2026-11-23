@@ -137,3 +137,4 @@ export * from './inventory-monitoring.js';
 export * from './inventory-import.js';
 export * from './vendor-bills-xero.js';
 export * from './jobs.js';
+export * from './search.js';

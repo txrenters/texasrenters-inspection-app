@@ -26,24 +26,35 @@ const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('next-themes', () => ({ useTheme: () => ({ setTheme: vi.fn() }) }));
 
-const page = <T,>(items: T[]) => ({ items, total: items.length, page: 1, pageSize: 5, totalPages: 1 });
+/** What the server found: only the kinds with a hit, as it answers. */
+const FOUND = {
+  groups: [
+    {
+      kind: 'inspection',
+      hits: [{ id: 'inspection-7', targetId: 'inspection-7', title: '18919 Summer Farm Trl', detail: 'Move out · Oct 7, 2026 · Amy Wilson' }],
+    },
+    { kind: 'property', hits: [{ id: 'property-3', targetId: 'property-3', title: '9905 Brookview Dr', detail: '9905 Brookview Dr · Austin' }] },
+    {
+      kind: 'tenant',
+      hits: [
+        { id: 'tenant-1', targetId: 'property-3', title: 'Robin Vale', detail: '9905 Brookview Dr · Austin' },
+        { id: 'tenant-2', targetId: null, title: 'Robin Vance', detail: '' },
+      ],
+    },
+    { kind: 'invoice', hits: [{ id: 'invoice-9', targetId: 'invoice-9', title: 'Invoice #8439 · 100 Example Way', detail: '$39.99 · Oct 21, 2026' }] },
+    { kind: 'payment', hits: [{ id: 'payment-2', targetId: 'payment-2', title: 'Payment $39.99 · 100 Example Way', detail: 'Nov 2, 2026 · Check' }] },
+    { kind: 'requisition', hits: [{ id: 'pr-1', targetId: 'pr-1', title: 'PR-00043 · Filters for December', detail: 'Submitted · Ada Lane' }] },
+    { kind: 'purchaseOrder', hits: [{ id: 'po-1', targetId: 'po-1', title: 'PO-0009 · Example Supply Co', detail: 'Sent · Bill B-7781' }] },
+    { kind: 'stockItem', hits: [{ id: 'item-1', targetId: 'item-1', title: 'FLT-0012 · Filter 16x25x1', detail: 'Counted by the box' }] },
+    { kind: 'vendor', hits: [{ id: 'vendor-1', targetId: null, title: 'Example Supply Co', detail: 'V-00003' }] },
+    { kind: 'technician', hits: [{ id: 'tech-amy', targetId: 'tech-amy', title: 'Amy Wilson', detail: 'amy@example.test' }] },
+    // A kind added to the server after this build of the console.
+    { kind: 'somethingNewer', hits: [{ id: 'new-1', targetId: 'new-1', title: 'Not drawn', detail: '' }] },
+  ],
+};
 
 function answer(path: string) {
-  if (path.startsWith('/api/v1/admin/inspections'))
-    return page([
-      {
-        id: 'inspection-7',
-        inspectionType: 'MOVE_OUT',
-        scheduledAt: '2026-10-07T00:00:00.000Z',
-        propertywareBuilding: { id: 'b-1', name: '18919 Summer Farm Trl' },
-        propertywareUnit: null,
-        assignments: [{ isCurrent: true, technician: { displayName: 'Amy Wilson' } }],
-      },
-    ]);
-  if (path.startsWith('/api/v1/admin/properties'))
-    return page([{ id: 'property-3', name: '9905 Brookview Dr', addressLine1: '9905 Brookview Dr', city: 'Austin' }]);
-  if (path.startsWith('/api/v1/admin/technicians'))
-    return page([{ id: 'tech-amy', displayName: 'Amy Wilson', email: 'amy@example.test' }]);
+  if (path.startsWith('/api/v1/admin/search?')) return FOUND;
   throw new Error(`unexpected ${path}`);
 }
 
@@ -84,53 +95,90 @@ beforeEach(() => {
 });
 
 describe('the search for records', () => {
-  it('finds inspections, properties and technicians by what was typed', async () => {
+  const search = (text: string) => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
-    fireEvent.change(screen.getByPlaceholderText(/Search inspections, properties/), {
-      target: { value: 'amy' },
-    });
+    fireEvent.change(screen.getByPlaceholderText(/Search addresses, invoice and order numbers/), { target: { value: text } });
+  };
+
+  it('finds inspections, properties and technicians by what was typed', async () => {
+    search('amy');
 
     // The inspection says what it is, when, and who is on it.
     expect(await screen.findByText('18919 Summer Farm Trl')).toBeInTheDocument();
     expect(screen.getByText(/Move out · .* · Amy Wilson/i)).toBeInTheDocument();
     expect(screen.getByText('9905 Brookview Dr')).toBeInTheDocument();
     expect(screen.getByText('amy@example.test')).toBeInTheDocument();
-    expect(asked()).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/^\/api\/v1\/admin\/inspections\?.*search=amy/),
-        expect.stringMatching(/^\/api\/v1\/admin\/properties\?.*search=amy/),
-        expect.stringMatching(/^\/api\/v1\/admin\/technicians\?.*search=amy/),
-      ]),
-    );
-    expect(asked().every((path) => path.includes('pageSize=5'))).toBe(true);
 
     fireEvent.click(screen.getByText('18919 Summer Farm Trl'));
     expect(router.push).toHaveBeenCalledWith('/inspections/inspection-7');
   });
 
-  it('asks only for what the account may read', async () => {
-    granted.keys = new Set(['inspections:read']);
-    mount();
-    fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
-    fireEvent.change(screen.getByPlaceholderText(/Search inspections, properties/), {
-      target: { value: 'amy' },
-    });
+  // The office (2026-11-24): nothing added since October could be found -- not
+  // an invoice by its number, a requisition, a purchase order, a stock item.
+  it.each([
+    ['Invoice #8439 · 100 Example Way', '/invoices/invoice-9'],
+    ['Payment $39.99 · 100 Example Way', '/payments/payment-2'],
+    ['PR-00043 · Filters for December', '/purchasing/requisitions/pr-1'],
+    ['PO-0009 · Example Supply Co', '/purchasing/orders/po-1'],
+    ['FLT-0012 · Filter 16x25x1', '/inventory/items/item-1'],
+    // No page of their own: a tenant opens their property, or the Tenants list
+    // narrowed to them; a vendor opens the vendors.
+    ['Robin Vale', '/properties/property-3'],
+    ['Robin Vance', '/tenants?q=Robin+Vance'],
+    ['Example Supply Co', '/inventory?tab=vendors'],
+  ])('finds %s, and opens it', async (title, href) => {
+    search('8439');
 
-    expect(await screen.findByText('18919 Summer Farm Trl')).toBeInTheDocument();
-    expect(asked()).toHaveLength(1);
-    expect(asked()[0]).toMatch(/^\/api\/v1\/admin\/inspections/);
+    fireEvent.click(await screen.findByText(title));
+    expect(router.push).toHaveBeenCalledWith(href);
+  });
+
+  it('lists each kind under its own heading, and leaves out a kind it does not know', async () => {
+    search('8439');
+
+    expect(await screen.findByText('Invoices')).toBeInTheDocument();
+    for (const heading of ['Inspections', 'Properties', 'Tenants', 'Payments', 'Requisitions', 'Purchase orders', 'Stock items', 'Vendors', 'Technicians'])
+      expect(screen.getByText(heading)).toBeInTheDocument();
+    expect(screen.queryByText('Not drawn')).toBeNull();
+  });
+
+  it('asks once a search, whatever the account may read: the server decides what it is answered with', async () => {
+    granted.keys = new Set();
+    search('#8439');
+
+    expect(await screen.findByText('Invoice #8439 · 100 Example Way')).toBeInTheDocument();
+    expect(asked()).toEqual(['/api/v1/admin/search?q=%238439']);
   });
 
   it('does not ask the server about a single letter', async () => {
-    mount();
-    fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
-    fireEvent.change(screen.getByPlaceholderText(/Search inspections, properties/), {
-      target: { value: 'a' },
-    });
+    search('a');
 
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(api).not.toHaveBeenCalled();
+  });
+});
+
+describe('the pages that are not in the sidebar', () => {
+  const type = (text: string) => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
+    fireEvent.change(screen.getByPlaceholderText(/Search addresses, invoice and order numbers/), { target: { value: text } });
+  };
+
+  it('are found by name, for an account that may open them', () => {
+    granted.keys = new Set(['invoices:read', 'purchasing:request']);
+    type('report');
+    fireEvent.click(screen.getByText('Invoice reports'));
+    expect(router.push).toHaveBeenCalledWith('/invoices/reports');
+  });
+
+  it('are not offered to an account that may not', () => {
+    granted.keys = new Set(['invoices:read']);
+    type('new');
+    // Making an invoice is a permission of its own, and so is asking for a purchase.
+    expect(screen.queryByText('New invoice')).toBeNull();
+    expect(screen.queryByText('New requisition')).toBeNull();
   });
 });
 
@@ -140,7 +188,7 @@ describe('the account and theme commands', () => {
   it('are found by what was typed, like the pages', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
-    const field = screen.getByPlaceholderText(/Search inspections, properties/);
+    const field = screen.getByPlaceholderText(/Search addresses, invoice and order numbers/);
 
     fireEvent.change(field, { target: { value: 'dark' } });
     expect(await screen.findByRole('option', { name: 'Dark' })).toBeInTheDocument();
@@ -196,13 +244,13 @@ describe('opening the search', () => {
   it('opens on "/" from anywhere on the page', () => {
     mount();
     fireEvent.keyDown(document.body, { key: '/' });
-    expect(screen.getByPlaceholderText(/Search inspections, properties/)).toBeVisible();
+    expect(screen.getByPlaceholderText(/Search addresses, invoice and order numbers/)).toBeVisible();
   });
 
   it('leaves "/" alone while somebody is typing in a field', () => {
     mount(<input aria-label="A note" />);
     fireEvent.keyDown(screen.getByLabelText('A note'), { key: '/' });
-    expect(screen.queryByPlaceholderText(/Search inspections, properties/)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Search addresses, invoice and order numbers/)).toBeNull();
   });
 
   it('is drawn as Jobber’s search box in the Jobber-style shell', () => {
@@ -216,6 +264,6 @@ describe('opening the search', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     expect(screen.getByText('Press / to search')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Search inspections, properties/)).toBeVisible();
+    expect(screen.getByPlaceholderText(/Search addresses, invoice and order numbers/)).toBeVisible();
   });
 });

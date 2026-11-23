@@ -101,6 +101,13 @@ type Db = Prisma.TransactionClient;
 /** What an order's buttons and approval are held to (Purchasing Setup): the steps, whether approvers decide only for their own companies, and the caller's standing. */
 type OrderRules = { steps: readonly ApprovalStep[]; ownCompaniesOnly: boolean; standing: PurchasingStanding };
 const may = (user: AuthenticatedUser, permission: string) => (user.permissions as readonly string[]).includes(permission);
+
+/** Everybody's, for whoever makes, approves, receives or bills orders; for anybody else, the orders made from their own requisitions. */
+export function visiblePurchaseOrders(user: AuthenticatedUser): Prisma.PurchaseOrderWhereInput {
+  return [ORDER, APPROVE, APPROVE_ORDERS, RECEIVE, BILLS].some((permission) => may(user, permission))
+    ? {}
+    : { OR: [{ requisition: { requestedById: user.id } }, { sources: { some: { requisition: { requestedById: user.id } } } }] };
+}
 const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g, ' ') || null;
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dayOf = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
@@ -247,11 +254,8 @@ export class PurchaseOrdersService {
     @Inject(PurchasingFileStorageService) private readonly files: PurchasingFileStorageService,
   ) {}
 
-  /** Everybody's, for whoever makes, approves, receives or bills orders; for anybody else, the orders made from their own requisitions. */
   private visible(user: AuthenticatedUser): Prisma.PurchaseOrderWhereInput {
-    return [ORDER, APPROVE, APPROVE_ORDERS, RECEIVE, BILLS].some((permission) => may(user, permission))
-      ? {}
-      : { OR: [{ requisition: { requestedById: user.id } }, { sources: { some: { requisition: { requestedById: user.id } } } }] };
+    return visiblePurchaseOrders(user);
   }
 
   private async companyNames(organizationId: string): Promise<Companies> {
