@@ -442,9 +442,10 @@ describe('refresh rotation', () => {
     // `replacedById` set means this token was retired by a rotation, so its
     // holder already received the replacement. Presenting the old one means
     // someone else kept a copy, and the account's other sessions cannot be
-    // trusted either.
+    // trusted either. Rotated an hour ago: moments after a rotation, a lost
+    // answer is renewed again instead (lost-renewal-answer.spec.ts).
     const { prisma, tx } = refreshPrisma(
-      liveToken({ revokedAt: new Date(), replacedById: 'refresh-2' }),
+      liveToken({ revokedAt: new Date(Date.now() - 60 * 60 * 1000), replacedById: 'refresh-2' }),
     );
     const service = new SessionService(prisma as never, new TokenService());
 

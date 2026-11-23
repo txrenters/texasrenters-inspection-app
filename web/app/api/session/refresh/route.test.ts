@@ -104,3 +104,52 @@ describe('a remembered sign-in across a rotation', () => {
     expect(cookie(response, 'tr_remember')).toMatch(/Max-Age=0/i);
   });
 });
+
+/**
+ * Only the API's refusal ends the session here (2026-11-24). A 500 while its
+ * database pool was exhausted, or a 502 while it restarted for a release,
+ * cleared every cookie -- signing a remembered sign-in out with a token that
+ * was still good.
+ */
+describe('a refresh the API failed to answer', () => {
+  async function refreshAnswered(status: number) {
+    process.env.API_INTERNAL_BASE_URL = 'http://backend:3000';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status })));
+    return POST(
+      new NextRequest('https://inspection.texasrenters.com/api/session/refresh', {
+        method: 'POST',
+        headers: { cookie: 'tr_refresh=live-token; tr_remember=1; tr_access=expired' },
+      }),
+    );
+  }
+
+  it.each([500, 502, 503, 504, 429, 404])('keeps every cookie when the API answers %i', async (status) => {
+    const response = await refreshAnswered(status);
+
+    expect(response.status).toBe(503);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('keeps every cookie when the API cannot be reached at all', async () => {
+    process.env.API_INTERNAL_BASE_URL = 'http://backend:3000';
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('fetch failed'))));
+    const response = await POST(
+      new NextRequest('https://inspection.texasrenters.com/api/session/refresh', {
+        method: 'POST',
+        headers: { cookie: 'tr_refresh=live-token; tr_remember=1' },
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it.each([400, 401, 403])('still ends the session when the API refuses with %i', async (status) => {
+    const response = await refreshAnswered(status);
+
+    expect(response.status).toBe(401);
+    const cleared = response.headers.getSetCookie().join(';');
+    expect(cleared).toMatch(/tr_refresh=;/);
+    expect(cleared).toMatch(/tr_remember=;/);
+  });
+});

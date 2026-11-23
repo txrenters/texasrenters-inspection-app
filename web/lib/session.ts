@@ -107,6 +107,23 @@ function readCookie(name: string) {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
+/**
+ * The session could not be renewed just now, and is not known to have ended.
+ *
+ * A renewal that never got an answer -- the network dropped, a laptop woke
+ * before its Wi-Fi did, the server was restarting for a release -- says
+ * nothing about the session. Reporting it as "no session" sent a remembered
+ * sign-in to the login page and showed "Your session has expired" with a good
+ * refresh token still on file. Only the API's own refusal ends a session; this
+ * is everything else, and the next request or session check tries again.
+ */
+export class SessionUnavailableError extends Error {
+  constructor() {
+    super('The server could not be reached to renew your sign-in. Check your connection.');
+    this.name = 'SessionUnavailableError';
+  }
+}
+
 let inFlightRefresh: Promise<AppSession | null> | null = null;
 const SESSION_REFRESH_LOCK = 'texasrenters-session-refresh';
 
@@ -123,6 +140,10 @@ const SESSION_REFRESH_LOCK = 'texasrenters-session-refresh';
  * once. A replay is correctly treated by the backend as a stolen token and
  * ends every session, so cross-tab coordination is a security requirement,
  * not merely an optimization.
+ *
+ * Resolves to null only when there is no session: none was ever there, or the
+ * API refused to renew it. Rejects with `SessionUnavailableError` when the
+ * renewal could not be answered, which is not a sign-out.
  */
 export async function getSession(): Promise<AppSession | null> {
   const raw = readCookie(ACCESS_COOKIE);
@@ -155,7 +176,10 @@ async function refreshSession(): Promise<AppSession | null> {
   if (typeof navigator !== 'undefined' && navigator.locks) {
     try {
       return await navigator.locks.request(SESSION_REFRESH_LOCK, exchange);
-    } catch {
+    } catch (error) {
+      // A renewal that ran and got no answer is reported as it is, not tried
+      // again here outside the lock.
+      if (error instanceof SessionUnavailableError) throw error;
       // Some embedded browsers expose the API but refuse lock requests. The
       // per-tab in-flight guard still prevents duplicate requests in this tab.
     }
@@ -165,22 +189,27 @@ async function refreshSession(): Promise<AppSession | null> {
 }
 
 async function exchangeRefreshToken(): Promise<AppSession | null> {
+  let response: Response;
   try {
-    const response = await fetch('/api/session/refresh', { method: 'POST' });
-    if (!response.ok) {
-      // A portal session the portal has ended: back through the portal, which
-      // signs the person straight in again if they still have access.
-      if (response.status === 401) {
-        const body = (await response.json().catch(() => null)) as { reauth?: unknown } | null;
-        if (body?.reauth === true) restartPortalSignIn();
-      }
-      return null;
-    }
-    const raw = readCookie(ACCESS_COOKIE);
-    return raw ? decodeSession(raw) : null;
+    response = await fetch('/api/session/refresh', { method: 'POST' });
   } catch {
+    throw new SessionUnavailableError();
+  }
+  // The session handler's 401 is the API refusing the refresh token: expired,
+  // signed out, or replayed. That, and only that, ends the session here.
+  // Anything else -- its 503 when the API could not be reached, a 502 from the
+  // proxy while the console restarts -- leaves the cookies as they were, and
+  // the session with them.
+  if (response.status === 401) {
+    // A portal session the portal has ended: back through the portal, which
+    // signs the person straight in again if they still have access.
+    const body = (await response.json().catch(() => null)) as { reauth?: unknown } | null;
+    if (body?.reauth === true) restartPortalSignIn();
     return null;
   }
+  if (!response.ok) throw new SessionUnavailableError();
+  const raw = readCookie(ACCESS_COOKIE);
+  return raw ? decodeSession(raw) : null;
 }
 
 /**
@@ -250,12 +279,14 @@ function restartPortalSignIn() {
  * Checks on focus and on becoming visible — the moment a returning tab is about
  * to be used, which is when a stale one is actually misleading — and otherwise
  * on a slow interval, since a background tab noticing thirty seconds late costs
- * nothing.
+ * nothing. And when the browser comes back online, which is when a renewal
+ * that could not be answered is worth trying again.
  */
 export function onSessionChange(listener: (session: AppSession | null) => void) {
   if (typeof document === 'undefined') return () => undefined;
 
-  let last = readCookie(ACCESS_COOKIE);
+  /** `undefined` after a renewal nobody answered: the next check tries again. */
+  let last: string | null | undefined = readCookie(ACCESS_COOKIE);
   const check = () => {
     const current = readCookie(ACCESS_COOKIE);
     if (current === last) return;
@@ -267,9 +298,20 @@ export function onSessionChange(listener: (session: AppSession | null) => void) 
      * page with a perfectly good refresh token still on file. Renewed instead,
      * through `getSession`, so the cross-tab lock still guards the rotation.
      * A renewal the API refuses clears the cookies and reports no session.
+     * One that got no answer reports nothing -- the page stays as it is --
+     * and is tried again at the next check.
      */
     if (!current && (readCookie(REMEMBER_COOKIE) || readCookie(PORTAL_COOKIE))) {
-      void getSession().then(listener);
+      void getSession().then(
+        (session) => {
+          // The renewed cookie, so its own expiry is noticed in turn.
+          last = readCookie(ACCESS_COOKIE);
+          listener(session);
+        },
+        () => {
+          last = undefined;
+        },
+      );
       return;
     }
     listener(current ? decodeSession(current) : null);
@@ -277,10 +319,12 @@ export function onSessionChange(listener: (session: AppSession | null) => void) 
 
   const interval = window.setInterval(check, 30_000);
   window.addEventListener('focus', check);
+  window.addEventListener('online', check);
   document.addEventListener('visibilitychange', check);
   return () => {
     window.clearInterval(interval);
     window.removeEventListener('focus', check);
+    window.removeEventListener('online', check);
     document.removeEventListener('visibilitychange', check);
   };
 }

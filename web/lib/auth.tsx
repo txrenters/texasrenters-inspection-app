@@ -18,7 +18,13 @@ import { Button } from '@/components/ui/button';
 
 import { api } from './api';
 import { adminGuardRedirect, consoleAccessError, sessionRequiresPasswordChange } from './auth-session';
-import { getSession, onSessionChange, signOut as endSession, type AppSession } from './session';
+import {
+  getSession,
+  onSessionChange,
+  SessionUnavailableError,
+  signOut as endSession,
+  type AppSession,
+} from './session';
 
 interface AuthState {
   session: AppSession | null;
@@ -36,18 +42,38 @@ interface AuthRefreshResult {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** How soon a session that could not be renewed on loading is tried again. */
+export const SESSION_RETRY_MS = 10_000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AppSession | null>(null);
   const [profile, setProfile] = useState<AdminProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const refreshRequestId = useRef(0);
+  const retry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<AuthRefreshResult> => {
     const requestId = (refreshRequestId.current += 1);
+    clearTimeout(retry.current);
     setLoading(true);
     setError(null);
-    const next = await getSession();
+    let next: AppSession | null;
+    try {
+      next = await getSession();
+    } catch (reason) {
+      if (requestId !== refreshRequestId.current) return { profile: null, error: null };
+      // The renewal got no answer (SessionUnavailableError), so nobody knows
+      // the session has ended. Still restoring, then -- "loading" is what
+      // keeps AdminGuard from sending a remembered sign-in to the login page
+      // over a dropped connection or a server restarting for a release -- and
+      // tried again.
+      const message =
+        reason instanceof SessionUnavailableError ? reason.message : new SessionUnavailableError().message;
+      setError(message);
+      retry.current = setTimeout(() => void refresh(), SESSION_RETRY_MS);
+      return { profile: null, error: message };
+    }
     if (requestId !== refreshRequestId.current) return { profile: null, error: null };
     setSession(next);
     if (!next) {
@@ -84,15 +110,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
     // Signing out in one tab must clear the others. Cookies raise no event, so
     // this watches the value rather than subscribing to one.
-    return onSessionChange((nextSession) => {
+    const unsubscribe = onSessionChange((nextSession) => {
       setSession(nextSession);
       if (!nextSession) {
         refreshRequestId.current += 1;
+        clearTimeout(retry.current);
         setProfile(null);
         setError(null);
         setLoading(false);
       }
     });
+    return () => {
+      unsubscribe();
+      clearTimeout(retry.current);
+    };
   }, [refresh]);
 
   const value = useMemo<AuthState>(
@@ -104,6 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh,
       signOut: async () => {
         refreshRequestId.current += 1;
+        clearTimeout(retry.current);
         await endSession();
         setSession(null);
         setProfile(null);
@@ -146,8 +178,9 @@ export function AdminGuard({ children }: { children: ReactNode }) {
 
   if (!auth.loading && !auth.session) return null;
 
+  // With the reason, while a renewal that got no answer is tried again.
   if (auth.loading)
-    return <CenteredState busy title="Restoring secure session…" />;
+    return <CenteredState busy description={auth.error ?? undefined} title="Restoring secure session…" />;
 
   if (auth.session && auth.error)
     return (

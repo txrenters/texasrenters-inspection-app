@@ -2,7 +2,7 @@
 
 import { resolveApiUrl, type ApiErrorContract, type Paginated } from '@texasrenters/shared';
 
-import { getSession, signOut } from './session';
+import { getSession, SessionUnavailableError, signOut } from './session';
 
 /**
  * Bypasses ngrok's free-tier browser interstitial.
@@ -36,6 +36,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The session a request is sent with, renewed first if it is about to expire.
+ *
+ * A renewal that got no answer is reported the way a request that got none
+ * is -- `NETWORK_ERROR`, which a page retries -- and never as "Your session has
+ * expired", which it was not. Only no session at all is that.
+ */
+async function sessionForRequest() {
+  let session;
+  try {
+    session = await getSession();
+  } catch (error) {
+    if (error instanceof SessionUnavailableError) throw new ApiError(0, 'NETWORK_ERROR', error.message);
+    throw error;
+  }
+  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  return session;
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit & { signal?: AbortSignal } = {},
@@ -46,8 +65,7 @@ export async function api<T>(
   // Refreshes in place when the token is close to expiry, which is what makes
   // renewal automatic — the Supabase client did this inside its own
   // getSession() and nothing ever called refreshSession() explicitly.
-  const session = await getSession();
-  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  const session = await sessionForRequest();
   let response: Response;
   try {
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
@@ -122,8 +140,7 @@ export async function apiUpload<T>(
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
   if (!baseUrl)
     throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
-  const session = await getSession();
-  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  const session = await sessionForRequest();
 
   const failure = (status: number, raw: string) => {
     const error = (() => {
@@ -188,8 +205,7 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
   // Refreshes in place when the token is close to expiry, which is what makes
   // renewal automatic — the Supabase client did this inside its own
   // getSession() and nothing ever called refreshSession() explicitly.
-  const session = await getSession();
-  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  const session = await sessionForRequest();
   let response: Response;
   try {
     response = await fetch(resolveApiUrl(baseUrl, path), {
