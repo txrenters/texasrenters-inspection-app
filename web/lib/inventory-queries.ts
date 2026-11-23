@@ -2,6 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  StockImportCheck,
+  StockImportDone,
+  StockImportInput,
   CancelStockCountInput,
   InventoryMonitoring,
   OpeningBalanceInput,
@@ -216,6 +219,23 @@ export function useInventoryEdits() {
     updateVendor: useMutation({
       mutationFn: ({ vendorId, input }: { vendorId: string; input: SaveVendorInput }) => send<Vendors>(`/vendors/${encodeURIComponent(vendorId)}`, 'PATCH', input),
       onSuccess: settle<Vendors>(inventoryKeys.vendors),
+    }),
+  };
+}
+
+/**
+ * The stock import (2026-11-23): Check reads the file against the office and
+ * writes nothing; Import writes it all, and everything that shows stock is
+ * read again when next looked at.
+ */
+export function useStockImport() {
+  const client = useQueryClient();
+  const send = <T,>(path: string, input: StockImportInput) => api<T>(`${BASE}/import${path}`, { method: 'POST', body: JSON.stringify(input) });
+  return {
+    check: useMutation({ mutationFn: (input: StockImportInput) => send<StockImportCheck>('/check', input) }),
+    run: useMutation({
+      mutationFn: (input: StockImportInput) => send<StockImportDone>('', input),
+      onSuccess: () => void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] }),
     }),
   };
 }

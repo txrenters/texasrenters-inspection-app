@@ -8,6 +8,7 @@ import { DataTable, DataTableSkeleton, type Column } from '@/components/data-tab
 import { CountsTab } from '@/components/inventory/counts-tab';
 import { ReorderTab } from '@/components/inventory/reorder-tab';
 import { CategoryDialog, ItemDialog } from '@/components/inventory/inventory-dialogs';
+import { StockImportDialog } from '@/components/inventory/stock-import';
 import { ItemCodesTab } from '@/components/inventory/item-codes-tab';
 import { PlacesTab } from '@/components/inventory/places-tab';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
@@ -51,6 +52,8 @@ export default function InventoryPage() {
   const canRequest = permissions.has('purchasing:request');
   const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '', period: '30d', technician: '' });
   const [item, setItem] = useState(false);
+  // The stock from a spreadsheet (2026-11-23): opening balances, as by hand, so "Manage inventory".
+  const [importing, setImporting] = useState(false);
   const [category, setCategory] = useState<Editing<StockCategoryRow>>(null);
   const stock = useStock();
   const edits = useInventoryEdits();
@@ -68,12 +71,24 @@ export default function InventoryPage() {
   return (
     <>
       <PageHeader
-        actions={(state.tab === 'categories' ? keeps.categories : keeps.items) ? add : undefined}
+        actions={
+          <>
+            {state.tab === 'stock' && canManage && stock.data ? (
+              <Button onClick={() => setImporting(true)} variant="outline">
+                Import stock
+              </Button>
+            ) : null}
+            {(state.tab === 'categories' ? keeps.categories : keeps.items) ? add : null}
+          </>
+        }
         description="What the office stocks, where it is, and who it is bought from."
         info={
           <>
             <p>On hand is added up from each item&apos;s movements. It cannot be typed over.</p>
-            <p>To bring in what is on the shelf today, open an item and enter its opening balance. A wrong entry is reversed, never edited.</p>
+            <p>
+              To bring in what is on the shelf today, open an item and enter its opening balance, or bring in the whole list from a spreadsheet with Import stock. A wrong entry is reversed, never
+              edited.
+            </p>
           </>
         }
         infoLabel="About inventory"
@@ -148,6 +163,7 @@ export default function InventoryPage() {
           <VendorsTab canManage={keeps.vendors} enabled={state.tab === 'vendors'} />
         </TabsContent>
       </Tabs>
+      {importing && stock.data ? <StockImportDialog onClose={() => setImporting(false)} stock={stock.data} /> : null}
 
       {item && stock.data ? (
         <ItemDialog
