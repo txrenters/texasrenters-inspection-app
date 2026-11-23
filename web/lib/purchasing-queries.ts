@@ -7,7 +7,9 @@ import type {
   ApproveVendorBillInput,
   CancelPurchaseOrderInput,
   CloseShortInput,
+  MakePurchaseOrdersInput,
   PayVendorBillInput,
+  PendingOrderLines,
   PurchaseOrderDecisionInput,
   PurchaseOrderDetail,
   PurchaseOrdersMade,
@@ -57,6 +59,7 @@ export const purchasingKeys = {
   detail: (requisitionId: string) => ['purchasing', 'requisition', requisitionId] as const,
   choices: ['purchasing', 'choices'] as const,
   orders: (show: 'open' | 'closed') => ['purchasing', 'orders', show] as const,
+  pendingLines: ['purchasing', 'orders', 'pending-lines'] as const,
   order: (orderId: string) => ['purchasing', 'order', orderId] as const,
   setup: ['purchasing', 'setup'] as const,
   people: ['purchasing', 'setup', 'people'] as const,
@@ -150,6 +153,15 @@ export function usePurchaseOrders(show: 'open' | 'closed', enabled: boolean) {
   return useQuery({ queryKey: purchasingKeys.orders(show), queryFn: ({ signal }) => api<PurchaseOrderList>(`${BASE}/orders?show=${show}`, { signal }), enabled, ...KEPT });
 }
 
+/**
+ * Pending Processing (2026-11-23): every approved requisition line not on an
+ * order yet, for a purchaser. One read when the tab is opened, kept a minute,
+ * and read again after an order is made or changed; nothing it reads is billed.
+ */
+export function usePendingOrderLines(enabled: boolean) {
+  return useQuery({ queryKey: purchasingKeys.pendingLines, queryFn: ({ signal }) => api<PendingOrderLines>(`${BASE}/orders/pending-lines`, { signal }), enabled, ...KEPT });
+}
+
 export function usePurchaseOrder(orderId: string) {
   return useQuery({
     queryKey: purchasingKeys.order(orderId),
@@ -179,6 +191,11 @@ export function usePurchaseOrderEdits() {
     // One draft order a vendor still without one (2026-11-20): the requisition and the order lists are read again.
     create: useMutation({
       mutationFn: (requisitionId: string) => api<PurchaseOrdersMade>(`${BASE}/requisitions/${encodeURIComponent(requisitionId)}/order`, { method: 'POST', body: '{}' }),
+      onSuccess: () => void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] !== 'choices' }),
+    }),
+    // Make Purchase Orders on Pending Processing (2026-11-23): one draft order a vendor and company of the lines ticked.
+    makeFromLines: useMutation({
+      mutationFn: (input: MakePurchaseOrdersInput) => api<PurchaseOrdersMade>(`${BASE}/orders/from-lines`, { method: 'POST', body: JSON.stringify(input) }),
       onSuccess: () => void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] !== 'choices' }),
     }),
     update: useMutation({

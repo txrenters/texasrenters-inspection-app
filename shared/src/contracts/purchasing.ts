@@ -58,14 +58,18 @@ export const REQUISITION_STAGE_LABEL: Record<RequisitionStage, string> = {
 /** The stages in the order a requisition goes through them: the steps the page draws. */
 export const REQUISITION_STAGE_STEPS: readonly RequisitionStage[] = ['OPEN', 'PENDING_APPROVAL', 'PENDING_PROCESSING', 'PENDING_ORDER', 'ORDERED', 'RECEIVED', 'CLOSED'];
 
-/** The stage of a requisition, from its status and its orders' (a cancelled order counts for nothing): the least far along of them. */
-export function requisitionStage(status: RequisitionStatus, orders: readonly PurchaseOrderStatus[]): RequisitionStage {
+/**
+ * The stage of a requisition, from its status and its orders' (a cancelled order counts for nothing): the least far along
+ * of them. `allArrived`: all of its share of its orders has arrived (2026-11-23: an order may carry other requisitions too).
+ */
+export function requisitionStage(status: RequisitionStatus, orders: readonly PurchaseOrderStatus[], allArrived = false): RequisitionStage {
   if (status === 'DRAFT') return 'OPEN';
   if (status === 'SUBMITTED') return 'PENDING_APPROVAL';
   if (status === 'APPROVED') return 'PENDING_PROCESSING';
   if (status !== 'ORDERED') return status;
   const live = orders.filter((order) => order !== 'CANCELLED');
   if (!live.length || live.includes('DRAFT')) return 'PENDING_PROCESSING';
+  if (allArrived) return 'RECEIVED';
   if (live.some((order) => order === 'AWAITING_APPROVAL' || order === 'APPROVED')) return 'PENDING_ORDER';
   if (live.some((order) => order === 'SENT' || order === 'PARTLY_RECEIVED')) return 'ORDERED';
   return 'RECEIVED';

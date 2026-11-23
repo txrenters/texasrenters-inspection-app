@@ -1,18 +1,20 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
+  MOST_PENDING_LINES_ORDERED,
   MOST_REQUISITION_LINES,
   MOST_STOCK_QUANTITY,
   MOST_TAX_BASIS_POINTS,
   MOST_UNIT_COST_CENTS,
   type CancelPurchaseOrderInput,
+  type MakePurchaseOrdersInput,
   type PurchaseOrderDecisionInput,
   type PurchaseOrderLineInput,
   type SavePurchaseOrderInput,
   type SendPurchaseOrderInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBase64, IsEmail, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBase64, IsEmail, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { PurchaseOrdersService } from './purchase-orders.service';
@@ -23,6 +25,8 @@ const GIVEN = (_: object, value: unknown) => value !== null;
 
 export class PurchaseOrderLineDto implements Required<PurchaseOrderLineInput> {
   @IsUUID() itemId!: string;
+  /** Where it goes (2026-11-23); left out, the item's only place on the order. */
+  @IsOptional() @IsUUID() placeId!: string | null;
   @IsInt() @Min(1) @Max(MOST_STOCK_QUANTITY) quantity!: number;
   @IsInt() @Min(0) @Max(MOST_UNIT_COST_CENTS) unitPriceCents!: number;
 }
@@ -39,6 +43,16 @@ export class SavePurchaseOrderDto implements Required<SavePurchaseOrderInput> {
   @IsInt() @Min(0) @Max(MOST_TAX_BASIS_POINTS) taxBasisPoints!: number;
   @ValidateIf(GIVEN) @IsString() @MaxLength(2000) notes!: string | null;
   @IsArray() @ArrayMaxSize(MOST_REQUISITION_LINES) @ValidateNested({ each: true }) @Type(() => PurchaseOrderLineDto) lines!: PurchaseOrderLineDto[];
+}
+
+export class PendingLinePickDto {
+  @IsUUID() requisitionLineId!: string;
+  @ValidateIf(GIVEN) @IsUUID() vendorId!: string | null;
+}
+
+/** Make Purchase Orders on Pending Processing (2026-11-23). */
+export class MakePurchaseOrdersDto implements Required<MakePurchaseOrdersInput> {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MOST_PENDING_LINES_ORDERED) @ValidateNested({ each: true }) @Type(() => PendingLinePickDto) lines!: PendingLinePickDto[];
 }
 
 export class PurchaseOrderDecisionDto implements Required<PurchaseOrderDecisionInput> {
@@ -91,6 +105,20 @@ export class PurchaseOrdersController {
   @RequirePermissions('purchasing:request')
   toApprove(@Req() request: AuthenticatedRequest) {
     return this.orders.toApprove(request.user);
+  }
+
+  /** Pending Processing (2026-11-23): approved requisition lines not on an order yet. Before the id route. */
+  @Get('orders/pending-lines')
+  @RequirePermissions('purchasing:request', 'purchasing:order')
+  pendingLines(@Req() request: AuthenticatedRequest) {
+    return this.orders.pendingLines(request.user);
+  }
+
+  /** Make Purchase Orders: one draft order for each vendor and company of the lines ticked. */
+  @Post('orders/from-lines')
+  @RequirePermissions('purchasing:request', 'purchasing:order')
+  makeOrders(@Req() request: AuthenticatedRequest, @Body() body: MakePurchaseOrdersDto) {
+    return this.orders.makeOrders(request.user, body);
   }
 
   @Post('requisitions/:requisitionId/order')

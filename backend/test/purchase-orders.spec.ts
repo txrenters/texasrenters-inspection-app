@@ -2,13 +2,15 @@ import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import {
   MACHINE_FORBIDDEN_PERMISSIONS,
+  MOST_PENDING_LINES_ORDERED,
   type CancelPurchaseOrderInput,
+  type MakePurchaseOrdersInput,
   type PurchaseOrderDecisionInput,
   type SavePurchaseOrderInput,
   type SendPurchaseOrderInput,
 } from '@texasrenters/shared';
 
-import { CancelPurchaseOrderDto, PurchaseOrderDecisionDto, PurchaseOrdersController, SavePurchaseOrderDto, SendPurchaseOrderDto } from '../src/admin/purchase-orders.controller';
+import { CancelPurchaseOrderDto, MakePurchaseOrdersDto, PurchaseOrderDecisionDto, PurchaseOrdersController, SavePurchaseOrderDto, SendPurchaseOrderDto } from '../src/admin/purchase-orders.controller';
 import { PurchaseOrdersService } from '../src/admin/purchase-orders.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -16,7 +18,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
  * Purchase orders, phase 3 (2026-11-19). Every id, name, code, address and
  * price here is invented. The database below holds orders the way the service
  * reads and writes them; what only the real database does (refusing the
- * maker's approval, a second live order for a requisition, the same send key
+ * maker's approval, a requisition line on two live orders, the same send key
  * twice) is in the migration and is not exercised here. No email is sent: the
  * mail service is a stand-in that counts its calls.
  */
@@ -33,6 +35,9 @@ const ALAMO = id(22);
 const CLOSED_VENDOR = id(23);
 const REQUISITION = id(31);
 const WAITING_REQUISITION = id(32);
+/** Another approved requisition, made after REQUISITION (2026-11-23: one order from several). */
+const LATER_REQUISITION = id(33);
+const TRUCK = id(12);
 const KEY = id(90);
 
 const person = (n: number, displayName: string, permissions: string[], organizationId = ORG): AuthenticatedUser =>
@@ -65,15 +70,22 @@ function database() {
     { id: CLOSED_VENDOR, organizationId: ORG, name: 'Closed Supply', contactName: null, email: null, phone: null, terms: null, active: false },
   ];
   const requisitions: Row[] = [
-    { id: REQUISITION, organizationId: ORG, number: 'PR-0012', status: 'APPROVED', requestedById: asker.id, xeroTenantId: 'tenant-thmp', deliverToPlaceId: STOCKROOM },
-    { id: WAITING_REQUISITION, organizationId: ORG, number: 'PR-0013', status: 'SUBMITTED', requestedById: colleague.id, xeroTenantId: null, deliverToPlaceId: null },
+    { id: REQUISITION, organizationId: ORG, number: 'PR-0012', status: 'APPROVED', requestedById: asker.id, xeroTenantId: 'tenant-thmp', deliverToPlaceId: STOCKROOM, createdAt: new Date('2026-11-18T15:00:00Z') },
+    { id: WAITING_REQUISITION, organizationId: ORG, number: 'PR-0013', status: 'SUBMITTED', requestedById: colleague.id, xeroTenantId: null, deliverToPlaceId: null, createdAt: new Date('2026-11-18T16:00:00Z') },
+    { id: LATER_REQUISITION, organizationId: ORG, number: 'PR-0014', status: 'APPROVED', requestedById: colleague.id, xeroTenantId: 'tenant-thmp', deliverToPlaceId: STOCKROOM, createdAt: new Date('2026-11-18T17:00:00Z') },
   ];
   const requisitionLines: Row[] = [
-    { requisitionId: REQUISITION, position: 0, itemId: FILTER, quantity: 36, estimatedUnitCostCents: 390 },
-    { requisitionId: REQUISITION, position: 1, itemId: BATTERY, quantity: 24, estimatedUnitCostCents: 185 },
-    { requisitionId: WAITING_REQUISITION, position: 0, itemId: ALARM, quantity: 4, estimatedUnitCostCents: 1530 },
+    { id: id(41), organizationId: ORG, requisitionId: REQUISITION, position: 0, itemId: FILTER, quantity: 36, estimatedUnitCostCents: 390, placeId: null },
+    { id: id(42), organizationId: ORG, requisitionId: REQUISITION, position: 1, itemId: BATTERY, quantity: 24, estimatedUnitCostCents: 185, placeId: null },
+    { id: id(43), organizationId: ORG, requisitionId: WAITING_REQUISITION, position: 0, itemId: ALARM, quantity: 4, estimatedUnitCostCents: 1530, placeId: null },
+    // The same filters for the stockroom, and smoke alarms for the truck.
+    { id: id(44), organizationId: ORG, requisitionId: LATER_REQUISITION, position: 0, itemId: FILTER, quantity: 12, estimatedUnitCostCents: 400, placeId: null },
+    { id: id(45), organizationId: ORG, requisitionId: LATER_REQUISITION, position: 1, itemId: ALARM, quantity: 4, estimatedUnitCostCents: 1530, placeId: TRUCK },
   ];
   const quotes: Row[] = [{ requisitionId: REQUISITION, vendorId: HILL, chosen: true }];
+  /** The requisition lines each order carries (2026-11-23). */
+  const sources: Row[] = [];
+  const liveSource = (lineId: unknown) => sources.find((source) => source.requisitionLineId === lineId && source.releasedAt === null);
   const orders: Row[] = [];
   const lines: Row[] = [];
   const deliveries: Row[] = [];
@@ -83,7 +95,7 @@ function database() {
   let series = 0;
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
-  const requisitionOf = (requisitionId: unknown) => {
+  const requisitionOf = (requisitionId: unknown): Row & { lines: Row[] } => {
     const requisition = requisitions.find((row) => row.id === requisitionId)!;
     return { ...requisition, lines: requisitionLines.filter((line) => line.requisitionId === requisitionId).map((line) => ({ ...line, vendor: vendors.find((vendor) => vendor.id === line.vendorId) ?? null })) };
   };
@@ -91,7 +103,10 @@ function database() {
     return Object.entries(where).every(([key, value]) => {
       if (value === undefined) return true;
       if (key === 'AND') return (value as Where[]).every((part) => matches(row, part));
+      if (key === 'OR') return (value as Where[]).some((part) => matches(row, part));
       if (key === 'requisition') return matches(requisitionOf(row.requisitionId), value as Where);
+      // An order's shares, by their requisition (who may see it, 2026-11-23).
+      if (key === 'sources') return sources.some((source) => source.orderId === row.id && matches(source, (value as { some: Where }).some));
       if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
         const rule = value as { in?: unknown[]; notIn?: unknown[]; not?: unknown; gte?: Date };
         if (rule.in) return rule.in.includes(row[key]);
@@ -108,14 +123,40 @@ function database() {
     createdBy: nameOf(order.createdById),
     approvedBy: nameOf(order.approvedById),
     vendor: vendors.find((vendor) => vendor.id === order.vendorId) ?? null,
-    deliverTo: order.deliverToPlaceId ? { id: STOCKROOM, name: 'Stockroom' } : null,
+    deliverTo: placeOf(order.deliverToPlaceId),
     bill: null,
     requisition: requisitionOf(order.requisitionId),
     lines: lines
       .filter((line) => line.orderId === order.id)
       .sort((left, right) => (left.position as number) - (right.position as number))
-      .map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) })),
+      .map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId), place: placeOf(line.placeId) })),
+    // Oldest requisition first, as the service asks.
+    sources: sources
+      .filter((source) => source.orderId === order.id)
+      .sort((left, right) => (requisitionOf(left.requisitionId).createdAt as Date).getTime() - (requisitionOf(right.requisitionId).createdAt as Date).getTime())
+      .map((source) => ({ ...source, requisition: { id: source.requisitionId, number: requisitionOf(source.requisitionId).number }, requisitionLine: { department: null } })),
   });
+  const placeOf = (placeId: unknown) => (placeId === STOCKROOM ? { id: STOCKROOM, name: 'Stockroom', code: 'STORE' } : placeId === TRUCK ? { id: TRUCK, name: 'Truck 1', code: 'TRK1' } : null);
+  /** A requisition line as the service reads it: for Pending Processing, and for making orders. */
+  const requisitionLineOf = (line: Row) => {
+    const requisition = requisitionOf(line.requisitionId);
+    return {
+      ...line,
+      notes: null,
+      expectedOn: null,
+      item: items.find((item) => item.id === line.itemId) ?? null,
+      place: placeOf(line.placeId),
+      vendor: vendors.find((vendor) => vendor.id === line.vendorId) ?? null,
+      department: null,
+      orderSources: sources.filter((source) => source.requisitionLineId === line.id && source.releasedAt === null).map((source) => ({ id: source.id })),
+      requisition: {
+        ...requisition,
+        requestedBy: nameOf(requisition.requestedById),
+        deliverTo: placeOf(requisition.deliverToPlaceId),
+        quotes: quotes.filter((quote) => quote.requisitionId === requisition.id && quote.chosen).map((quote) => ({ vendor: vendors.find((vendor) => vendor.id === quote.vendorId) })),
+      },
+    };
+  };
   const removeWhere = (rows: Row[], where: Where) => {
     for (let index = rows.length - 1; index >= 0; index -= 1) if (matches(rows[index]!, where)) rows.splice(index, 1);
   };
@@ -140,15 +181,6 @@ function database() {
       count: jest.fn(async ({ where }: { where: Where }) => orders.filter((row) => matches(row, where)).length),
     },
     purchaseOrderLine: {
-      // The update's guard: the items asked for that another live order of the same requisition holds.
-      findMany: jest.fn(async ({ where }: { where: { itemId: { in: string[] }; order: { requisitionId: string; id: { not: string } } } }) =>
-        lines
-          .filter((one) => where.itemId.in.includes(one.itemId as string))
-          .flatMap((one) => {
-            const held = orders.find((row) => row.id === one.orderId && row.requisitionId === where.order.requisitionId && row.id !== where.order.id.not && row.status !== 'CANCELLED');
-            return held ? [{ item: items.find((item) => item.id === one.itemId), order: { number: held.number, vendor: vendors.find((vendor) => vendor.id === held.vendorId) ?? null } }] : [];
-          }),
-      ),
       createMany: jest.fn(async ({ data }: { data: Row[] }) => lines.push(...data.map((line, index) => ({ id: id(300 + lines.length + index), receivedQuantity: 0, ...line })))),
       deleteMany: jest.fn(async ({ where }: { where: Where }) => removeWhere(lines, where)),
     },
@@ -156,21 +188,60 @@ function database() {
       findFirst: jest.fn(async ({ where }: { where: Where }) => {
         const found = requisitions.find((row) => matches(row, where));
         if (!found) return null;
+        const requisition = requisitionOf(found.id);
         return {
-          ...requisitionOf(found.id),
+          ...requisition,
+          // Its lines with an item on no live order (2026-11-23).
+          lines: requisition.lines.filter((line) => line.itemId && !liveSource(line.id)),
           quotes: quotes.filter((quote) => quote.requisitionId === found.id && quote.chosen).map((quote) => ({ ...quote, vendor: vendors.find((vendor) => vendor.id === quote.vendorId) })),
-          // Its live orders, one a vendor (2026-11-20).
-          orders: orders.filter((one) => one.requisitionId === found.id && one.status !== 'CANCELLED').map((one) => ({ vendorId: one.vendorId })),
         };
       }),
+      // The requisitions on an order, for its page (2026-11-23).
+      findMany: jest.fn(async ({ where }: { where: Where }) =>
+        requisitions
+          .filter((row) => matches(row, where))
+          .map((row) => ({
+            ...row,
+            requestedBy: nameOf(row.requestedById),
+            department: null,
+            _count: { lines: requisitionLines.filter((line) => line.requisitionId === row.id).length },
+            orderSources: sources.filter((source) => source.requisitionId === row.id && source.releasedAt === null).map((source) => ({ order: { status: orders.find((one) => one.id === source.orderId)!.status } })),
+          })),
+      ),
       updateMany: jest.fn(async ({ where, data }: { where: Where; data: Row }) => {
         const found = requisitions.filter((row) => matches(row, where));
         for (const row of found) Object.assign(row, data);
         return { count: found.length };
       }),
     },
-    vendor: { findFirst: jest.fn(async ({ where }: { where: Where }) => vendors.find((row) => matches(row, where)) ?? null) },
-    stockPlace: { findFirst: jest.fn(async ({ where }: { where: Where }) => (where.id === STOCKROOM && where.organizationId === ORG ? { id: STOCKROOM } : null)) },
+    purchaseRequisitionLine: {
+      // By id, to make orders; else Pending Processing: approved requisitions' lines with an item on no live order.
+      findMany: jest.fn(async ({ where }: { where: Where & { id?: { in: string[] } } }) =>
+        requisitionLines
+          .filter((line) =>
+            where.id
+              ? line.organizationId === where.organizationId && where.id.in.includes(line.id as string)
+              : line.organizationId === where.organizationId && line.itemId && !liveSource(line.id) && ['APPROVED', 'ORDERED'].includes(requisitionOf(line.requisitionId).status as string),
+          )
+          .sort((left, right) => (requisitionOf(left.requisitionId).createdAt as Date).getTime() - (requisitionOf(right.requisitionId).createdAt as Date).getTime() || (left.position as number) - (right.position as number))
+          .map(requisitionLineOf),
+      ),
+      // A requisition's lines still to order.
+      count: jest.fn(async ({ where }: { where: Where }) => requisitionLines.filter((line) => line.requisitionId === where.requisitionId && line.itemId && !liveSource(line.id)).length),
+    },
+    purchaseOrderSource: {
+      createMany: jest.fn(async ({ data }: { data: Row[] }) => sources.push(...data.map((source, index) => ({ id: id(600 + sources.length + index), releasedAt: null, createdAt: new Date((clock += 1)), ...source })))),
+      updateMany: jest.fn(async ({ where, data }: { where: Where; data: Row }) => {
+        const found = sources.filter((row) => matches(row, where));
+        for (const row of found) Object.assign(row, data);
+        return { count: found.length };
+      }),
+    },
+    vendor: {
+      findFirst: jest.fn(async ({ where }: { where: Where }) => vendors.find((row) => matches(row, where)) ?? null),
+      findMany: jest.fn(async ({ where }: { where: Where }) => vendors.filter((row) => matches(row, where))),
+    },
+    stockPlace: { findFirst: jest.fn(async ({ where }: { where: Where }) => ((where.id === STOCKROOM || where.id === TRUCK) && where.organizationId === ORG ? { id: where.id } : null)) },
     xeroOrganisation: { findMany: jest.fn(async () => [{ xeroTenantId: 'tenant-thmp', name: 'THMP' }]) },
     purchasingSettings: { findUnique: jest.fn(async () => null) },
     // No approval steps saved: the office's limit reads as two steps (Purchasing Setup, 2026-11-20).
@@ -204,7 +275,7 @@ function database() {
   const client: unknown = Object.assign(db, transaction);
   const mail = { sendPurchaseOrder: jest.fn<Promise<{ status: string; message: string }>, [Row]>(async () => ({ status: 'SENT', message: 'Email sent successfully.' })) };
   const storage = { get: jest.fn(async (key: string) => Buffer.from(`the bytes of ${key}`)) };
-  return { db, mail, storage, orders, lines, requisitions, requisitionLines, quotes, vendors, deliveries, audits, requisitionFiles, service: new PurchaseOrdersService(db as never, mail as never, storage as never) };
+  return { db, mail, storage, orders, lines, sources, requisitions, requisitionLines, quotes, vendors, deliveries, audits, requisitionFiles, service: new PurchaseOrdersService(db as never, mail as never, storage as never) };
 }
 
 const line = (itemId: string, quantity: number, unitPriceCents: number) => ({ itemId, quantity, unitPriceCents });
@@ -278,33 +349,33 @@ describe('making an order', () => {
     expect((await closed.service.createFromRequisition(buyer, REQUISITION)).orders).toEqual([{ id: expect.any(String), vendor: null }]);
   });
 
-  it('after one of its orders is cancelled, stays Ordered and makes only that vendor order again', async () => {
+  it('after one of its orders is cancelled, waits on Pending Processing for those lines, and orders only them again (2026-11-23)', async () => {
     const made = database();
     made.quotes.splice(0, made.quotes.length);
     made.requisitionLines.forEach((line, index) => (line.vendorId = index === 0 ? ALAMO : HILL));
     const { orders: [alamo, hill] } = await made.service.createFromRequisition(buyer, REQUISITION);
 
+    // Its filters are to order again: it is approved, Pending Processing, until they are.
     await made.service.cancel(buyer, alamo!.id, { reason: 'Out of stock.' });
-    expect(made.requisitions[0]).toMatchObject({ status: 'ORDERED' });
+    expect(made.requisitions[0]).toMatchObject({ status: 'APPROVED' });
+    expect((await made.service.pendingLines(buyer)).lines.filter((one) => one.requisition.id === REQUISITION).map((one) => one.item.code)).toEqual(['FLT-0003']);
     const again = await made.service.createFromRequisition(buyer, REQUISITION);
     expect(again.orders.map((one) => one.vendor?.id)).toEqual([ALAMO]);
-    await expect(made.service.createFromRequisition(buyer, REQUISITION)).rejects.toMatchObject({ code: 'REQUISITION_NOT_ORDERABLE', message: 'Every vendor on this requisition has its order already.' });
-
-    // Approved again only once none of its orders is left.
-    await made.service.cancel(buyer, hill!.id, { reason: 'Changed our minds.' });
     expect(made.requisitions[0]).toMatchObject({ status: 'ORDERED' });
-    await made.service.cancel(buyer, again.orders[0]!.id, { reason: 'Changed our minds.' });
+    await expect(made.service.createFromRequisition(buyer, REQUISITION)).rejects.toMatchObject({ code: 'REQUISITION_NOT_ORDERABLE', message: 'Every line of this requisition is on an order already.' });
+
+    await made.service.cancel(buyer, hill!.id, { reason: 'Changed our minds.' });
     expect(made.requisitions[0]).toMatchObject({ status: 'APPROVED' });
   });
 
-  it('never puts an item on two live orders of one requisition', async () => {
+  it('never puts a requisition line on two live orders: an order holds only the lines it carries', async () => {
     const made = database();
     made.quotes.splice(0, made.quotes.length);
     made.requisitionLines.forEach((line, index) => (line.vendorId = index === 0 ? ALAMO : HILL));
     const { orders: [, hill] } = await made.service.createFromRequisition(buyer, REQUISITION);
 
     // Hill holds the batteries; the filters are on Alamo's order.
-    await expect(made.service.update(buyer, hill!.id, terms())).rejects.toMatchObject({ code: 'PURCHASE_ORDER_ITEM_ON_ANOTHER', message: 'FLT-0003 is already on another order to Alamo Trade Parts, made from the same requisition.' });
+    await expect(made.service.update(buyer, hill!.id, terms())).rejects.toMatchObject({ code: 'PURCHASE_ORDER_ITEM_NOT_REQUESTED' });
     expect((await made.service.update(buyer, hill!.id, terms({ lines: [line(BATTERY, 30, 180)] }))).lines.map((one) => one.quantity)).toEqual([30]);
   });
 
@@ -350,6 +421,115 @@ describe('making an order', () => {
     expect(await service.submit(buyer, orderId)).toMatchObject({ number: 'PO-0001', status: 'AWAITING_APPROVAL', totalCents: 20005, can: { edit: false, submit: false } });
     await expect(service.update(buyer, orderId, terms({ lines: [line(FILTER, 500, 390)] }))).rejects.toMatchObject({ code: 'PURCHASE_ORDER_FIXED' });
     await expect(service.submit(buyer, orderId)).rejects.toMatchObject({ code: 'PURCHASE_ORDER_MOVED_ON' });
+  });
+});
+
+describe('Pending Processing: one order from several requisitions (2026-11-23)', () => {
+  const pick = (requisitionLineId: string, vendorId: string | null = HILL) => ({ requisitionLineId, vendorId });
+
+  it("lists every approved requisition's lines not on an order, oldest first, with the vendor each goes to and its place", async () => {
+    const { service } = database();
+    const pending = await service.pendingLines(buyer);
+    expect(pending.lines.map((one) => [one.requisition.number, one.item.code, one.quantity, one.place?.name ?? null, one.vendor?.name ?? null])).toEqual([
+      ['PR-0012', 'FLT-0003', 36, 'Stockroom', 'Hill Country Supply'],
+      ['PR-0012', 'PRT-0001', 24, 'Stockroom', 'Hill Country Supply'],
+      ['PR-0014', 'FLT-0003', 12, 'Stockroom', null],
+      ['PR-0014', 'PRT-0002', 4, 'Truck 1', null],
+    ]);
+    expect(pending.lines[0]).toMatchObject({ company: { name: 'THMP' }, requisition: { requestedBy: 'Sample Requester' } });
+    // The vendors in use, for a line with none; not the one closed.
+    expect(pending.vendors.map((one) => one.name)).toEqual(['Hill Country Supply', 'Alamo Trade Parts']);
+  });
+
+  it('makes one order a vendor and company: the same item to the same place one line, quantities added, each line where it goes', async () => {
+    const { service, requisitions, audits } = database();
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(42)), pick(id(44)), pick(id(45))] });
+    expect(made.orders).toEqual([{ id: expect.any(String), vendor: expect.objectContaining({ id: HILL }) }]);
+
+    const order = await service.detail(buyer, made.orders[0]!.id);
+    expect(order.lines.map((one) => [one.item.code, one.place?.name ?? null, one.quantity, one.unitPriceCents, one.shares.map((share) => `${share.requisition.number} x ${share.quantity}`)])).toEqual([
+      // At the oldest requisition's estimate.
+      ['FLT-0003', 'Stockroom', 48, 390, ['PR-0012 x 36', 'PR-0014 x 12']],
+      ['PRT-0001', 'Stockroom', 24, 185, ['PR-0012 x 24']],
+      ['PRT-0002', 'Truck 1', 4, 1530, ['PR-0014 x 4']],
+    ]);
+    expect(order).toMatchObject({ requisition: { number: 'PR-0012' }, requisitions: [{ number: 'PR-0012' }, { number: 'PR-0014' }], deliverTo: null });
+    expect(order.requisitionsOn.map((one) => [one.number, one.requestedBy, `${one.linesHere} of ${one.lineCount}`])).toEqual([
+      ['PR-0012', 'Sample Requester', '2 of 2'],
+      ['PR-0014', 'Another Requester', '2 of 2'],
+    ]);
+    expect(requisitions.map((one) => one.status)).toEqual(['ORDERED', 'SUBMITTED', 'ORDERED']);
+    expect(audits.filter((audit) => audit.action === 'PURCHASE_REQUISITION_ORDERED').map((audit) => audit.entityId)).toEqual([REQUISITION, LATER_REQUISITION]);
+    // Nothing is left to order.
+    expect((await service.pendingLines(buyer)).lines).toEqual([]);
+  });
+
+  it('gives what arrives to its requisitions, the oldest first', async () => {
+    const { service, lines } = database();
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(44))] });
+    lines[0]!.receivedQuantity = 40;
+    const [filters] = (await service.detail(buyer, made.orders[0]!.id)).lines;
+    expect(filters!.shares.map((share) => [share.requisition.number, share.receivedQuantity])).toEqual([
+      ['PR-0012', 36],
+      ['PR-0014', 4],
+    ]);
+  });
+
+  it('keeps a requisition with a line still to order approved, Pending Processing, and splits the vendors and companies', async () => {
+    const { service, requisitions, requisitionLines } = database();
+    requisitionLines[4]!.vendorId = ALAMO;
+    requisitions[2]!.xeroTenantId = 'tenant-pest';
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(44)), pick(id(45), ALAMO)] });
+    // PR-0012's filters and PR-0014's are for two companies: three orders.
+    expect(made.orders.map((one) => one.vendor?.name)).toEqual(['Hill Country Supply', 'Hill Country Supply', 'Alamo Trade Parts']);
+    expect(requisitions.map((one) => one.status)).toEqual(['APPROVED', 'SUBMITTED', 'ORDERED']);
+    expect((await service.pendingLines(buyer)).lines.map((one) => one.item.code)).toEqual(['PRT-0001']);
+  });
+
+  it('is seen by whoever asked for any requisition on it', async () => {
+    const { service } = database();
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(44))] });
+    for (const sees of [asker, colleague]) expect((await service.list(sees)).orders.map((one) => one.id)).toEqual([made.orders[0]!.id]);
+  });
+
+  it('refuses a line on an order already, one not approved, a vendor not in use, and too many at once, ordering nothing', async () => {
+    const { service, orders } = database();
+    await service.makeOrders(buyer, { lines: [pick(id(41))] });
+    await expect(service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(44))] })).rejects.toMatchObject({ code: 'REQUISITION_LINE_ORDERED' });
+    await expect(service.makeOrders(buyer, { lines: [pick(id(43))] })).rejects.toMatchObject({ code: 'REQUISITION_NOT_ORDERABLE' });
+    await expect(service.makeOrders(buyer, { lines: [pick(id(44), CLOSED_VENDOR)] })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
+    await expect(service.makeOrders(buyer, { lines: [pick(id(99))] })).rejects.toMatchObject({ code: 'REQUISITION_LINE_NOT_FOUND' });
+    const many: MakePurchaseOrdersInput = { lines: Array.from({ length: MOST_PENDING_LINES_ORDERED + 1 }, (_, n) => pick(id(1000 + n))) };
+    await expect(service.makeOrders(buyer, many)).rejects.toMatchObject({ code: 'PURCHASE_ORDER_TOO_MANY_LINES' });
+    await expect(service.makeOrders(outsider, { lines: [pick(id(44))] })).rejects.toMatchObject({ code: 'REQUISITION_LINE_NOT_FOUND' });
+    expect(orders).toHaveLength(1);
+  });
+
+  it('cancelled, gives every requisition on it back to Pending Processing', async () => {
+    const { service, requisitions } = database();
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(42)), pick(id(44)), pick(id(45))] });
+    await service.cancel(buyer, made.orders[0]!.id, { reason: 'The vendor is closed this week.' });
+    expect(requisitions.map((one) => one.status)).toEqual(['APPROVED', 'SUBMITTED', 'APPROVED']);
+    expect((await service.pendingLines(buyer)).lines).toHaveLength(4);
+    // It still shows what it carried.
+    expect((await service.detail(buyer, made.orders[0]!.id)).requisitions.map((one) => one.number)).toEqual(['PR-0012', 'PR-0014']);
+  });
+
+  it('changed, gives a line taken off back to its requisition; going to one place, moves with Deliver to', async () => {
+    const { service, requisitions, sources } = database();
+    const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(42)), pick(id(44))] });
+    const orderId = made.orders[0]!.id;
+    expect(await service.detail(buyer, orderId)).toMatchObject({ deliverTo: { id: STOCKROOM } });
+
+    // Batteries off: PR-0012 waits for them again.
+    await service.update(buyer, orderId, terms({ lines: [line(FILTER, 48, 390)] }));
+    expect(requisitions[0]).toMatchObject({ status: 'APPROVED' });
+    expect((await service.pendingLines(buyer)).lines.map((one) => one.item.code)).toEqual(['PRT-0001', 'PRT-0002']);
+
+    // All of it to the truck instead.
+    const moved = await service.update(buyer, orderId, terms({ deliverToPlaceId: TRUCK, lines: [{ ...line(FILTER, 48, 390), placeId: STOCKROOM }] }));
+    expect(moved.lines.map((one) => [one.item.code, one.place?.name, one.shares.length])).toEqual([['FLT-0003', 'Truck 1', 2]]);
+    expect(sources.filter((one) => one.releasedAt === null).map((one) => one.placeId)).toEqual([TRUCK, TRUCK]);
   });
 });
 
@@ -608,6 +788,9 @@ describe('the requests the page sends', () => {
     await expect(check(decision, PurchaseOrderDecisionDto)).resolves.toBeDefined();
     await expect(check(cancelled, CancelPurchaseOrderDto)).resolves.toBeDefined();
     await expect(check(sent, SendPurchaseOrderDto)).resolves.toBeDefined();
+    const ticked: Required<MakePurchaseOrdersInput> = { lines: [{ requisitionLineId: id(41), vendorId: HILL }, { requisitionLineId: id(44), vendorId: null }] };
+    await expect(check(ticked, MakePurchaseOrdersDto)).resolves.toBeDefined();
+    await expect(check({ ...terms(), lines: [{ ...line(FILTER, 36, 390), placeId: STOCKROOM }] }, SavePurchaseOrderDto)).resolves.toBeDefined();
   });
 
   it('refuse a status, a number or an approver sent with an order, a tax rate typed as a whole number, and a send with no key', async () => {
@@ -619,6 +802,8 @@ describe('the requests the page sends', () => {
     await expect(check({ ...email(), clientRequestId: undefined }, SendPurchaseOrderDto)).rejects.toBeDefined();
     await expect(check({ ...email(), to: 'a@example.test, b@example.test' }, SendPurchaseOrderDto)).rejects.toBeDefined();
     await expect(check({ reason: '' }, CancelPurchaseOrderDto)).rejects.toBeDefined();
+    await expect(check({ lines: [] }, MakePurchaseOrdersDto)).rejects.toBeDefined();
+    await expect(check({ lines: [{ requisitionLineId: id(41), vendorId: HILL, quantity: 5 }] }, MakePurchaseOrdersDto)).rejects.toBeDefined();
   });
 });
 
@@ -627,7 +812,7 @@ describe('who may do what', () => {
 
   it('reads with purchasing:request, buys with purchasing:order, and approves orders with purchasing:approve-orders (the purchasing manager, 2026-11-21)', () => {
     for (const read of ['list', 'detail']) expect(permissionsOf(read)).toEqual(['purchasing:request']);
-    for (const buys of ['create', 'update', 'submit', 'cancel', 'send']) expect(permissionsOf(buys)).toEqual(['purchasing:request', 'purchasing:order']);
+    for (const buys of ['create', 'pendingLines', 'makeOrders', 'update', 'submit', 'cancel', 'send']) expect(permissionsOf(buys)).toEqual(['purchasing:request', 'purchasing:order']);
     for (const decides of ['approve', 'sendBack']) expect(permissionsOf(decides)).toEqual(['purchasing:request', 'purchasing:approve-orders']);
   });
 

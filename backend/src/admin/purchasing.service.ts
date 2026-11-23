@@ -7,8 +7,8 @@ import {
   approvalRefusal,
   companyRefusal,
   departmentRefusal,
+  allocateReceived,
   averageCostCents,
-  orderGroups,
   requisitionerCode,
   requisitionStage,
   requisitionSubmitProblem,
@@ -17,6 +17,7 @@ import {
   type PurchasingSettings,
   type PurchasingStanding,
   type RequisitionActions,
+  type RequisitionStage,
   type RequisitionChoices,
   type RequisitionDecisionInput,
   type RequisitionDetail,
@@ -92,8 +93,24 @@ const ROW = {
   costCenter: { select: { id: true, code: true, name: true } },
   departmentId: true,
   department: { select: { id: true, code: true, name: true } },
-  // Its orders' statuses, for where it is (2026-11-21): a cancelled one counts for nothing.
-  orders: { where: { status: { not: 'CANCELLED' } }, select: { status: true } },
+  // Its lines on live orders, for where it is (2026-11-21; by its lines since 2026-11-23, an order may carry several requisitions).
+  orderSources: {
+    where: { releasedAt: null },
+    select: {
+      id: true,
+      itemId: true,
+      placeId: true,
+      quantity: true,
+      order: {
+        select: {
+          id: true,
+          status: true,
+          lines: { select: { itemId: true, placeId: true, receivedQuantity: true } },
+          sources: { where: { releasedAt: null }, orderBy: [{ requisition: { createdAt: 'asc' } }, { createdAt: 'asc' }, { id: 'asc' }], select: { id: true, itemId: true, placeId: true, quantity: true } },
+        },
+      },
+    },
+  },
   lines: {
     orderBy: { position: 'asc' },
     select: {
@@ -116,6 +133,25 @@ type Requisition = Prisma.PurchaseRequisitionGetPayload<{ select: typeof ROW }>;
 /** A company's name and purchaser code, by its Xero tenant. */
 type Companies = ReadonlyMap<string, { name: string; purchaserCode: string | null }>;
 
+/**
+ * Where it is, from its orders (a cancelled one counts for nothing), and
+ * Received once all of its share of them has arrived (2026-11-23): what
+ * arrives of an order line goes to its requisitions, the oldest first.
+ */
+function stageOf(requisition: Pick<Requisition, 'status' | 'orderSources'>): RequisitionStage {
+  const sources = requisition.orderSources;
+  const statuses = [...new Map(sources.map((source) => [source.order.id, source.order.status])).values()];
+  const allArrived =
+    sources.length > 0 &&
+    sources.every((source) => {
+      const same = (one: { itemId: string; placeId: string | null }) => one.itemId === source.itemId && one.placeId === source.placeId;
+      const shares = source.order.sources.filter(same);
+      const given = allocateReceived(source.order.lines.find(same)?.receivedQuantity ?? 0, shares);
+      return (given[shares.findIndex((share) => share.id === source.id)] ?? 0) >= source.quantity;
+    });
+  return requisitionStage(requisition.status, statuses, allArrived);
+}
+
 function row(requisition: Requisition, companies: Companies): RequisitionRow {
   const company = requisition.xeroTenantId ? companies.get(requisition.xeroTenantId) : undefined;
   return {
@@ -132,7 +168,7 @@ function row(requisition: Requisition, companies: Companies): RequisitionRow {
     quoteCount: requisition.quotes.length,
     estimatedTotalCents: requisitionTotalCents(requisition.lines),
     decisionNote: requisition.decisionNote,
-    stage: requisitionStage(requisition.status, requisition.orders.map((order) => order.status)),
+    stage: stageOf(requisition),
     department: requisition.department,
   };
 }
@@ -197,17 +233,6 @@ const STEP: Record<string, string> = {
   PURCHASE_REQUISITION_FILE_FOR_VENDOR: 'ticked a file to go to the vendor',
   PURCHASE_REQUISITION_FILE_NOT_FOR_VENDOR: 'unticked a file for the vendor',
 };
-
-/** Whether a vendor the requisition's lines go to has no live order yet: the orders the ribbon may still make. */
-function vendorsUnordered(requisition: Pick<Requisition, 'lines' | 'quotes'>, orders: readonly { vendorId: string | null }[]) {
-  const chosen = requisition.quotes.find((quote) => quote.chosen)?.vendor.id ?? null;
-  const groups = orderGroups(
-    requisition.lines.map((line) => ({ itemId: line.item?.id ?? null, vendorId: line.vendor?.id ?? null })),
-    chosen,
-  );
-  const ordered = new Set(orders.map((order) => order.vendorId));
-  return groups.some((group) => !ordered.has(group.vendorId));
-}
 
 /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
 export function visibleRequisitions(user: AuthenticatedUser): Prisma.PurchaseRequisitionWhereInput {
@@ -312,7 +337,7 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, rules, levels, audits, orders, files, attached, office] = await Promise.all([
+    const [companies, rules, levels, audits, orders, files, attached, office, unordered] = await Promise.all([
       this.companies(organizationId),
       this.rules(this.prisma, user),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
@@ -321,9 +346,9 @@ export class PurchasingService {
         select: { action: true, actorUserId: true, metadata: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
       }),
-      // The orders made from it, one a vendor (2026-11-20): a cancelled one frees its vendor for another.
+      // The orders carrying its lines (2026-11-23: an order may carry several requisitions'); a cancelled one gave them back.
       this.prisma.purchaseOrder.findMany({
-        where: { organizationId, requisitionId, status: { not: 'CANCELLED' } },
+        where: { organizationId, status: { not: 'CANCELLED' }, sources: { some: { requisitionId, releasedAt: null } } },
         select: { id: true, number: true, status: true, vendorId: true, vendor: { select: { id: true, number: true, name: true } } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
@@ -331,6 +356,8 @@ export class PurchasingService {
       requisitionNotesAndLinks(this.prisma, user, requisitionId),
       // Who it is from, for its PDF: the office's address on its invoices.
       this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
+      // Its lines with an item and on no live order: what Make orders may still order (2026-11-23).
+      this.prisma.purchaseRequisitionLine.count({ where: { organizationId, requisitionId, itemId: { not: null }, orderSources: { none: { releasedAt: null } } } }),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -380,7 +407,7 @@ export class PurchasingService {
       },
       files,
       ...attached,
-      can: this.actions(user, requisition, summary.estimatedTotalCents, rules, vendorsUnordered(requisition, orders)),
+      can: this.actions(user, requisition, summary.estimatedTotalCents, rules, unordered > 0),
       settings: rules.settings,
     };
   }
@@ -712,7 +739,7 @@ export class PurchasingService {
       if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
       if (requisition.requestedById !== user.id && !may(user, APPROVE)) throw new ApplicationError(403, 'REQUISITION_NOT_YOURS', 'Its requester or an approver reopens it.');
       if (requisition.status !== Status.APPROVED) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'Only an approved requisition with no order yet can be reopened.');
-      if (await tx.purchaseOrder.count({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } } }))
+      if (await tx.purchaseOrderSource.count({ where: { organizationId, requisitionId, releasedAt: null } }))
         throw new ApplicationError(409, 'REQUISITION_ORDERED', 'An order has been made from it. Cancel the order first.');
       await this.move(tx, organizationId, requisitionId, [Status.APPROVED], { status: Status.SENT_BACK, decidedById: null, decidedAt: null, decisionNote: note ? `Reopened: ${note}` : 'Reopened' });
       await this.audit(tx, user, 'PURCHASE_REQUISITION_REOPENED', requisitionId, { number: requisition.number, note });

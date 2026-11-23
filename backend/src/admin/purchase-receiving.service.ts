@@ -87,6 +87,8 @@ export class PurchaseReceivingService {
         sentAt: true,
         shortClosedAt: true,
         requisitionId: true,
+        // The requisitions it carries lines of (2026-11-23).
+        sources: { where: { releasedAt: null }, select: { requisitionId: true } },
         taxBasisPoints: true,
         lines: { select: { id: true, quantity: true, receivedQuantity: true, unitPriceCents: true, item: { select: { name: true } } } },
         bill: { select: { id: true, status: true, totalCents: true, lines: { select: { orderLineId: true, quantity: true, unitPriceCents: true } } } },
@@ -130,10 +132,14 @@ export class PurchaseReceivingService {
     if (status === Status.RECEIVED && billStatus === VendorBillStatus.PAID) {
       const closed = await db.purchaseOrder.updateMany({ where: { id: orderId, organizationId, status: Status.RECEIVED }, data: { status: Status.CLOSED, closedAt: new Date() } });
       if (closed.count === 1) {
-        // One order a vendor (2026-11-20): the requisition closes with the last of its orders, not the first.
-        const open = await db.purchaseOrder.count({ where: { organizationId, requisitionId: order.requisitionId, id: { not: orderId }, status: { notIn: [Status.CLOSED, Status.CANCELLED] } } });
-        if (!open)
-          await db.purchaseRequisition.updateMany({ where: { id: order.requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.CLOSED } });
+        // Each requisition on it closes with the last of the orders carrying its lines, not the first (2026-11-20; 2026-11-23,
+        // an order may carry several). One with lines still to order is not Ordered, so it stays open.
+        const requisitionIds = order.sources.length ? [...new Set(order.sources.map((source) => source.requisitionId))] : [order.requisitionId];
+        for (const requisitionId of requisitionIds) {
+          const open = await db.purchaseOrderSource.count({ where: { organizationId, requisitionId, releasedAt: null, orderId: { not: orderId }, order: { status: { notIn: [Status.CLOSED, Status.CANCELLED] } } } });
+          if (!open)
+            await db.purchaseRequisition.updateMany({ where: { id: requisitionId, organizationId, status: PurchaseRequisitionStatus.ORDERED }, data: { status: PurchaseRequisitionStatus.CLOSED } });
+        }
         await this.audit(db, user, 'PURCHASE_ORDER_CLOSED', orderId, { number: order.number });
       }
     }

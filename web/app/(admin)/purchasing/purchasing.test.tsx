@@ -19,6 +19,8 @@ const hooks = vi.hoisted(() => ({
   useRequisitionChoices: vi.fn(),
   usePurchasingEdits: vi.fn(),
   usePurchaseOrders: vi.fn(),
+  // Pending Processing (2026-11-23) has its own tests (pending-processing.test.tsx): here nothing waits.
+  usePendingOrderLines: vi.fn(() => ({ isLoading: false, isError: false, data: { lines: [], vendors: [] } })),
   usePurchaseOrder: vi.fn(),
   usePurchaseOrderEdits: vi.fn(),
   usePurchaseReceivingEdits: vi.fn(),
@@ -651,6 +653,7 @@ const orderRow = (over: Partial<PurchaseOrderRow> = {}): PurchaseOrderRow => ({
   status: 'AWAITING_APPROVAL',
   vendor: { id: 'vendor-hill', name: 'Hill Country Supply' },
   requisition: { id: 'req-12', number: 'PR-0012' },
+  requisitions: [{ id: 'req-12', number: 'PR-0012' }],
   company: { tenantId: 'tenant-thmp', name: 'THMP' },
   expectedOn: '2026-11-24',
   lineCount: 2,
@@ -669,8 +672,8 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   taxBasisPoints: 825,
   notes: null,
   lines: [
-    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0 },
-    { id: 'ol-2', item: { id: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0 },
+    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0, place: { id: 'place-stockroom', name: 'Stockroom', code: null }, shares: [{ requisition: { id: 'req-12', number: 'PR-0012' }, department: null, quantity: 36, receivedQuantity: 0 }] },
+    { id: 'ol-2', item: { id: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0, place: { id: 'place-stockroom', name: 'Stockroom', code: null }, shares: [{ requisition: { id: 'req-12', number: 'PR-0012' }, department: null, quantity: 24, receivedQuantity: 0 }] },
   ],
   subtotalCents: 18480,
   taxCents: 1525,
@@ -686,6 +689,7 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   shortCloseReason: null,
   history: [{ at: '2026-11-18T16:10:00.000Z', by: 'Sample Purchaser', what: 'submitted it for approval' }],
   can: { ...NOTHING, approve: true, sendBack: true },
+  requisitionsOn: [],
   approvalSteps: stepsFromLimit(50000, 2),
   reapproveChangedOrders: false,
   ...over,
@@ -711,6 +715,46 @@ describe('one order', () => {
     hooks.usePurchaseOrder.mockReturnValue({ isLoading: false, isError: false, data });
     return render(<PurchaseOrderPage />);
   };
+
+  // One order from several requisitions (2026-11-23).
+  it('carries several requisitions: each line where it goes and whose it is, and the requisitions on it', () => {
+    const truck = { id: 'place-truck', name: 'Truck 1', code: 'TRK-01' };
+    const stockroom = { id: 'place-stockroom', name: 'Stockroom', code: null };
+    const share = (id: string, number: string, quantity: number, department: string, receivedQuantity = 0) => ({ requisition: { id, number }, department, quantity, receivedQuantity });
+    mount(
+      orderDetail({
+        requisitions: [
+          { id: 'req-12', number: 'PR-0012' },
+          { id: 'req-15', number: 'PR-0015' },
+          { id: 'req-16', number: 'PR-0016' },
+        ],
+        deliverTo: null,
+        lines: [
+          { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, place: stockroom, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0, shares: [share('req-12', 'PR-0012', 12, 'MAINT'), share('req-15', 'PR-0015', 24, 'MAINT')] },
+          { id: 'ol-2', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, place: truck, quantity: 6, unitPriceCents: 390, requestedQuantity: 6, receivedQuantity: 0, shares: [share('req-16', 'PR-0016', 6, 'HVAC')] },
+        ],
+        requisitionsOn: [
+          { id: 'req-12', number: 'PR-0012', requestedBy: 'Sample Requester', department: 'MAINT', linesHere: 1, lineCount: 1, stage: 'PENDING_ORDER' },
+          { id: 'req-16', number: 'PR-0016', requestedBy: 'Another Requester', department: 'HVAC', linesHere: 1, lineCount: 2, stage: 'PENDING_PROCESSING' },
+        ],
+      }),
+    );
+
+    // The header names every requisition on it.
+    for (const [number, id] of [['PR-0012', 'req-12'], ['PR-0015', 'req-15'], ['PR-0016', 'req-16']]) expect(screen.getAllByRole('link', { name: number! })[0]!.getAttribute('href')).toBe(`/purchasing/requisitions/${id}`);
+    const lines = screen.getByRole('table', { name: 'What is ordered' });
+    const [stockroomLine, truckLine] = within(lines).getAllByRole('row', { name: /Filter 20x25x1/ });
+    expect(stockroomLine!.textContent).toContain('Stockroom');
+    expect(stockroomLine!.textContent).toContain('PR-0012 × 12 · MAINT');
+    expect(stockroomLine!.textContent).toContain('PR-0015 × 24 · MAINT');
+    expect(truckLine!.textContent).toContain('Truck 1');
+    expect(screen.getByText(/the first 12 are PR-0012's, the next 24 PR-0015's/)).toBeTruthy();
+
+    const on = screen.getByRole('table', { name: 'The requisitions on this order' });
+    expect(within(on).getByRole('row', { name: /PR-0016/ }).textContent).toContain('1 of 2 (the rest are still to order)');
+    expect(within(on).getByRole('row', { name: /PR-0012/ }).textContent).toContain('Pending Order');
+    expect(screen.getByText("Each line's location: Stockroom, Truck 1")).toBeTruthy();
+  });
 
   it('shows an approver the lines and total with tax, to approve or to send back with a note', async () => {
     mount(orderDetail());
@@ -802,7 +846,7 @@ describe('one order', () => {
     await waitFor(() => expect(orderEdits.step!.mutateAsync).toHaveBeenCalledWith({ orderId: 'order-9', step: 'submit' }));
     expect(orderEdits.update!.mutateAsync).toHaveBeenCalledWith({
       orderId: 'order-9',
-      input: { vendorId: 'vendor-hill', deliverToPlaceId: 'place-stockroom', expectedOn: '2026-11-24', terms: 'Net 30', taxBasisPoints: 825, notes: null, lines: [{ itemId: 'item-filter', quantity: 36, unitPriceCents: 375 }] },
+      input: { vendorId: 'vendor-hill', deliverToPlaceId: 'place-stockroom', expectedOn: '2026-11-24', terms: 'Net 30', taxBasisPoints: 825, notes: null, lines: [{ itemId: 'item-filter', placeId: 'place-stockroom', quantity: 36, unitPriceCents: 375 }] },
     });
   });
 });

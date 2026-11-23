@@ -1,4 +1,5 @@
 import type { ApprovalStep } from './purchasing-setup.js';
+import type { RequisitionStage } from './purchasing.js';
 import type { GoodsReceiptRow, VendorBillView } from './receiving.js';
 
 /**
@@ -71,8 +72,10 @@ export function orderSubmitProblem(order: { vendorId: string | null; lines: read
 }
 
 export interface PurchaseOrderLineInput {
-  /** One of the requisition's items. */
+  /** One of the items its requisitions asked for. */
   itemId: string;
+  /** Where it goes (2026-11-23): with the item, which line of the order it is; as the order was made. */
+  placeId?: string | null;
   quantity: number;
   unitPriceCents: number;
 }
@@ -116,7 +119,10 @@ export interface PurchaseOrderRow {
   status: PurchaseOrderStatus;
   /** `number` is the vendor's No. ("V-00003", 2026-11-20). */
   vendor: { id: string; name: string; number?: string | null } | null;
+  /** The oldest requisition it was made from. */
   requisition: { id: string; number: string | null };
+  /** Every requisition it carries lines of, oldest first (2026-11-23: one order from several). */
+  requisitions: { id: string; number: string | null }[];
   /** `purchaserCode` is the company's code ("THMP", 2026-11-20), when it has one. */
   company: { tenantId: string; name: string; purchaserCode?: string | null } | null;
   expectedOn: string | null;
@@ -139,13 +145,86 @@ export interface PurchaseOrdersMade {
 export interface PurchaseOrderLine {
   id: string;
   item: { id: string; code: string; name: string; unit: string };
+  /** Where it goes (2026-11-23); null for the order's own place. */
+  place: { id: string; name: string; code: string | null } | null;
   quantity: number;
   unitPriceCents: number;
-  /** What the requisition asked for of this item. */
+  /** What its requisitions asked for of this item, here. */
   requestedQuantity: number;
   /** How much has arrived. */
   receivedQuantity: number;
+  /** Each requisition's share, oldest first: what arrives goes to them in that order. */
+  shares: PurchaseOrderShare[];
 }
+
+/** A requisition's share of an order line (2026-11-23). */
+export interface PurchaseOrderShare {
+  requisition: { id: string; number: string | null };
+  department: string | null;
+  quantity: number;
+  /** What has arrived of it: the line's arrivals given to its shares, oldest requisition first. */
+  receivedQuantity: number;
+}
+
+/** A requisition an order carries lines of, for its page (2026-11-23). */
+export interface PurchaseOrderRequisition {
+  id: string;
+  number: string | null;
+  requestedBy: string;
+  department: string | null;
+  /** How many of its lines are on this order, of all its lines. */
+  linesHere: number;
+  lineCount: number;
+  /** Where it is, NAV's way: Pending Processing while some of its lines are still to order. */
+  stage: RequisitionStage;
+}
+
+/**
+ * What has arrived of a line, given to its shares in order -- the oldest
+ * requisition first (the office, 2026-11-23). `shares` come oldest first; the
+ * answer is each one's received quantity, in the same order.
+ */
+export function allocateReceived(receivedQuantity: number, shares: readonly { quantity: number }[]): number[] {
+  let left = Math.max(0, receivedQuantity);
+  return shares.map((share) => {
+    const given = Math.min(share.quantity, left);
+    left -= given;
+    return given;
+  });
+}
+
+// ── Pending Processing: approved requisition lines not ordered yet (2026-11-23) ─
+
+/** An approved requisition line waiting for an order. */
+export interface PendingOrderLine {
+  requisitionLineId: string;
+  requisition: { id: string; number: string | null; createdAt: string; requestedBy: string };
+  company: { tenantId: string; name: string; purchaserCode: string | null } | null;
+  item: { id: string; code: string; name: string; unit: string };
+  /** Where it goes: the line's own place, else its requisition's. */
+  place: { id: string; name: string; code: string | null } | null;
+  quantity: number;
+  estimatedUnitCostCents: number;
+  /** The line's own vendor, else its requisition's chosen quote's; null to choose. */
+  vendor: { id: string; number: string | null; name: string } | null;
+  expectedOn: string | null;
+  department: string | null;
+  notes: string | null;
+}
+
+export interface PendingOrderLines {
+  lines: PendingOrderLine[];
+  /** The vendors in use, for a line with none. */
+  vendors: { id: string; number: string | null; name: string }[];
+}
+
+/** Make Purchase Orders: the lines ticked, each with the vendor it goes to. One order a vendor and company. */
+export interface MakePurchaseOrdersInput {
+  lines: { requisitionLineId: string; vendorId: string | null }[];
+}
+
+/** At most this many lines in one press. */
+export const MOST_PENDING_LINES_ORDERED = 300;
 
 export interface PurchaseOrderDeliveryRow {
   id: string;
@@ -227,6 +306,8 @@ export interface PurchaseOrderDetail extends PurchaseOrderRow {
   shortCloseReason: string | null;
   history: { at: string; by: string; what: string }[];
   can: PurchaseOrderActions;
+  /** The requisitions it carries lines of, oldest first (2026-11-23). */
+  requisitionsOn: PurchaseOrderRequisition[];
   /** The office's approval steps, which orders share with requisitions (Purchasing Setup, 2026-11-20). */
   approvalSteps: ApprovalStep[];
   /** Every change to an approved order goes back for approval; off, only one that raises it or adds a line. */

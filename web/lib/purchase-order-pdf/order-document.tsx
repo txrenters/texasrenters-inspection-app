@@ -26,18 +26,23 @@ const own = StyleSheet.create({
 });
 
 /** The lines' columns, as the board draws them. */
+// Each line's Location Code (2026-11-23): one order may go to several places.
 const COLUMNS = [
-  { label: 'Item Code', width: '14%' },
-  { label: 'Description', width: '28%' },
-  { label: 'Quantity', width: '9%', right: true },
-  { label: 'UoM', width: '7%' },
-  { label: 'Direct Unit Cost', width: '13%', right: true },
-  { label: 'Line Amount', width: '13%', right: true },
+  { label: 'Item Code', width: '12%' },
+  { label: 'Description', width: '24%' },
+  { label: 'Location Code', width: '10%' },
+  { label: 'Quantity', width: '8%', right: true },
+  { label: 'UoM', width: '6%' },
+  { label: 'Direct Unit Cost', width: '12%', right: true },
+  { label: 'Line Amount', width: '12%', right: true },
   { label: 'Expected Receipt', width: '16%' },
 ] as const;
 
 /** The day it was ordered: when it was approved, else when it was made. */
 export const orderDay = (order: Pick<PurchaseOrderDetail, 'approvedAt' | 'createdAt'>) => navMomentDay(order.approvedAt ?? order.createdAt);
+
+/** Its lines go to more than one place (2026-11-23): each line says where. */
+const severalPlaces = (order: Pick<PurchaseOrderDetail, 'lines'>) => new Set(order.lines.map((line) => line.place?.id ?? '')).size > 1;
 
 /** The facts under the two boxes, read across two columns as the board lays them out. */
 export function orderFacts(order: PurchaseOrderDetail): { label: string; value: string }[] {
@@ -47,8 +52,8 @@ export function orderFacts(order: PurchaseOrderDetail): { label: string; value: 
     { label: 'Expected Receipt', value: navDay(order.expectedOn) },
     { label: 'Purchaser Code', value: order.company?.purchaserCode ?? '' },
     { label: 'Payment Terms', value: order.terms ?? '' },
-    { label: 'Location Code', value: order.deliverTo?.code ?? '' },
-    { label: 'Requisition No.', value: order.requisition.number ?? '' },
+    { label: 'Location Code', value: severalPlaces(order) ? 'Each line' : (order.deliverTo?.code ?? '') },
+    { label: 'Requisition No.', value: (order.requisitions?.length ? order.requisitions : [order.requisition]).map((one) => one.number ?? '').filter(Boolean).join(', ') },
     { label: 'Ordered by', value: order.madeBy.name },
   ];
 }
@@ -64,7 +69,8 @@ export function orderVendorLines(order: PurchaseOrderDetail): string[] {
 /** The Ship-to box: the place by code and name, at the office, for the company the order is for. */
 export function orderShipToLines(order: PurchaseOrderDetail): string[] {
   const { address } = fromLines(order.from);
-  return [order.deliverTo ? coded(order.deliverTo) : 'The office', order.company?.name ?? order.from.name, address, order.from.phone ? `Receiving: ${order.from.phone}` : ''].filter(Boolean);
+  const where = severalPlaces(order) ? "Each line's Location Code" : order.deliverTo ? coded(order.deliverTo) : 'The office';
+  return [where, order.company?.name ?? order.from.name, address, order.from.phone ? `Receiving: ${order.from.phone}` : ''].filter(Boolean);
 }
 
 export function PurchaseOrderDocument({ order }: { order: PurchaseOrderDetail }) {
@@ -122,7 +128,7 @@ export function PurchaseOrderDocument({ order }: { order: PurchaseOrderDetail })
         </View>
         {order.lines.map((line) => (
           <View key={line.id} style={styles.row} wrap={false}>
-            {[line.item.code, line.item.name, String(line.quantity), line.item.unit.toUpperCase(), navAmount(line.unitPriceCents), navAmount(line.quantity * line.unitPriceCents), navDay(order.expectedOn)].map((cell, index) => {
+            {[line.item.code, line.item.name, line.place?.code ?? line.place?.name ?? '', String(line.quantity), line.item.unit.toUpperCase(), navAmount(line.unitPriceCents), navAmount(line.quantity * line.unitPriceCents), navDay(order.expectedOn)].map((cell, index) => {
               const column = COLUMNS[index]!;
               return (
                 <Text key={column.label} style={[styles.td, { width: column.width }, 'right' in column ? styles.right : {}]}>

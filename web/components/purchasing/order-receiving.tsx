@@ -240,7 +240,9 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
     const typed = quantities[line.id] ?? '';
     const quantity = typed.trim() === '' ? 0 : whole(typed);
     const remaining = line.quantity - line.receivedQuantity;
-    return { line, remaining, quantity, placeId: placeOf[line.id] ?? fallback, over: quantity !== null && quantity > remaining };
+    // Each line where it goes (2026-11-23), else the order's place.
+    const own = line.place && places.some((place) => place.id === line.place?.id) ? line.place.id : null;
+    return { line, remaining, quantity, placeId: placeOf[line.id] ?? own ?? fallback, over: quantity !== null && quantity > remaining };
   });
   const invalid = rows.some((row) => row.quantity === null || row.over) || !rows.some((row) => row.quantity) || !fallback || Boolean(aheadOfTexas(receivedOn));
   const units = rows.reduce((sum, row) => sum + (row.quantity ?? 0), 0);
