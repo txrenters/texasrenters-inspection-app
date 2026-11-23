@@ -472,6 +472,7 @@ model Organization {
   jobberOutboundTasks  JobberOutboundTask[]
   workOrderImports     WorkOrderImport[]
   workOrderTriages     WorkOrderTriage[]
+  workOrderCrew        WorkOrderCrewMember[]
   inspectionImportJobs InspectionImportJob[]
   clientErrorReports   ClientErrorReport[]
   tenants              PropertywareTenant[]
@@ -719,6 +720,8 @@ model UserProfile {
   skillGrantsIssued    TechnicianSkillGrant[]   @relation("TechnicianSkillGrantedBy")
   skillGrantsRevoked   TechnicianSkillGrant[]   @relation("TechnicianSkillRevokedBy")
   workOrderTriagesPicked WorkOrderTriage[]      @relation("WorkOrderTriageTechnician")
+  workOrderCrewSeat      WorkOrderCrewMember[]  @relation("WorkOrderCrewTechnician")
+  workOrderCrewAdded     WorkOrderCrewMember[]  @relation("WorkOrderCrewAddedBy")
   tbpPlansPublished    TbpQuarterPlan[]         @relation("TbpPlanPublishedBy")
   tbpPlanStops         TbpQuarterPlanStop[]     @relation("TbpStopTechnician")
   tbpPlanDays          TbpQuarterPlanDay[]      @relation("TbpPlanDayTechnician")
@@ -4096,6 +4099,24 @@ model WorkOrderTriage {
   technician   UserProfile? @relation("WorkOrderTriageTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, outcome])
+}
+
+/// A technician the work-order matcher may pick (the office, 2026-11-24: "can
+/// we add a feature where we can select technician"). Empty means every active
+/// technician, as before; once anyone is on it, only they are considered.
+/// Their skills still decide who fits.
+model WorkOrderCrewMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  technicianId   String   @db.Uuid
+  addedById      String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("WorkOrderCrewTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  addedBy      UserProfile? @relation("WorkOrderCrewAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, technicianId])
 }
 
 /// A capability a technician can hold -- "HVAC certified", "Lead-safe".

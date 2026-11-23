@@ -1786,6 +1786,18 @@ export interface ScopeSheetImportResult {
   missing: string[];
 }
 
+/**
+ * One technician on the work-order crew list. With nobody chosen, everyone is
+ * `inCrew` and the matcher considers every active technician.
+ */
+export interface WorkOrderCrewEntry {
+  technicianId: string;
+  displayName: string;
+  inCrew: boolean;
+  /** Skills held, from the Scope of Work sheet or by hand. */
+  skills: number;
+}
+
 /** One "check open work orders" press: how many were looked at, by outcome. */
 export interface OpenWorkOrderCheckResult {
   checked: number;

@@ -4,6 +4,7 @@ import { AdminModule } from '../admin/admin.module';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
 import { TechnicianScopeSheetService } from './technician-scope-sheet';
+import { WorkOrderCrewService } from './work-order-crew';
 import { WorkOrderIntakeService } from './work-order-intake.service';
 import { WorkOrderMatchingController } from './work-order-matching.controller';
 import { WorkOrderTriageService } from './work-order-triage.service';
@@ -20,6 +21,7 @@ import { WorkOrderTriageService } from './work-order-triage.service';
     WorkOrderIntakeService,
     WorkOrderTriageService,
     TechnicianScopeSheetService,
+    WorkOrderCrewService,
     AiProviderSettingsService,
     ApiAuthGuard,
     PermissionsGuard,

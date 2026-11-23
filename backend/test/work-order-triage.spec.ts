@@ -72,7 +72,7 @@ function aiAnswers(...answers: string[]) {
   return fetchMock;
 }
 
-function harness(options: { assigned?: boolean; grants?: { technicianId: string; skillId: string; level: string; note: string | null }[] } = {}) {
+function harness(options: { assigned?: boolean; crew?: string[]; grants?: { technicianId: string; skillId: string; level: string; note: string | null }[] } = {}) {
   let triageRow: Record<string, unknown> | null = null;
   const prisma = {
     inspection: {
@@ -84,11 +84,16 @@ function harness(options: { assigned?: boolean; grants?: { technicianId: string;
       })),
     },
     technicianSkill: { findMany: jest.fn(async () => catalog) },
+    workOrderCrewMember: {
+      findMany: jest.fn(async () => (options.crew ?? []).map((technicianId) => ({ technicianId }))),
+    },
     userProfile: {
-      findMany: jest.fn(async () => [
-        { id: 'tech-kevin', displayName: 'Kevin' },
-        { id: 'tech-amy', displayName: 'Amy' },
-      ]),
+      findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        [
+          { id: 'tech-kevin', displayName: 'Kevin' },
+          { id: 'tech-amy', displayName: 'Amy' },
+        ].filter((technician) => !where.id || where.id.in.includes(technician.id)),
+      ),
     },
     technicianSkillGrant: {
       findMany: jest.fn(async () =>
@@ -174,6 +179,20 @@ describe('WorkOrderTriageService', () => {
       technicianId: 'tech-kevin',
       reason: 'Kevin: Faucet Leak; minor job.',
     });
+  });
+
+  it('picks only from the work-order crew once the office has chosen one', async () => {
+    aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+    const { service, admin, row } = harness({
+      crew: ['tech-amy'],
+      grants: [
+        { technicianId: 'tech-kevin', skillId: 'skill-faucet', level: 'FULL', note: null },
+        { technicianId: 'tech-amy', skillId: 'skill-faucet', level: 'LIMITED', note: 'MINOR REPAIRS ONLY' },
+      ],
+    });
+    await service.triage(machine, VISIT, handoff());
+    expect(admin.autoAssignWorkOrder).toHaveBeenCalledWith(machine, VISIT, 'tech-amy', expect.anything());
+    expect(row()).toMatchObject({ technicianId: 'tech-amy' });
   });
 
   it('reads a re-send with the same text once', async () => {
