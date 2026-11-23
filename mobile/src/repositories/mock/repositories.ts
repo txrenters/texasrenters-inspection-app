@@ -1,4 +1,4 @@
-import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg, type PhoneCounts, type SavePhoneCountResult } from '@texasrenters/shared';
+import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg, type PhoneCatalogItem, type PhoneCounts, type SavePhoneCountResult } from '@texasrenters/shared';
 
 import type {
   AddAreaInput,
@@ -623,6 +623,13 @@ export class MockHomeRepository implements HomeRepository {
   }
 }
 
+/** Every item in use, in the demo build (2026-11-24): what a search or a scan finds. */
+const DEMO_CATALOG: PhoneCatalogItem[] = [
+  { itemId: 'demo-filter', code: 'FLT-0001', name: 'Filter 20x25x1', unit: 'each' },
+  { itemId: 'demo-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' },
+  { itemId: 'demo-alarm', code: 'SMK-0010', name: 'Smoke alarm, 10 year', unit: 'each' },
+];
+
 /**
  * In-memory, so the demo build can exercise the truck count without an API:
  * one count of one truck, handed in once every line has a number.
@@ -635,7 +642,7 @@ export class MockCountRepository implements CountRepository {
   private handedIn = false;
 
   async mine(): Promise<PhoneCounts> {
-    return { counts: this.handedIn ? [] : [{ id: 'demo-count', number: 'CNT-DEMO', title: 'Monthly count', place: { id: 'demo-truck', name: 'Truck 1' }, lines: this.lines }] };
+    return { counts: this.handedIn ? [] : [{ id: 'demo-count', number: 'CNT-DEMO', title: 'Monthly count', place: { id: 'demo-truck', name: 'Truck 1' }, lines: this.lines }], catalog: DEMO_CATALOG };
   }
 
   async save(count: PendingCount): Promise<SavePhoneCountResult> {
@@ -668,7 +675,7 @@ export class MockStockRepository implements StockRepository {
 
   async forJob(inspectionId: string): Promise<JobStock> {
     const slips = this.slips.get(inspectionId) ?? [];
-    return { places: [{ id: 'demo-truck', name: 'Truck 1' }], stock: this.truck.filter((item) => item.quantity > 0), slips, taken: jobStockTaken(slips) };
+    return { places: [{ id: 'demo-truck', name: 'Truck 1' }], stock: this.truck.filter((item) => item.quantity > 0), slips, taken: jobStockTaken(slips), catalog: DEMO_CATALOG };
   }
 
   async record(slip: PendingSlip): Promise<JobStock> {

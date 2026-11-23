@@ -5,6 +5,7 @@ import { MACHINE_FORBIDDEN_PERMISSIONS, type PostStockSlipInput } from '@texasre
 import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
 import { PostStockSlipDto, ReverseStockSlipDto, StockSlipChoicesQueryDto, StockSlipsController } from '../src/admin/stock-slips.controller';
 import { StockSlipsService } from '../src/admin/stock-slips.service';
+import { TruckStockService } from '../src/admin/truck-stock.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 /**
@@ -134,6 +135,7 @@ function database() {
       return matches(one, { ...where, assignments: undefined, scheduledAt: undefined });
     });
 
+  const asks: Row[] = [{ id: id(61), organizationId: ORG, placeId: VAN, status: 'ASKED', filledSlipId: null }];
   const db = {
     stockSlip: {
       findMany: jest.fn(async ({ where }: { where: Where }) => slips.filter((row) => matches(row, where)).map(whole).reverse()),
@@ -177,6 +179,18 @@ function database() {
       findMany: jest.fn(async ({ where }: { where: Where }) => visitsWhere(where)),
       findFirst: jest.fn(async ({ where }: { where: Where }) => visitsWhere(where)[0] ?? null),
     },
+    // The trucks' asks (2026-11-24): one waiting for the van.
+    truckStockAsk: {
+      findFirst: jest.fn(async ({ where }: { where: Where }) => {
+        const ask = asks.find((row) => row.id === where.id && row.organizationId === where.organizationId);
+        return ask ? { ...ask, place: { name: place(ask.placeId)?.name } } : null;
+      }),
+      updateMany: jest.fn(async ({ where, data }: { where: Where; data: Row }) => {
+        const found = asks.filter((row) => matches(row, where));
+        for (const row of found) Object.assign(row, data);
+        return { count: found.length };
+      }),
+    },
     // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
     stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
@@ -187,7 +201,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, slips, slipLines, movements, audits, onHand, service: new StockSlipsService(db as never) };
+  return { db, slips, slipLines, movements, audits, onHand, asks, service: new StockSlipsService(db as never, new TruckStockService(db as never)) };
 }
 
 const slip = (over: Partial<PostStockSlipInput> = {}): PostStockSlipInput => ({
@@ -318,6 +332,21 @@ describe('a move between places', () => {
   it('needs two different places', async () => {
     const { service } = database();
     await expect(service.post(keeper, move({ toPlaceId: STOCKROOM }))).rejects.toMatchObject({ message: 'Choose two different places.' });
+  });
+});
+
+// Asks from the trucks (2026-11-24): the office fills one with a move into that truck.
+describe('a move made from a truck\'s ask', () => {
+  it('marks the ask filled by the move, once, and only a move into the ask\'s own truck', async () => {
+    const { service, asks, slips, audits } = database();
+    await service.post(keeper, move({ askId: id(61) }));
+    expect(asks[0]).toMatchObject({ status: 'FILLED', filledSlipId: slips[0]!.id, filledByName: keeper.displayName });
+    expect(audits.map((audit) => audit.action)).toEqual(['STOCK_SLIP_POSTED', 'TRUCK_STOCK_ASK_FILLED']);
+
+    await expect(service.post(keeper, move({ askId: id(61), requestKey: key(7) }))).rejects.toMatchObject({ code: 'TRUCK_ASK_FILLED' });
+    asks[0]!.status = 'ASKED';
+    await expect(service.post(keeper, move({ askId: id(61), requestKey: key(8), fromPlaceId: VAN, toPlaceId: STOCKROOM }))).rejects.toMatchObject({ code: 'TRUCK_ASK_OTHER_TRUCK' });
+    await expect(service.post(keeper, slip({ askId: id(61), requestKey: key(9) }))).rejects.toMatchObject({ code: 'TRUCK_ASK_NEEDS_A_MOVE' });
   });
 });
 

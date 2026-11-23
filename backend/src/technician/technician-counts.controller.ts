@@ -1,8 +1,8 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MOST_STOCK_QUANTITY, UserRole, type PhoneCountedLine, type SavePhoneCountInput } from '@texasrenters/shared';
+import { MOST_FOUND_ITEMS, MOST_STOCK_QUANTITY, UserRole, type PhoneCountedLine, type PhoneFoundItem, type SavePhoneCountInput } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsInt, IsUUID, Max, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsOptional, IsUUID, Max, Min, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { TechnicianCountsService } from './technician-counts.service';
@@ -21,8 +21,16 @@ export class PhoneCountedLineDto implements Required<PhoneCountedLine> {
  * field it does not know. There is no counter, place, expected number or cost
  * in it: the phone cannot say whose count it is or what a line should hold.
  */
+/** Found on the truck and not on the count's list (2026-11-24). */
+export class PhoneFoundItemDto implements Required<PhoneFoundItem> {
+  @IsUUID() itemId!: string;
+  @IsInt() @Min(0) @Max(MOST_STOCK_QUANTITY) counted!: number;
+}
+
 export class SavePhoneCountDto implements Required<SavePhoneCountInput> {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MOST_PHONE_COUNT_LINES) @ValidateNested({ each: true }) @Type(() => PhoneCountedLineDto) lines!: PhoneCountedLineDto[];
+  // Empty when what is sent is only what was found: the service asks for one or the other.
+  @IsArray() @ArrayMaxSize(MOST_PHONE_COUNT_LINES) @ValidateNested({ each: true }) @Type(() => PhoneCountedLineDto) lines!: PhoneCountedLineDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(MOST_FOUND_ITEMS) @ValidateNested({ each: true }) @Type(() => PhoneFoundItemDto) found!: PhoneFoundItemDto[];
   @IsBoolean() handIn!: boolean;
 }
 

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { phoneCatalogSchema } from './phone-catalog-schema';
+
 /**
  * What the server answers for the truck counts a technician may count
  * (2026-11-19).
@@ -29,6 +31,8 @@ export const truckCountsSchema = z.object({
       lines: z.array(lineSchema),
     }),
   ),
+  // 2026-11-24: what was found on the truck and not on the count is added from it.
+  catalog: phoneCatalogSchema,
 });
 
 export const truckCountSavedSchema = truckCountsSchema.extend({

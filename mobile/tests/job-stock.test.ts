@@ -161,6 +161,7 @@ describe('what the server answers', () => {
     stock: STOCK,
     slips: [{ id: 'slip-1', number: 'WD-0031', kind: 'WITHDRAWAL', at: '2026-11-19T15:00:00.000Z', place: 'Truck 1', reversed: false, lines: [filter(2)] }],
     taken: [filter(2)],
+    catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }],
   };
 
   it('is kept whole: every field the screen reads is named, and it survives being stored and read back', () => {
@@ -260,5 +261,12 @@ describe('a slip recorded on the phone', () => {
     expect(await readQueue()).toEqual([]);
     // The screen has just said why: nothing is left to read later.
     expect(await readStockRefusals()).toEqual([]);
+  });
+});
+
+describe('a copy kept before every item in use came with it (2026-11-24)', () => {
+  it('still reads, with no items to search', () => {
+    const old = { places: [], stock: [], slips: [], taken: [] };
+    expect(jobStockSchema.parse(old)).toEqual({ ...old, catalog: [] });
   });
 });

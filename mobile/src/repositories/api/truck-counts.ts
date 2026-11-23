@@ -34,7 +34,7 @@ export class ApiCountRepository implements CountRepository {
     const reply = await sendSavedFirst({ id: truckCountEntryId(countId), kind: TRUCK_COUNT_KIND, payload: { ...count } }, () => requestJson(path(countId), { method: 'POST', body: JSON.stringify({ lines, handIn }) }));
     const saved = truckCountSavedSchema.parse(reply);
     // The list as it now is, kept for when there is no signal: a count handed in has left it.
-    await storeApiRecord(RECORD, truckCountsSchema, { counts: saved.counts });
+    await storeApiRecord(RECORD, truckCountsSchema, { counts: saved.counts, catalog: saved.catalog });
     return saved;
   }
 

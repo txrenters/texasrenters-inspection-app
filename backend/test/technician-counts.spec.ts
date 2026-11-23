@@ -28,6 +28,8 @@ const SHARED_COUNT = id(25);
 const FILTER_LINE = id(41);
 const BATTERY_LINE = id(42);
 const SETTLED_LINE = id(43);
+/** On the truck and not on the count (2026-11-24). */
+const EXTRA = id(4);
 
 const technician = (n: number, displayName: string, organizationId = ORG): AuthenticatedUser =>
   ({ id: id(800 + n), authUserId: `auth-${n}`, organizationId, displayName, roles: [UserRole.INSPECTION_TECHNICIAN], permissions: [], mustChangePassword: false, principalType: 'USER' }) as AuthenticatedUser;
@@ -69,6 +71,14 @@ function harness() {
   ];
   const saved: { user: AuthenticatedUser; countId: string; input: SaveStockCountInput; handIn: boolean }[] = [];
   let recounts = 0;
+  // Every item in use (2026-11-24); the CO detector is on the truck but not on the count.
+  const items: Row[] = [
+    { id: id(1), code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' },
+    { id: id(2), code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' },
+    { id: id(3), code: 'PST-0001', name: 'Glue boards', unit: 'pack' },
+    { id: EXTRA, code: 'CO-0002', name: 'CO detector', unit: 'each' },
+  ];
+  const audits: Row[] = [];
 
   const prisma = {
     stockPlace: {
@@ -85,8 +95,22 @@ function harness() {
       findFirst: jest.fn(async ({ where }: { where: { id: string; organizationId: string } }) => counts.find((count) => count.id === where.id && count.organizationId === where.organizationId) ?? null),
     },
     stockCountLine: {
-      findMany: jest.fn(async ({ where }: { where: { organizationId: string; countId: string; expectedQuantity: null } }) => lines.filter((line) => line.organizationId === where.organizationId && line.countId === where.countId && line.expectedQuantity === null)),
+      findMany: jest.fn(async ({ where }: { where: { organizationId: string; countId: string; expectedQuantity?: null; itemId?: { in: string[] } } }) =>
+        lines.filter(
+          (line) =>
+            line.organizationId === where.organizationId &&
+            line.countId === where.countId &&
+            (!('expectedQuantity' in where) || line.expectedQuantity === null) &&
+            (!where.itemId || where.itemId.in.includes(line.itemId as string)),
+        ),
+      ),
+      createMany: jest.fn(async ({ data }: { data: Row[] }) =>
+        lines.push(...data.map((line, n) => ({ ...line, id: `found-${lines.length + n}`, countId: line.countId as string, itemId: line.itemId as string, countedQuantity: null, recount: false, expectedQuantity: null, item: items.find((item) => item.id === line.itemId) as Line['item'] }))),
+      ),
     },
+    // Every item in use (2026-11-24): the phone's catalog, and what a found item is checked against.
+    stockItem: { findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] } } }) => items.filter((item) => !where.id || where.id.in.includes(item.id as string))) },
+    auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
   };
   // The office's own writing, stood in for: it keeps what it was asked and does what handing in does.
   const office = {
@@ -109,7 +133,7 @@ function harness() {
     }),
   };
   const service = new TechnicianCountsService(prisma as never, office as never);
-  return { service, counts, lines, saved, askForRecount: () => (recounts = 1) };
+  return { service, counts, lines, saved, audits, askForRecount: () => (recounts = 1) };
 }
 
 const refusal = async (attempt: Promise<unknown>) => {
@@ -168,7 +192,7 @@ describe('what the phone may send', () => {
     const { service, saved } = harness();
     const result = await service.save(ana, MY_COUNT, { lines: BOTH, handIn: true });
     expect(saved[0]!.handIn).toBe(true);
-    expect(result).toEqual({ counts: [], outcome: 'handed-in', recounts: 0 });
+    expect(result).toEqual({ counts: [], catalog: expect.any(Array), outcome: 'handed-in', recounts: 0 });
   });
 
   it('says so when a line comes back for a second count, and shows it waiting again', async () => {
@@ -208,7 +232,7 @@ describe('a hand-in the phone sends twice', () => {
     const { service, saved } = harness();
     await service.save(ana, MY_COUNT, { lines: BOTH, handIn: true });
     const again = await service.save(ana, MY_COUNT, { lines: BOTH, handIn: true });
-    expect(again).toEqual({ counts: [], outcome: 'already', recounts: 0 });
+    expect(again).toEqual({ counts: [], catalog: expect.any(Array), outcome: 'already', recounts: 0 });
     expect(saved).toHaveLength(1);
   });
 
@@ -252,11 +276,32 @@ describe('the route', () => {
 
   it('refuses a count that is not a whole number of units, and an empty send', async () => {
     for (const counted of [-1, 1.5, '8', null]) await expect(check({ lines: [{ lineId: FILTER_LINE, counted, second: false }], handIn: false })).rejects.toBeTruthy();
-    await expect(check({ lines: [], handIn: false })).rejects.toBeTruthy();
+    // An empty send passes the route since 2026-11-24 (it may carry only what was found); the service refuses it.
     await expect(check({ lines: BOTH })).rejects.toBeTruthy();
   });
 
   it('is for signed-in technicians only', () => {
     expect(Reflect.getMetadata('roles', TechnicianCountsController)).toEqual([UserRole.INSPECTION_TECHNICIAN]);
+  });
+});
+
+// Found on the truck and not on the list (the office, 2026-11-24).
+describe('an item found that the count did not list', () => {
+  it('is added to the count with what was found, sent twice it is added once, and the phone is told every item in use', async () => {
+    const { service, lines, audits, saved } = harness();
+    const before = await service.mine(ana);
+    expect(before.catalog.map((item) => item.code)).toEqual(expect.arrayContaining(['FLT-0003']));
+    const found = { lines: [], found: [{ itemId: EXTRA, counted: 3 }], handIn: false };
+    await service.save(ana, MY_COUNT, found);
+    await service.save(ana, MY_COUNT, found);
+    expect(lines.filter((line) => line.itemId === EXTRA)).toHaveLength(1);
+    expect(saved.at(-1)!.input.lines).toEqual([{ lineId: lines.find((line) => line.itemId === EXTRA)!.id, counted: 3 }]);
+    expect(audits.filter((audit) => audit.action === 'STOCK_COUNT_ITEMS_FOUND')).toHaveLength(1);
+  });
+
+  it('refuses a send with nothing counted and nothing found, and an item not in use', async () => {
+    const { service } = harness();
+    await expect(service.save(ana, MY_COUNT, { lines: [], handIn: false })).rejects.toMatchObject({ code: 'STOCK_COUNT_NOTHING' });
+    await expect(service.save(ana, MY_COUNT, { lines: [], found: [{ itemId: 'a0000000-0000-4000-8000-999999999999', counted: 1 }], handIn: false })).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
   });
 });

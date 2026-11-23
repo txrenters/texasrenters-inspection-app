@@ -1,4 +1,5 @@
 import { MOST_STOCK_QUANTITY } from './inventory.js';
+import type { PhoneCatalogItem } from './truck-stock.js';
 
 /**
  * Counting a truck from the phone (2026-11-19). The office starts a count on
@@ -36,6 +37,8 @@ export interface PhoneCount {
 
 export interface PhoneCounts {
   counts: PhoneCount[];
+  /** Every item in use (2026-11-24): what was found on the truck and is not on the count is added from it. */
+  catalog: PhoneCatalogItem[];
 }
 
 export interface PhoneCountedLine {
@@ -50,8 +53,19 @@ export interface PhoneCountedLine {
   second: boolean;
 }
 
+/** Found on the truck and not on the count's list (2026-11-24): it is added to the count with what was found. */
+export interface PhoneFoundItem {
+  itemId: string;
+  counted: number;
+}
+
+/** At most this many found items in one save. */
+export const MOST_FOUND_ITEMS = 50;
+
 export interface SavePhoneCountInput {
   lines: PhoneCountedLine[];
+  /** Items found that the count did not list; none when left out. */
+  found?: PhoneFoundItem[];
   /** True to hand the count in; false to keep what is counted so far. */
   handIn: boolean;
 }

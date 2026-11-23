@@ -15,6 +15,10 @@ const hooks = vi.hoisted(() => ({
   useVendors: vi.fn(),
   useInventoryEdits: vi.fn(),
   useStockSlips: vi.fn(),
+  // Asks from the trucks (2026-11-24): none waiting here.
+  useTruckAsks: vi.fn(() => ({ isError: false, data: { asks: [] } })),
+  useTruckKeepLevels: vi.fn(),
+  useTruckKeepEdits: vi.fn(),
   useStockSlipChoices: vi.fn(),
   useStockSlipEdits: vi.fn(),
   useStockCounts: vi.fn(),
@@ -115,7 +119,8 @@ describe('the withdrawals tab', () => {
     const { unmount } = render(<InventoryPage />);
     expect(screen.getByText('No slips yet')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
-    expect(hooks.useStockSlipChoices).not.toHaveBeenCalled();
+    // Asked for with the read switched off: nothing is read (2026-11-24).
+    expect(hooks.useStockSlipChoices.mock.calls.every(([enabled]) => !enabled)).toBe(true);
     unmount();
 
     account.permissions = new Set(['inventory:read', 'inventory:withdraw']);

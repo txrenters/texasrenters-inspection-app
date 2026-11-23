@@ -18,6 +18,7 @@ import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { StockCountsService } from '../admin/stock-counts.service';
 import { StockSlipsService } from '../admin/stock-slips.service';
+import { TruckStockService } from '../admin/truck-stock.service';
 import { TechnicianCountsController } from './technician-counts.controller';
 import { TechnicianCountsService } from './technician-counts.service';
 import { TechnicianStockController } from './technician-stock.controller';
@@ -67,8 +68,9 @@ import { TrackingStatusStore } from './tracking-status.store';
     ComparisonService,
     ChargeService,
     // A job's materials on the phone. The office's own posting, which needs only Prisma: provided here, as the
-    // admin module imports this one.
+    // admin module imports this one. A posting can fill a truck's ask (2026-11-24), so the asks come with it.
     StockSlipsService,
+    TruckStockService,
     TechnicianStockService,
     StockCountsService,
     TechnicianCountsService,

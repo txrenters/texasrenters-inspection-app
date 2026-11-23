@@ -4,6 +4,7 @@ import { normalizePurchasingCode, purchasingCodeProblem, suggestedPlaceCode, STO
 import { WarehouseIcon } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
+import { KeepLevelsDialog } from '@/components/inventory/keep-levels';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PlaceDialog } from '@/components/inventory/inventory-dialogs';
 import { InUseBadge } from '@/components/inventory/stock-status';
@@ -50,6 +51,8 @@ export function PlacesTab({ enabled, canManage }: { enabled: boolean; canManage:
   const places = useStockPlaces(enabled);
   const { updatePlace } = useInventoryEdits();
   const [editing, setEditing] = useState<StockPlaceRow | null>(null);
+  // Keep at least (2026-11-24): what the office keeps on a truck, below which the phone says it runs low.
+  const [keeping, setKeeping] = useState<string | null>(null);
 
   if (places.isError) return <ErrorState error={places.error} retry={() => void places.refetch()} />;
   if (!places.data) return <DataTableSkeleton columns={COLUMNS} label="Loading places" rows={3} />;
@@ -66,9 +69,16 @@ export function PlacesTab({ enabled, canManage }: { enabled: boolean; canManage:
             actions={
               canManage
                 ? (row) => (
-                    <Button aria-label={`Edit ${row.name}`} onClick={() => setEditing(row)} size="sm" variant="outline">
-                      Edit
-                    </Button>
+                    <span className="flex flex-wrap justify-end gap-2">
+                      {row.kind === 'VAN' ? (
+                        <Button aria-label={`Keep at least on ${row.name}`} onClick={() => setKeeping(row.id)} size="sm" variant="outline">
+                          Keep at least
+                        </Button>
+                      ) : null}
+                      <Button aria-label={`Edit ${row.name}`} onClick={() => setEditing(row)} size="sm" variant="outline">
+                        Edit
+                      </Button>
+                    </span>
                   )
                 : undefined
             }
@@ -96,6 +106,7 @@ export function PlacesTab({ enabled, canManage }: { enabled: boolean; canManage:
       </section>
 
       {canManage ? <NewPlace technicians={technicians} /> : null}
+      {keeping ? <KeepLevelsDialog onClose={() => setKeeping(null)} placeId={keeping} /> : null}
       {editing ? (
         <PlaceDialog
           error={updatePlace.error}

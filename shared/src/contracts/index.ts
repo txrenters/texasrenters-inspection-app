@@ -133,6 +133,7 @@ export * from './purchasing-setup.js';
 export * from './purchasing-roles.js';
 export * from './purchasing-page.js';
 export * from './phone-counts.js';
+export * from './truck-stock.js';
 export * from './inventory-monitoring.js';
 export * from './inventory-import.js';
 export * from './vendor-bills-xero.js';

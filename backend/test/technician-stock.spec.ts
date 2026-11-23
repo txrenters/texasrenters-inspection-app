@@ -3,7 +3,7 @@ import { UserRole, type PostStockSlipInput, type RecordJobStockInput } from '@te
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
-import { RecordJobStockDto, TechnicianStockController } from '../src/technician/technician-stock.controller';
+import { AskForTruckStockDto, RecordJobStockDto, TechnicianStockController } from '../src/technician/technician-stock.controller';
 import { TechnicianStockService } from '../src/technician/technician-stock.service';
 
 /**
@@ -63,6 +63,14 @@ function harness() {
   ];
   const slips: Row[] = [];
   const posted: { user: AuthenticatedUser; input: PostStockSlipInput }[] = [];
+  // What the office keeps on Truck 1 (2026-11-24): the filters are running low, the batteries ran out.
+  const keeps: Row[] = [
+    { placeId: MY_TRUCK, itemId: FILTER, keepAtLeast: 12 },
+    { placeId: MY_TRUCK, itemId: BATTERY, keepAtLeast: 4 },
+  ];
+  const asks: Row[] = [];
+  const askLines: Row[] = [];
+  const audits: Row[] = [];
   let clock = Date.parse('2026-11-19T15:00:00.000Z');
 
   const prisma = {
@@ -72,12 +80,12 @@ function harness() {
       ),
     },
     stockPlace: {
-      findMany: jest.fn(async ({ where }: { where: { organizationId: string; active: boolean; kind: string; OR: { technicianId: string | null }[] } }) =>
+      findMany: jest.fn(async ({ where, select }: { where: { organizationId: string; active: boolean; kind: string; OR: { technicianId: string | null }[] }; select: { technicianId?: boolean } }) =>
         places
           .filter((place) => place.organizationId === where.organizationId && place.active === where.active && place.kind === where.kind && where.OR.some((rule) => place.technicianId === rule.technicianId))
           // Their own first, as the service asks.
           .sort((left, right) => Number(left.technicianId === null) - Number(right.technicianId === null))
-          .map((place) => ({ id: place.id, name: place.name })),
+          .map((place) => ({ id: place.id, name: place.name, ...(select.technicianId ? { technicianId: place.technicianId } : {}) })),
       ),
     },
     stockLevel: {
@@ -89,11 +97,44 @@ function harness() {
     },
     stockSlip: {
       findFirst: jest.fn(async ({ where }: { where: { organizationId: string; requestKey: string } }) => slips.find((slip) => slip.organizationId === where.organizationId && slip.requestKey === where.requestKey) ?? null),
-      findMany: jest.fn(async ({ where }: { where: { organizationId: string; inspectionId: string; technicianId: string } }) =>
-        slips.filter((slip) => slip.organizationId === where.organizationId && slip.inspectionId === where.inspectionId && slip.technicianId === where.technicianId).reverse(),
+      findMany: jest.fn(async ({ where }: { where: { organizationId: string; inspectionId?: string; technicianId: string } }) =>
+        slips.filter((slip) => slip.organizationId === where.organizationId && (where.inspectionId === undefined || slip.inspectionId === where.inspectionId) && slip.technicianId === where.technicianId).reverse(),
       ),
     },
+    // Every item in use, for the phone's search and scans (2026-11-24); by id when an ask is checked.
+    stockItem: {
+      findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] } } }) => [...items.values()].filter((item) => !where.id || where.id.in.includes(item.id as string)).map((item) => ({ ...item }))),
+    },
+    // What the office keeps on each truck, and when each was last counted.
+    stockKeepLevel: {
+      findMany: jest.fn(async ({ where }: { where: { placeId: { in: string[] } } }) => keeps.filter((keep) => where.placeId.in.includes(keep.placeId as string)).map((keep) => ({ placeId: keep.placeId, keepAtLeast: keep.keepAtLeast, item: items.get(keep.itemId as string) }))),
+    },
+    stockCount: { groupBy: jest.fn(async () => [{ placeId: MY_TRUCK, _max: { day: new Date('2026-11-02') } }]) },
+    truckStockAsk: {
+      findFirst: jest.fn(async ({ where }: { where: { requestKey: string } }) => asks.find((ask) => ask.requestKey === where.requestKey) ?? null),
+      count: jest.fn(async ({ where }: { where: { placeId: string; status: string } }) => asks.filter((ask) => ask.placeId === where.placeId && ask.status === where.status).length),
+      findMany: jest.fn(async ({ where }: { where: { askedById: string; placeId: { in: string[] } } }) =>
+        asks
+          .filter((ask) => ask.askedById === where.askedById && where.placeId.in.includes(ask.placeId as string))
+          .reverse()
+          .map((ask) => ({
+            ...ask,
+            place: { id: ask.placeId, name: places.find((place) => place.id === ask.placeId)!.name },
+            askedBy: { id: ask.askedById, displayName: 'Ana Sample' },
+            filledSlip: null,
+            lines: askLines.filter((line) => line.askId === ask.id).map((line) => ({ quantity: line.quantity, item: items.get(line.itemId as string) })),
+          })),
+      ),
+      create: jest.fn(async ({ data }: { data: Row }) => {
+        const row = { id: id(600 + asks.length), status: 'ASKED', createdAt: new Date((clock += 60_000)), filledAt: null, filledByName: null, ...data };
+        asks.push(row);
+        return row;
+      }),
+    },
+    truckStockAskLine: { createMany: jest.fn(async ({ data }: { data: Row[] }) => askLines.push(...data)) },
+    auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
   };
+  Object.assign(prisma, { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(prisma)) });
   /** The office's posting, standing in: it keeps the slip, and takes from or adds to the truck as the ledger would. */
   const write = jest.fn(async (user: AuthenticatedUser, input: PostStockSlipInput) => {
     posted.push({ user, input });
@@ -115,10 +156,11 @@ function harness() {
       fromPlace: input.fromPlaceId ? { name: places.find((place) => place.id === input.fromPlaceId)!.name } : null,
       toPlace: input.toPlaceId ? { name: places.find((place) => place.id === input.toPlaceId)!.name } : null,
       lines: input.lines.map((line) => ({ quantity: line.quantity, item: items.get(line.itemId) })),
+      inspection: input.inspectionId ? { id: input.inspectionId, propertywareBuilding: null, property: { addressLine1: '12 Sample Ln' } } : null,
     });
   });
   const service = new TechnicianStockService(prisma as never, { write } as never);
-  return { service, write, posted, slips, levels };
+  return { service, write, posted, slips, levels, asks, askLines, audits, keeps };
 }
 
 const take = (over: Partial<RecordJobStockInput> = {}): RecordJobStockInput => ({ kind: 'WITHDRAWAL', placeId: MY_TRUCK, lines: [{ itemId: FILTER, quantity: 2 }], clientRequestId: 'phone-key-0001', ...over });
@@ -156,7 +198,7 @@ describe('taking stock for a job', () => {
 
     expect(posted).toHaveLength(1);
     expect(posted[0]!.user).toBe(ana);
-    expect(posted[0]!.input).toEqual({ kind: 'WITHDRAWAL', technicianId: ana.id, fromPlaceId: MY_TRUCK, toPlaceId: null, inspectionId: JOB, note: null, requestKey: `phone:${ana.id}:phone-key-0001`, lines: [{ itemId: FILTER, quantity: 2 }] });
+    expect(posted[0]!.input).toEqual({ kind: 'WITHDRAWAL', technicianId: ana.id, fromPlaceId: MY_TRUCK, toPlaceId: null, inspectionId: JOB, note: null, requestKey: `phone:${ana.id}:phone-key-0001`, lines: [{ itemId: FILTER, quantity: 2 }], askId: null });
     expect(stock.slips).toEqual([{ id: expect.any(String), number: 'WD-0001', kind: 'WITHDRAWAL', at: expect.any(String), place: 'Truck 1', reversed: false, lines: [{ itemId: FILTER, code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', quantity: 2 }] }]);
     expect(stock.taken).toEqual([expect.objectContaining({ itemId: FILTER, quantity: 2 })]);
     expect(stock.stock.find((item) => item.itemId === FILTER)!.quantity).toBe(8);
@@ -243,5 +285,58 @@ describe('what the API accepts', () => {
 
   it('is for signed-in technicians, as every phone route is', () => {
     expect(Reflect.getMetadata('roles', TechnicianStockController)).toEqual([UserRole.INSPECTION_TECHNICIAN]);
+  });
+});
+
+// My truck (the office, 2026-11-24): what is on the technician's trucks, what has run low, and asks for more.
+describe('my truck', () => {
+  it('lists each truck with what is on it and kept on it -- the run-out ones too -- and the latest slips across jobs', async () => {
+    const { service } = harness();
+    await service.record(ana, JOB, take());
+    const mine = await service.myTrucks(ana);
+    expect(mine.trucks.map((truck) => [truck.name, truck.mine, truck.lastCountedOn])).toEqual([
+      ['Truck 1', true, '2026-11-02'],
+      ['Shared truck', false, null],
+    ]);
+    expect(mine.trucks[0]!.items.map((item) => [item.code, item.onHand, item.keepAtLeast])).toEqual([
+      ['FLT-0003', 8, 12],
+      // None on the truck and kept on it: listed, so it is asked for.
+      ['PRT-0001', 0, 4],
+    ]);
+    expect(mine.catalog.map((item) => item.code)).toEqual(['FLT-0003', 'PRT-0001']);
+    expect(mine.slips).toEqual([expect.objectContaining({ number: 'WD-0001', kind: 'WITHDRAWAL', place: 'Truck 1', job: { id: JOB, address: '12 Sample Ln' }, lines: [{ code: 'FLT-0003', name: 'Filter 20x25x1', quantity: 2 }] })]);
+  });
+
+  it('asks the office for more for their own truck, once however many times it is sent, and moves no stock', async () => {
+    const { service, write, asks, askLines, audits } = harness();
+    const ask = { placeId: MY_TRUCK, lines: [{ itemId: FILTER, quantity: 4 }, { itemId: BATTERY, quantity: 4 }], note: ' Pick up Wednesday ', clientRequestId: 'phone-ask-0001' };
+    const mine = await service.ask(ana, ask);
+    await service.ask(ana, ask);
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({ placeId: MY_TRUCK, askedById: ana.id, note: 'Pick up Wednesday', requestKey: `phone:${ana.id}:phone-ask-0001` });
+    expect(askLines.map((line) => [line.itemId, line.quantity])).toEqual([[FILTER, 4], [BATTERY, 4]]);
+    expect(mine.trucks[0]!.asks).toEqual([expect.objectContaining({ status: 'ASKED', note: 'Pick up Wednesday', lines: [expect.objectContaining({ code: 'FLT-0003', quantity: 4 }), expect.objectContaining({ code: 'PRT-0001', quantity: 4 })] })]);
+    expect(audits.map((audit) => audit.action)).toEqual(['TRUCK_STOCK_ASKED']);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('refuses an ask for a truck that is not theirs, with nothing on it, an item twice, or past five waiting', async () => {
+    const { service, asks } = harness();
+    const ask = (over: Record<string, unknown>) => ({ placeId: MY_TRUCK, lines: [{ itemId: FILTER, quantity: 4 }], note: null, clientRequestId: `phone-ask-${asks.length}${Object.keys(over).join('')}`, ...over });
+    await expect(service.ask(ana, ask({ placeId: THEIR_TRUCK }))).rejects.toMatchObject({ code: 'STOCK_PLACE_NOT_YOURS' });
+    await expect(service.ask(ana, ask({ placeId: STOCKROOM }))).rejects.toMatchObject({ code: 'STOCK_PLACE_NOT_YOURS' });
+    await expect(service.ask(ana, ask({ lines: [{ itemId: FILTER, quantity: 0 }] }))).rejects.toMatchObject({ code: 'TRUCK_ASK_NOT_READY' });
+    await expect(service.ask(ana, ask({ lines: [{ itemId: FILTER, quantity: 1 }, { itemId: FILTER, quantity: 2 }] }))).rejects.toMatchObject({ code: 'TRUCK_ASK_ITEM_TWICE' });
+    for (let n = 0; n < 5; n += 1) await service.ask(ana, { ...ask({}), clientRequestId: `phone-ask-more-${n}` });
+    await expect(service.ask(ana, { ...ask({}), clientRequestId: 'phone-ask-sixth' })).rejects.toMatchObject({ code: 'TRUCK_ASKS_WAITING', message: 'Truck 1 has 5 asks waiting already. The office fills those first.' });
+  });
+
+  it('takes the ask the phone sends and nothing else', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const check = (body: unknown) => pipe.transform(body, { type: 'body', metatype: AskForTruckStockDto });
+    const ask = { placeId: MY_TRUCK, lines: [{ itemId: FILTER, quantity: 4 }], note: null, clientRequestId: 'phone-ask-0001' };
+    await expect(check(ask)).resolves.toMatchObject({ placeId: MY_TRUCK });
+    for (const extra of [{ askedById: ben.id }, { status: 'FILLED' }]) await expect(check({ ...ask, ...extra })).rejects.toBeTruthy();
+    await expect(check({ ...ask, lines: [] })).rejects.toBeTruthy();
   });
 });

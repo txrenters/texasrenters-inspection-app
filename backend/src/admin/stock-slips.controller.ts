@@ -29,6 +29,8 @@ export class PostStockSlipDto implements Required<PostStockSlipInput> {
   @ValidateIf(GIVEN) @IsString() @MaxLength(500) note!: string | null;
   @IsUUID() requestKey!: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MOST_SLIP_LINES) @ValidateNested({ each: true }) @Type(() => StockSlipLineDto) lines!: StockSlipLineDto[];
+  /** A move made from a truck's ask (2026-11-24); left out or null for any other slip. */
+  @IsOptional() @IsUUID() askId!: string | null;
 }
 
 export class ReverseStockSlipDto implements Required<ReverseStockSlipInput> {
