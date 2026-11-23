@@ -6,7 +6,7 @@ import { dismissCountRefusal, readCountRefusals } from '../src/storage/count-ref
 import { readQueue } from '../src/storage/mutation-queue';
 import { ApiConnectionError, ApiRefusalError } from '../src/storage/offline-record-cache';
 import { useNetworkStore } from '../src/stores/network.store';
-import { countCardLine, countLines, countName, countProgress, countedLines, scannedCountLine, withCount, type PendingCount } from '../src/utils/truck-count';
+import { countCardLine, countLines, countName, countProgress, countedLines, scannedCountLine, withCount, withFound, type PendingCount } from '../src/utils/truck-count';
 
 /**
  * Counting a truck on the phone (2026-11-19). Every item, truck and count
@@ -95,9 +95,16 @@ describe('what the count shows', () => {
 describe('scanning and typing', () => {
   it('finds the line a label names, as a scanner or a hand might give it', () => {
     expect(scannedCountLine(LINES, ' prt-0001 ')).toEqual({ line: battery() });
-    expect(scannedCountLine(LINES, 'XYZ-999')).toEqual({ said: 'XYZ-999 is not in this count.' });
+    expect(scannedCountLine(LINES, 'XYZ-999')).toEqual({ said: 'XYZ-999 is not an item code. Check the label, or type it.' });
     // Something that is not a label at all is not read back in full.
-    expect(scannedCountLine(LINES, 'https://example.com/a-very-long-address-on-a-box')).toEqual({ said: 'HTTPS://EXAMPLE.COM/A-VE is not in this count.' });
+    expect(scannedCountLine(LINES, 'https://example.com/a-very-long-address-on-a-box')).toEqual({ said: 'HTTPS://EXAMPLE.COM/A-VE is not an item code. Check the label, or type it.' });
+  });
+
+  // 2026-11-24: an item in use the count did not list is offered as found, with what is there.
+  it('offers an item in use the count did not list as found, and keeps one number for it', () => {
+    const alarm = { itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' };
+    expect(scannedCountLine(LINES, 'smk-0010', [alarm])).toEqual({ found: alarm });
+    expect(withFound(withFound([], 'item-alarm', 2), 'item-alarm', 3)).toEqual([{ itemId: 'item-alarm', counted: 3 }]);
   });
 
   it('reads a whole number of units, zero included, and nothing else', () => {
@@ -114,6 +121,7 @@ describe('scanning and typing', () => {
 });
 
 describe('what the server answers', () => {
+  // Every item in use comes with it since 2026-11-24: what was found on the truck is added from it.
   const reply = { counts: [{ id: 'count-1', number: 'CNT-0013', title: 'Monthly count, November 2026', place: { id: 'truck-1', name: 'Truck 1' }, lines: LINES }], catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }] };
 
   it('is kept whole: every field the screen reads is named, and it survives being stored and read back', () => {

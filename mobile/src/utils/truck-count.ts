@@ -1,4 +1,4 @@
-import { normalizeStockCode, type PhoneCount, type PhoneCountLine, type PhoneCountedLine } from '@texasrenters/shared';
+import { normalizeStockCode, type PhoneCatalogItem, type PhoneCount, type PhoneCountLine, type PhoneCountedLine, type PhoneFoundItem } from '@texasrenters/shared';
 
 /**
  * Counting a truck on the phone (2026-11-19): what the screen makes of what
@@ -17,6 +17,8 @@ export interface PendingCount {
   title: string;
   lines: PhoneCountedLine[];
   handIn: boolean;
+  /** Found on the truck and not on the count's list (2026-11-24). */
+  found?: PhoneFoundItem[];
   queuedAt: string;
 }
 
@@ -45,13 +47,22 @@ export const withCount = (lines: readonly PhoneCountLine[], lineId: string, coun
 /** What is sent: every line that has a number, each saying which count of the line it is. */
 export const countedLines = (lines: readonly PhoneCountLine[]): PhoneCountedLine[] => lines.flatMap((line) => (line.counted === null ? [] : [{ lineId: line.lineId, counted: line.counted, second: line.second }]));
 
-/** The line a scanned label names, or why there is none. */
-export function scannedCountLine(lines: readonly PhoneCountLine[], scanned: string): { line: PhoneCountLine } | { said: string } {
+/**
+ * The line a scanned label names; else, for an item in use the count did not
+ * list, the item to add as found (2026-11-24); else why there is none.
+ */
+export function scannedCountLine(lines: readonly PhoneCountLine[], scanned: string, catalog: readonly PhoneCatalogItem[] = []): { line: PhoneCountLine } | { found: PhoneCatalogItem } | { said: string } {
   const code = normalizeStockCode(scanned);
   const line = lines.find((one) => one.code === code);
+  if (line) return { line };
+  const item = catalog.find((one) => one.code === code);
+  if (item) return { found: item };
   // A label is an item code: anything else the camera finds is not read back in full.
-  return line ? { line } : { said: `${code.slice(0, 24)} is not in this count.` };
+  return { said: `${code.slice(0, 24)} is not an item code. Check the label, or type it.` };
 }
+
+/** One found item counted: replacing what was found of it before. */
+export const withFound = (found: readonly PhoneFoundItem[], itemId: string, counted: number): PhoneFoundItem[] => [...found.filter((one) => one.itemId !== itemId), { itemId, counted }];
 
 /** "7 of 11 counted". */
 export function countProgress(lines: readonly PhoneCountLine[]): string {

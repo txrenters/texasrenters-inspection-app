@@ -30,8 +30,10 @@ export class ApiCountRepository implements CountRepository {
   }
 
   async save(count: PendingCount): Promise<SavePhoneCountResult> {
-    const { countId, lines, handIn } = count;
-    const reply = await sendSavedFirst({ id: truckCountEntryId(countId), kind: TRUCK_COUNT_KIND, payload: { ...count } }, () => requestJson(path(countId), { method: 'POST', body: JSON.stringify({ lines, handIn }) }));
+    const { countId, lines, handIn, found } = count;
+    // What was found and not listed goes with the lines (2026-11-24).
+    const body = { lines, handIn, ...(found?.length ? { found } : {}) };
+    const reply = await sendSavedFirst({ id: truckCountEntryId(countId), kind: TRUCK_COUNT_KIND, payload: { ...count } }, () => requestJson(path(countId), { method: 'POST', body: JSON.stringify(body) }));
     const saved = truckCountSavedSchema.parse(reply);
     // The list as it now is, kept for when there is no signal: a count handed in has left it.
     await storeApiRecord(RECORD, truckCountsSchema, { counts: saved.counts, catalog: saved.catalog });
