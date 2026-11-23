@@ -14,6 +14,7 @@ import {
 import { useState, type FormEvent, type ReactNode } from 'react';
 
 import { ScanField } from '@/components/inventory/scan-field';
+import { ReceiptLabelsDialog } from '@/components/purchasing/receipt-labels';
 
 import { AsideCard, FactTable } from '@/components/record/record-kit';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -134,6 +135,9 @@ export function ReceivingSection({ data }: { data: PurchaseOrderDetail }) {
   const [receiving, setReceiving] = useState(false);
   const [reversing, setReversing] = useState<GoodsReceiptRow | null>(null);
   const [closing, setClosing] = useState(false);
+  // Label what arrived (2026-11-24): opened by itself once a receipt is posted, and from any receipt after.
+  const [labelling, setLabelling] = useState<GoodsReceiptRow | null>(null);
+  const units = new Map(data.lines.map((line) => [line.item.code, line.item.unit]));
   const toCome = data.lines.reduce((sum, line) => sum + (line.quantity - line.receivedQuantity), 0);
 
   return (
@@ -155,8 +159,14 @@ export function ReceivingSection({ data }: { data: PurchaseOrderDetail }) {
                 <span className="font-medium">{receipt.number}</span>
                 <span className="text-muted-foreground">{formatDay(receipt.receivedOn)}</span>
                 {receipt.reversed ? <Badge variant="outline">Reversed</Badge> : null}
+                {/* Whoever receives or reverses here is the stock keeper; somebody who only looks prints labels from Item codes. */}
+                {!receipt.reversed && (data.can.receive || data.can.reverseReceipt) ? (
+                  <Button aria-label={`Label what arrived on ${receipt.number}`} className="ml-auto" onClick={() => setLabelling(receipt)} size="sm" variant="outline">
+                    Labels
+                  </Button>
+                ) : null}
                 {!receipt.reversed && data.can.reverseReceipt ? (
-                  <Button aria-label={`Reverse ${receipt.number}`} className="ml-auto" onClick={() => setReversing(receipt)} size="sm" variant="outline">
+                  <Button aria-label={`Reverse ${receipt.number}`} onClick={() => setReversing(receipt)} size="sm" variant="outline">
                     Reverse
                   </Button>
                 ) : null}
@@ -186,7 +196,17 @@ export function ReceivingSection({ data }: { data: PurchaseOrderDetail }) {
         </div>
       ) : null}
 
-      {receiving ? <ReceiveDialog data={data} onClose={() => { setReceiving(false); edits.receive.reset(); }} /> : null}
+      {receiving ? (
+        <ReceiveDialog
+          data={data}
+          onClose={() => {
+            setReceiving(false);
+            edits.receive.reset();
+          }}
+          onPosted={(detail) => setLabelling(detail.receipts.find((receipt) => !receipt.reversed) ?? null)}
+        />
+      ) : null}
+      {labelling ? <ReceiptLabelsDialog onClose={() => setLabelling(null)} receipt={labelling} units={units} /> : null}
       {reversing ? (
         <ReasonDialog
           description={`This takes ${reversing.number}'s stock back out with new lines in the ledger. The receipt stays, marked reversed, and this cannot be undone.`}
@@ -221,7 +241,7 @@ export function ReceivingSection({ data }: { data: PurchaseOrderDetail }) {
   );
 }
 
-function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: () => void }) {
+function ReceiveDialog({ data, onClose, onPosted }: { data: PurchaseOrderDetail; onClose: () => void; onPosted?: (detail: PurchaseOrderDetail) => void }) {
   const { receive } = usePurchaseReceivingEdits();
   // The places in use: the form's own read, kept a minute.
   const choices = useRequisitionChoices(true);
@@ -254,7 +274,8 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
       error={receive.error}
       onClose={onClose}
       onSubmit={() =>
-        receive.mutateAsync({
+        receive
+          .mutateAsync({
           orderId: data.id,
           input: {
             ...(receivedOn ? { receivedOn } : {}),
@@ -263,7 +284,11 @@ function ReceiveDialog({ data, onClose }: { data: PurchaseOrderDetail; onClose: 
             requestKey,
             lines: rows.flatMap((row) => (row.quantity ? [{ orderLineId: row.line.id, placeId: row.placeId, quantity: row.quantity }] : [])),
           },
-        })
+          })
+          .then((detail) => {
+            onPosted?.(detail);
+            return detail;
+          })
       }
       pending={receive.isPending}
       submitLabel="Post receipt"
