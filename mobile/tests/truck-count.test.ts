@@ -114,7 +114,7 @@ describe('scanning and typing', () => {
 });
 
 describe('what the server answers', () => {
-  const reply = { counts: [{ id: 'count-1', number: 'CNT-0013', title: 'Monthly count, November 2026', place: { id: 'truck-1', name: 'Truck 1' }, lines: LINES }] };
+  const reply = { counts: [{ id: 'count-1', number: 'CNT-0013', title: 'Monthly count, November 2026', place: { id: 'truck-1', name: 'Truck 1' }, lines: LINES }], catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }] };
 
   it('is kept whole: every field the screen reads is named, and it survives being stored and read back', () => {
     const parsed = truckCountsSchema.parse(reply);

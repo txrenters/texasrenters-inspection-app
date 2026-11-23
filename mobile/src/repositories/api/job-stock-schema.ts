@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { phoneCatalogSchema } from './phone-catalog-schema';
+
 /**
  * What the server answers for a job's materials (2026-11-19, phase 7).
  *
@@ -25,4 +27,6 @@ export const jobStockSchema = z.object({
     }),
   ),
   taken: z.array(itemSchema),
+  // 2026-11-24: a search finds an item with none in the truck, and a scan tells a code that is no item from one not in the truck.
+  catalog: phoneCatalogSchema,
 });
