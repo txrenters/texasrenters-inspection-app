@@ -1738,4 +1738,56 @@ export interface AdminWorkOrder {
   /** The maintenance app's AI summary of the tenant, owner and vendor messages. */
   messagesSummary: { summary: string; messagesRead: number; readAt: string | null } | null;
   receivedAt: string;
+  /**
+   * What the AI read the work order as, and who that sent -- or why nobody.
+   * The AI only names the job types; the technician is picked by the office's
+   * ranking rule. Absent until the work order has been matched.
+   */
+  matching?: AdminWorkOrderMatching | null;
+}
+
+export type WorkOrderMatchingOutcome =
+  | 'ASSIGNED'
+  /** Trial: who would have been assigned. Nobody was. */
+  | 'SUGGESTED'
+  | 'ALREADY_ASSIGNED'
+  | 'NO_FIT'
+  | 'LOW_CONFIDENCE'
+  | 'AI_FAILED'
+  | 'DAILY_LIMIT'
+  | 'NOT_CONFIGURED';
+
+export interface AdminWorkOrderMatching {
+  outcome: WorkOrderMatchingOutcome;
+  /** Who was picked and on what, or why nobody was. */
+  reason: string;
+  /** The AI's one-sentence reading of the problem. */
+  summary: string | null;
+  /** Job type names from the office's skill list. */
+  skills: string[];
+  scope: 'MINOR' | 'MAJOR' | null;
+  confidence: number | null;
+  matchedAt: string;
+}
+
+/** Whether matching assigns, or only records who it would assign (the trial). */
+export interface WorkOrderMatchingStatus {
+  live: boolean;
+}
+
+/** Loading the Technicians' Scope of Work sheet; `applied` false is the preview. */
+export interface ScopeSheetImportResult {
+  applied: boolean;
+  skills: number;
+  marks: number;
+  /** Names on the sheet found among the active technicians. */
+  found: string[];
+  /** Names on the sheet with no active technician of that name: left out. */
+  missing: string[];
+}
+
+/** One "check open work orders" press: how many were looked at, by outcome. */
+export interface OpenWorkOrderCheckResult {
+  checked: number;
+  outcomes: Partial<Record<WorkOrderMatchingOutcome, number>>;
 }

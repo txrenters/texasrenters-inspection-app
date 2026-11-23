@@ -26,6 +26,43 @@ import { useInspection, useInspectionWorkOrder } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 /**
+ * How the work order was matched to a technician: the AI's reading of the job
+ * and the reason the ranking gave. The AI named the job types only; who went
+ * is the office's rule. Amber when it was left for the office.
+ */
+function MatchingNote({ matching }: { matching: NonNullable<AdminWorkOrder['matching']> }) {
+  const suggested = matching.outcome === 'SUGGESTED';
+  const leftForOffice = !suggested && matching.outcome !== 'ASSIGNED' && matching.outcome !== 'ALREADY_ASSIGNED';
+  const facts = [
+    matching.skills.length ? matching.skills.join(', ') : null,
+    matching.scope ? `${matching.scope.toLowerCase()} job` : null,
+    matching.confidence !== null ? `${matching.confidence}% sure` : null,
+  ].filter(Boolean);
+  return (
+    <div
+      className={cn(
+        'flex gap-2.5 rounded-lg border px-4 py-3 text-sm',
+        leftForOffice ? 'border-warning/40 bg-warning/5' : 'bg-muted/20',
+      )}
+    >
+      <SparklesIcon aria-hidden className={cn('mt-0.5 size-4 shrink-0', leftForOffice ? 'text-warning' : 'text-muted-foreground')} />
+      <div className="grid min-w-0 gap-0.5">
+        <span className="text-muted-foreground text-xs">
+          {suggested
+            ? 'Skill match (trial, nobody assigned)'
+            : leftForOffice
+              ? 'Not auto-assigned'
+              : 'Auto-assigned by skill match'}
+          {facts.length ? ` · ${facts.join(' · ')}` : ''}
+        </span>
+        {matching.summary ? <span>{matching.summary}</span> : null}
+        <span className="font-medium">{matching.reason}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The visit types only the maintenance app's hand-off files (the Jobber sync
  * never types a visit either way). A row of one is a work order.
  */
@@ -285,6 +322,8 @@ export function WorkOrderDialog({ inspectionId, onClose }: { inspectionId: strin
               </div>
             </div>
           ) : null}
+
+          {wo?.matching ? <MatchingNote matching={wo.matching} /> : null}
         </DialogHeader>
 
         {loading ? (
