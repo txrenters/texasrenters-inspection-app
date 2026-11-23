@@ -75,4 +75,29 @@ export interface ExcelPull {
   conflicts: number;
   /** Cells the office changed that the console leaves as they are in Excel, never to write over. */
   kept?: number;
+  /**
+   * Rows the office added in a technician's log tab that the console did not
+   * bring in (2026-11-23): it has a row for them already, or their day is full
+   * (see `ExcelRefusedRow`). They stay in Excel as they are.
+   */
+  refused?: number;
+  /** The first few of them, to say which. */
+  refusedRows?: ExcelRefusedRow[];
+}
+
+/**
+ * A technician's day holds at most this many rows of the office's own before
+ * the Excel sync brings no more in (2026-11-23). The office's busiest day has
+ * 16, and before 2026-11-20 no run had brought in more than 9.
+ */
+export const MAX_EXCEL_OFFICE_ROWS_A_DAY = 30;
+
+/** A row of the office's in Excel the console did not bring in, and why. */
+export interface ExcelRefusedRow {
+  tab: string;
+  date: string;
+  /** "Job# 20480", or the row's address without one. */
+  row: string;
+  /** ALREADY_IN_CONSOLE: the console has a row for it already. DAY_FULL: the technician's day holds the most rows of the office's own a day may. */
+  why: 'ALREADY_IN_CONSOLE' | 'DAY_FULL';
 }

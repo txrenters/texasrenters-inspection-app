@@ -1,8 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ExcelSyncView } from '@texasrenters/shared';
+import { MAX_EXCEL_OFFICE_ROWS_A_DAY, type ExcelSyncView } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ExcelSyncDialog, pullWords } from './excel-sync-dialog';
+import { formatDay } from '@/lib/format';
+
+import { ExcelSyncDialog, pullWords, refusedWords } from './excel-sync-dialog';
 
 /** The office's own workbook in Excel (2026-11-17). Everything invented. */
 
@@ -117,5 +119,29 @@ describe("the last read of the office's Excel edits", () => {
     edits.view = view({ workbook: { ...view().workbook!, lastPushedAt: new Date().toISOString(), lastPull: { at: new Date().toISOString(), taken: 2, putBack: 0, conflicts: 0 } } });
     render(<ExcelSyncDialog canManage onClose={() => undefined} />);
     expect(screen.getByText(/2 cells taken/)).toBeTruthy();
+    expect(screen.queryByText(/left in Excel only/)).toBeNull();
+  });
+
+  it("names the office's rows it left in Excel only, and why (2026-11-23: the same rows once came in on every run)", () => {
+    const at = new Date().toISOString();
+    const pull = {
+      at,
+      taken: 0,
+      putBack: 0,
+      conflicts: 0,
+      refused: 3,
+      refusedRows: [
+        { tab: 'Moses', date: '2026-11-23', row: 'Job# 20504', why: 'ALREADY_IN_CONSOLE' as const },
+        { tab: 'Amy', date: '2026-11-23', row: 'Supply run', why: 'DAY_FULL' as const },
+      ],
+    };
+    expect(refusedWords(pull)).toBe(
+      `3 rows left in Excel only: Moses ${formatDay('2026-11-23')}, Job# 20504 (the console has it already); Amy ${formatDay('2026-11-23')}, Supply run (the day holds ${MAX_EXCEL_OFFICE_ROWS_A_DAY} rows already); 1 more`,
+    );
+    expect(refusedWords({ at, taken: 1, putBack: 0, conflicts: 0 })).toBeNull();
+
+    edits.view = view({ workbook: { ...view().workbook!, lastPushedAt: at, lastPull: pull } });
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText(/^3 rows left in Excel only/).className).toContain('text-warning');
   });
 });

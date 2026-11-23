@@ -1,7 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import type { RevenueDay, RevenueDayTechnician, RevenueLogDay, RevenueLogRow, RevenueMonthReport, SaveExcelSyncInput } from '@texasrenters/shared';
-import { revenueLogTotals } from '@texasrenters/shared';
+import { MAX_EXCEL_OFFICE_ROWS_A_DAY, revenueLogTotals } from '@texasrenters/shared';
 
 import { SaveExcelSyncDto } from '../src/admin/excel/excel-sync.controller';
 import { ExcelGraphClient, encodeSharingUrl } from '../src/admin/excel/excel-graph.client';
@@ -9,6 +9,8 @@ import { ExcelSyncService } from '../src/admin/excel/excel-sync.service';
 import { MicrosoftAuthService } from '../src/admin/excel/microsoft-auth.service';
 import { getMicrosoftConfig, microsoftConfigured } from '../src/admin/excel/microsoft.config';
 import { asText, cellText, dailyTab, monthTab, projectionTab, trackerTab, weekTab, weekTabName, type ExcelCell } from '../src/admin/excel-layout';
+import { screenOfficeRows } from '../src/admin/excel/excel-log-rows';
+import type { ImportedLogCells } from '../src/admin/workbook-import';
 
 /** A row as Excel shows it: text, or each number in the format it was sent with. */
 const shown = (row: ExcelCell[] | undefined) => (row ?? []).map(cellText);
@@ -431,6 +433,8 @@ function syncSetup(
     }
   >();
   const audits: unknown[] = [];
+  /** The console's log entries: the takeover's import and the sync's last check before a row comes in read them. */
+  const entries = options.entries ?? [];
   const connection = connectionDb({
     status: 'CONNECTED',
     accessTokenCiphertext: sealSecret('access', key),
@@ -480,7 +484,10 @@ function syncSetup(
     revenueLogEntry: {
       upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'log', ...create, ...update })),
       updateMany: jest.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => saved.push({ table: 'log', ...where, ...data })),
-      findMany: jest.fn(async () => (options.entries ?? []).map((entry) => ({ ...entry }))),
+      // The office's own rows only, when that is what is asked for, as the database answers.
+      findMany: jest.fn(async ({ where }: { where?: { inspectionId?: null } } = {}) =>
+        entries.filter((entry) => !(where && 'inspectionId' in where && where.inspectionId === null && entry.inspectionId)).map((entry) => ({ ...entry })),
+      ),
       createMany: jest.fn(async ({ data }: { data: Record<string, unknown>[] }) => {
         for (const row of data) saved.push({ table: 'log', created: true, ...row });
       }),
@@ -521,6 +528,7 @@ function syncSetup(
     },
     setRemarks: (value: string | null) => (remarks = value),
     logs,
+    entries,
   };
 }
 
@@ -960,6 +968,40 @@ describe("each technician's own log tab", () => {
     expect(setup.sheets.get('Amy')!.keys).toHaveLength(4);
   });
 
+  // ── Whatever the planner concludes, a row never comes in twice, and a day never fills (2026-11-23: 8 rows became 1,203) ──
+  const officeRow = (id: string, over: Record<string, unknown>) => ({ id, organizationId: ORG, technicianId: 'amy', inspectionId: null, day: new Date('2026-11-18T00:00:00.000Z'), address: null, jobNumber: null, ...over });
+
+  it("never brings in a row the console has already, though the tab's rows do not show it -- run after run -- and says so on the Excel dialog", async () => {
+    const { microsoft, setup } = await written();
+    // A row of the office's own for 11/18, Job# 20480, that the console holds but did not compare with the tab.
+    setup.entries.push(officeRow('row-unseen', { address: '12 Example Dr - Zone 2', jobNumber: '20480' }));
+    microsoft.edit('Amy', 'A15', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B15', '12 Example Dr - Zone 2');
+    microsoft.edit('Amy', 'D15', '#20480');
+    for (const minutes of [2, 4, 6]) {
+      microsoft.edit('Amy', 'S15', `Typed at minute ${minutes}`);
+      const run = await runAgain(setup, minutes);
+      expect(run!.pulled).toMatchObject({ refused: 1 });
+    }
+    expect(setup.saved.filter((saved) => saved.created)).toEqual([]);
+    expect(setup.sync!.lastPull).toMatchObject({ refused: 1, refusedRows: [{ tab: 'Amy', date: '2026-11-18', row: 'Job# 20480', why: 'ALREADY_IN_CONSOLE' }] });
+    // Left in Excel as the office typed it.
+    expect(['B15', 'D15'].map((address) => microsoft.shows('Amy', address))).toEqual(['12 Example Dr - Zone 2', '#20480']);
+  });
+
+  it(`brings no more than ${MAX_EXCEL_OFFICE_ROWS_A_DAY} rows of the office's own into a technician's day: the rest stay in Excel, and the dialog says so`, async () => {
+    const { microsoft, setup } = await written();
+    for (let n = 1; n < MAX_EXCEL_OFFICE_ROWS_A_DAY; n++) setup.entries.push(officeRow(`row-${n}`, { address: `${n} Busy Rd` }));
+    microsoft.edit('Amy', 'A15', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B15', '7 New Rd - Zone 4');
+    microsoft.edit('Amy', 'A16', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B16', '8 New Rd - Zone 4');
+    const run = await runAgain(setup, 2);
+    expect(setup.saved.filter((saved) => saved.created)).toEqual([expect.objectContaining({ address: '7 New Rd - Zone 4' })]);
+    expect(run!.pulled).toMatchObject({ taken: 1, refused: 1, refusedRows: [{ tab: 'Amy', date: '2026-11-18', row: '8 New Rd - Zone 4', why: 'DAY_FULL' }] });
+    expect(microsoft.shows('Amy', 'B16')).toBe('8 New Rd - Zone 4');
+  });
+
   it('leaves a row the office deleted deleted, and a new console row goes in at the foot, under the office\'s rows', async () => {
     const { microsoft, setup } = await written();
     // The office deletes the 11/19 row and types a row of its own under the console's.
@@ -1031,6 +1073,52 @@ describe("each technician's own log tab", () => {
     expect(['A15', 'B15'].map((address) => microsoft.shows('Amy', address))).toEqual(['11/18/2026', '3 Later Ln']);
     // Nothing of it brought back in as the office's own row.
     expect(setup.saved.filter((saved) => saved.created)).toEqual([]);
+  });
+});
+
+describe("the last check before an office row in Excel comes into the console", () => {
+  const day = '2026-11-23';
+  const offered = (address: string | null, jobNumber: string | null = null, technicianId = 'moses', date = day) => ({
+    technicianId,
+    date,
+    cells: { address, jobNumber } as ImportedLogCells,
+  });
+  const entry = (id: string, address: string | null, jobNumber: string | null = null, technicianId = 'moses') => ({ id, technicianId, day, address, jobNumber });
+
+  it('takes a row the console has none of', () => {
+    const { accepted, refused } = screenOfficeRows([offered('5 Example Ln - Zone 2', '20504')], [entry('other', '6 Example Ln', '20505')], new Set());
+    expect(accepted).toHaveLength(1);
+    expect(refused).toEqual([]);
+  });
+
+  it('refuses a row whose Job# -- or street, without one -- the console has on a row it did not compare with the tab: once for each such row', () => {
+    const { accepted, refused } = screenOfficeRows(
+      [offered('5 Example Ln - Zone 2', '#20504'), offered('Supply Run - Home Depot'), offered('supply run - again')],
+      [entry('unseen-1', '5 Example Ln - TBP', '20504'), entry('unseen-2', 'Supply run')],
+      new Set(),
+    );
+    expect(refused.map((row) => [row.cells.jobNumber ?? row.cells.address, row.why])).toEqual([
+      ['#20504', 'ALREADY_IN_CONSOLE'],
+      ['Supply Run - Home Depot', 'ALREADY_IN_CONSOLE'],
+    ]);
+    // A second supply run that day is a row of its own.
+    expect(accepted.map((row) => row.cells.address)).toEqual(['supply run - again']);
+  });
+
+  it("takes a second row of a street the planner found on the tab -- the office's to have -- and never looks at another technician or day", () => {
+    const { accepted } = screenOfficeRows(
+      [offered('Supply run'), offered('Supply run', null, 'amy'), offered('Supply run', null, 'moses', '2026-11-24')],
+      [entry('compared', 'Supply run'), entry('amy-other-day', 'Supply run', null, 'kevin')],
+      new Set(['compared']),
+    );
+    expect(accepted).toHaveLength(3);
+  });
+
+  it(`fills a day to ${MAX_EXCEL_OFFICE_ROWS_A_DAY} rows of the office's own, counting those it takes in the same run`, () => {
+    const held = Array.from({ length: MAX_EXCEL_OFFICE_ROWS_A_DAY - 2 }, (_, n) => entry(`held-${n}`, `${n} Busy Rd`));
+    const { accepted, refused } = screenOfficeRows([offered('A Rd'), offered('B Rd'), offered('C Rd'), offered('D Rd', null, 'amy')], held, new Set(held.map((row) => row.id)));
+    expect(accepted.map((row) => row.cells.address)).toEqual(['A Rd', 'B Rd', 'D Rd']);
+    expect(refused).toEqual([expect.objectContaining({ cells: { address: 'C Rd', jobNumber: null }, why: 'DAY_FULL' })]);
   });
 });
 
