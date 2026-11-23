@@ -18,7 +18,8 @@ import { valueOf, type ExcelEdit } from './excel-read';
  *  - a console row Excel has not had from the console yet, found on the tab
  *    all the same (the office typed it), takes the office's cells, and the
  *    console fills only the cells the office left empty;
- *  - a row the office added (not the console's) comes into the console;
+ *  - a row the office added (not the console's) comes into the console, once
+ *    its day is one of the console's -- a later day's row waits for its day;
  *  - a console row Excel has never had is added at the foot of the tab; one the
  *    office deleted stays deleted;
  *  - a row the console wrote that is no longer the console's (its visit moved
@@ -122,6 +123,14 @@ export function planLogTab(input: {
   editable: Record<number, ExcelEditableField>;
   /** The first day that is the console's on this tab: an office row before it is left alone. */
   from: string;
+  /**
+   * The last day of the console's rows on this tab (tomorrow). A row the office
+   * typed for a later day -- Monday's, typed on Friday -- waits until its day is
+   * the console's: none of the console's rows can be it yet, so brought in now it
+   * would be brought in again on every run (2026-11-23: Moses's Monday came into
+   * the console once a run, all weekend), and its visit written beside it.
+   */
+  to: string;
 }): LogTabPlan {
   const plan: LogTabPlan = { edits: [], added: [], writes: [], appends: [], clears: [], written: {}, conflicts: 0, deleted: 0, skipped: 0 };
   const rows = input.excel.text.map((texts, index) => {
@@ -238,11 +247,11 @@ export function planLogTab(input: {
     else plan.written[key] = before;
   }
 
-  // Rows the office added from the console's first day: into the console -- but not a second row for a visit the tab
-  // already has, nor a row with neither Job# nor address, which could never be found again.
+  // Rows the office added from the console's first day to its last: into the console -- but not a second row for a
+  // visit the tab already has, nor a row with neither Job# nor address, which could never be found again.
   const onTab = new Set([...matched.values(), ...gone.values()].map((row) => `${row.day}|${jobKey(row.texts[JOB])}`));
   for (const row of candidates) {
-    if (taken.has(row.index) || row.day! < input.from) continue;
+    if (taken.has(row.index) || row.day! < input.from || row.day! > input.to) continue;
     const job = jobKey(row.texts[JOB]);
     if ((job && onTab.has(`${row.day}|${job}`)) || (!job && !addressKey(row.texts[ADDRESS]))) {
       plan.skipped += 1;

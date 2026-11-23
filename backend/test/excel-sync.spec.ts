@@ -900,6 +900,66 @@ describe("each technician's own log tab", () => {
     expect(addresses(microsoft)).toEqual([]);
   });
 
+  it("leaves a row typed for a day after tomorrow until its day comes, then finds the visit's row in it -- never bringing it in again run after run (2026-11-23: Moses's Monday, typed on Friday, came into the console once a run)", async () => {
+    const { microsoft, setup } = await written();
+    const created = () => setup.saved.filter((saved) => saved.created);
+    // The office types the next working day ahead -- Friday for Monday: 11/20, two days after "today" (11/18).
+    microsoft.edit('Amy', 'A15', 46346, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B15', '12 Example Dr - Zone 2');
+    microsoft.edit('Amy', 'D15', '20480');
+    microsoft.edit('Amy', 'F15', '30 mins');
+    microsoft.edit('Amy', 'A16', 46346, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B16', 'Supply run');
+    await runAgain(setup, 2);
+    // ...and keeps typing that afternoon: the tab is read again, run after run.
+    microsoft.edit('Amy', 'S15', 'Gate code 1234');
+    await runAgain(setup, 4);
+    microsoft.edit('Amy', 'S16', 'Filters');
+    await runAgain(setup, 6);
+    expect(created()).toEqual([]);
+
+    // The day comes within the console's: Jobber's visit for it is on the page, and the office's row is that visit's.
+    setup.logs.amy!.push(logDay('2026-11-20', [row('2026-11-20', { inspectionId: 'visit-4', address: '12 Example Dr - TBP', jobNumber: '20480' })]));
+    jest.setSystemTime(new Date('2026-11-19T15:00:00.000Z'));
+    await setup.service.runIfDue(ORG);
+    expect(created()).toEqual([expect.objectContaining({ technicianId: 'amy', day: new Date('2026-11-20T00:00:00.000Z'), address: 'Supply run', notes: 'Filters' })]);
+    expect(setup.saved).toEqual(expect.arrayContaining([expect.objectContaining({ table: 'log', inspectionId: 'visit-4', timeBudgeted: '30 mins' })]));
+    // The visit is found in the office's row: not written a second time at the foot.
+    expect(microsoft.shows('Amy', 'B17')).toBe('');
+
+    // The office's row is the console's now, and the next runs bring nothing in again.
+    setup.logs.amy!.at(-1)!.rows.push(row('2026-11-20', { entryId: 'entry-supply', address: 'Supply run', notes: 'Filters' }));
+    microsoft.edit('Amy', 'G15', 45, '#,##0.00;-#,##0.00;"-"');
+    jest.setSystemTime(new Date('2026-11-19T15:03:00.000Z'));
+    await setup.service.runIfDue(ORG);
+    expect(created()).toHaveLength(1);
+    expect(microsoft.shows('Amy', 'B17')).toBe('');
+  });
+
+  it("empties the rows it wrote for copies taken off the console in one call a block -- the office's own row stays (2026-11-23: ~2,000 copies at the foot of the tabs)", async () => {
+    const { microsoft, setup } = await written();
+    // The office's row, and three console rows for it: the first is found in it, the other two were written at the foot.
+    microsoft.edit('Amy', 'A15', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B15', '5 Copy Ln - Zone 2');
+    microsoft.edit('Amy', 'D15', '20999');
+    microsoft.edit('Amy', 'E15', 'Start');
+    const copy = (entryId: string) => row('2026-11-18', { entryId, address: '5 Copy Ln - Zone 2', jobNumber: '20999', driveTime: 'Start' });
+    setup.logs.amy![0]!.rows.push(copy('copy-1'), copy('copy-2'), copy('copy-3'));
+    await runAgain(setup, 2, true);
+    expect(['B15', 'B16', 'B17'].map((address) => microsoft.shows('Amy', address))).toEqual(['5 Copy Ln - Zone 2', '5 Copy Ln - Zone 2', '5 Copy Ln - Zone 2']);
+
+    // The two copies are removed from the console, and the next run told to read every tab, as the clean-up leaves it.
+    setup.logs.amy![0]!.rows.splice(-2);
+    await setup.db.excelSync.update({ data: { fileTag: null } });
+    microsoft.calls.length = 0;
+    await runAgain(setup, 4, true);
+    const clears = microsoft.calls.filter((call) => call.path.includes('/Amy/') && call.path.endsWith('/clear'));
+    expect(clears.map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['A16:S17']);
+    expect(['B15', 'E15', 'B16', 'B17'].map((address) => microsoft.shows('Amy', address))).toEqual(['5 Copy Ln - Zone 2', 'Start', '', '']);
+    // Forgotten once emptied: the tab's record holds the console's rows that are left.
+    expect(setup.sheets.get('Amy')!.keys).toHaveLength(4);
+  });
+
   it('leaves a row the office deleted deleted, and a new console row goes in at the foot, under the office\'s rows', async () => {
     const { microsoft, setup } = await written();
     // The office deletes the 11/19 row and types a row of its own under the console's.
