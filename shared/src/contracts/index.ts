@@ -134,5 +134,6 @@ export * from './purchasing-roles.js';
 export * from './purchasing-page.js';
 export * from './phone-counts.js';
 export * from './inventory-monitoring.js';
+export * from './inventory-import.js';
 export * from './vendor-bills-xero.js';
 export * from './jobs.js';

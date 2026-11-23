@@ -48,6 +48,8 @@ import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
 import { InventoryMonitoringController } from './inventory-monitoring.controller';
 import { InventoryMonitoringService } from './inventory-monitoring.service';
+import { InventoryImportController } from './inventory-import.controller';
+import { InventoryImportService } from './inventory-import.service';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { PurchasingCodesController } from './purchasing-codes.controller';
@@ -139,6 +141,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     PurchasingSetupController,
     InventoryMonitoringController,
     VendorBillsXeroController,
+    // Before InventoryController too: `inventory/import` is its own (2026-11-23).
+    InventoryImportController,
     InventoryController,
     PurchasingController,
     PurchaseOrdersController,
@@ -193,6 +197,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceReportsService,
     ActualVsBudgetService,
     InventoryService,
+    InventoryImportService,
     StockSlipsService,
     StockCountsService,
     PurchasingCodesService,
