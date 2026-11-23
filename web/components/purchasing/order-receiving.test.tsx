@@ -3,12 +3,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BillSection, ReceivingSection, aheadOfTexas } from './order-receiving';
+import { receiptLabelLines } from './receipt-labels';
 
 /** Receiving and the vendor's bill, phase 4 (2026-11-19). Every item, person, vendor and price invented. */
 
 const mutation = () => ({ mutateAsync: vi.fn(async () => ({})), isPending: false, error: null, reset: vi.fn() });
 const hooks = vi.hoisted(() => ({ usePurchaseReceivingEdits: vi.fn(), useRequisitionChoices: vi.fn() }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
+// Labels are a PDF made in the browser: here only what is asked for is checked.
+const labels = vi.hoisted(() => ({ downloadLabels: vi.fn(async () => undefined) }));
+vi.mock('@/lib/item-labels/download-labels', () => labels);
 
 const NOTHING = { edit: false, change: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
 const order = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => ({
@@ -83,6 +87,9 @@ afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   edits = Object.fromEntries(['receive', 'reverseReceipt', 'closeShort', 'saveBill', 'approveBill', 'approveBillAnyway', 'payBill'].map((name) => [name, mutation()]));
+  // Posting a receipt answers with the order as it now is.
+  edits.receive!.mutateAsync = vi.fn(async () => order());
+  labels.downloadLabels.mockClear();
   hooks.usePurchaseReceivingEdits.mockReturnValue(edits);
   hooks.useRequisitionChoices.mockReturnValue({ data: { places: [{ id: 'place-stockroom', name: 'Stockroom' }, { id: 'place-van', name: 'Van 1' }] } });
 });
@@ -149,6 +156,51 @@ describe('what has arrived', () => {
     fireEvent.change(within(dialog).getByLabelText('Why the rest will not arrive'), { target: { value: 'Discontinued.' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Finish the order' }));
     await waitFor(() => expect(edits.closeShort!.mutateAsync).toHaveBeenCalledWith({ orderId: 'order-9', input: { reason: 'Discontinued.' } }));
+  });
+});
+
+// Items come with no label, and nothing is scanned until it carries one (the office, 2026-11-24).
+describe('labelling what arrived', () => {
+  it('starts at one label a piece received, an item into two places as one, with its unit from the order', () => {
+    const units = new Map([['FLT-0003', 'each']]);
+    const lines = receiptLabelLines(
+      {
+        lines: [
+          { itemCode: 'FLT-0003', itemName: 'Filter 20x25x1', placeName: 'Stockroom', quantity: 30 },
+          { itemCode: 'FLT-0003', itemName: 'Filter 20x25x1', placeName: 'Van 1', quantity: 6 },
+          { itemCode: 'PRT-0001', itemName: 'Battery, 9 V', placeName: 'Stockroom', quantity: 24 },
+        ],
+      },
+      units,
+    );
+    expect(lines).toEqual([
+      { code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', received: 36 },
+      { code: 'PRT-0001', name: 'Battery, 9 V', unit: '', received: 24 },
+    ]);
+  });
+
+  it('opens by itself once a receipt is posted, and prints what is ticked', async () => {
+    render(<ReceivingSection data={order({ can: { ...NOTHING, receive: true } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Receive goods' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Receive goods' })).getByRole('button', { name: 'Post receipt' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Label what arrived' });
+    expect((within(dialog).getByLabelText('Labels of FLT-0003') as HTMLInputElement).value).toBe('36');
+    // A box of small parts may need one label only.
+    fireEvent.change(within(dialog).getByLabelText('Labels of FLT-0003'), { target: { value: '2' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Print 2 labels' }));
+    await waitFor(() => expect(labels.downloadLabels).toHaveBeenCalledWith([{ code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', copies: 2 }], 'SHEET', 1));
+  });
+
+  it('is offered on each receipt to whoever receives, and asks for a number of labels it can print', () => {
+    render(<ReceivingSection data={order({ can: { ...NOTHING, reverseReceipt: true } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Label what arrived on RCV-0008' }));
+    const dialog = screen.getByRole('dialog', { name: 'Label what arrived' });
+    fireEvent.change(within(dialog).getByLabelText('Labels of FLT-0003'), { target: { value: '0' } });
+    expect(within(dialog).getByText('Say how many labels of FLT-0003: 1 to 99.')).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: /^Print/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Labels for FLT-0003' }));
+    expect(within(dialog).getByText('Tick at least one item code.')).toBeTruthy();
   });
 });
 
