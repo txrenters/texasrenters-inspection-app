@@ -16,6 +16,13 @@ import { apiBaseUrl, applySession, clearSession } from '@/lib/session-cookies';
  */
 export const dynamic = 'force-dynamic';
 
+/**
+ * The API's answers that mean this refresh token will never work: 401 for one
+ * expired, revoked or replayed, 403 for an account refused outright, and 400
+ * for a cookie that is not a token at all. Only these end the session here.
+ */
+const API_REFUSED = new Set([400, 401, 403]);
+
 export async function POST(request: NextRequest) {
   const refreshToken = request.cookies.get(REFRESH_COOKIE)?.value;
   if (!refreshToken) {
@@ -41,6 +48,15 @@ export async function POST(request: NextRequest) {
     // good, and clearing it would turn a momentary outage into a sign-out with
     // no way back.
     return NextResponse.json({ message: 'The administrator API could not be reached.' }, { status: 503 });
+  }
+
+  if (!upstream.ok && !API_REFUSED.has(upstream.status)) {
+    // Not a refusal: the API failed to answer -- a 500 while its database
+    // pool is exhausted, a 502 or 504 while it restarts for a release. The
+    // token is very likely still good, and if the API never got as far as
+    // rotating it, it is the only one there is. Clearing it here signed a
+    // remembered sign-in out for a fault that was never about the session.
+    return NextResponse.json({ message: 'The administrator API could not renew the session.' }, { status: 503 });
   }
 
   if (!upstream.ok) {

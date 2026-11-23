@@ -65,6 +65,25 @@ const PORTAL_SESSION_ENDED = new ApplicationError(
   'Your TR Staff Portal sign-in has ended. Sign in again.',
 );
 
+/**
+ * How long after a rotation the token it retired may be offered once more,
+ * when nobody has used its replacement yet.
+ *
+ * The answer to a renewal can be lost after the rotation has happened: the
+ * console reloads or closes the tab while it is on its way, Wi-Fi drops as a
+ * laptop wakes, the phone's app is killed. The holder still has the old token,
+ * and the next renewal offers it. Without this, that renewal read as a stolen
+ * token and ended every session on the account, the phone's included: a
+ * "Remember me" that ended on an ordinary reload.
+ *
+ * Two minutes covers the console's next try: the next request, or its session
+ * check, which a background tab runs about once a minute. It narrows reuse
+ * detection only while the replacement is unused: the replacement is retired
+ * by the second exchange, so whoever held it is caught the moment they offer
+ * it.
+ */
+export const LOST_ROTATION_GRACE_MS = 2 * 60 * 1000;
+
 export interface SessionTokens {
   accessToken: string;
   refreshToken: string;
@@ -195,14 +214,30 @@ export class SessionService {
     // dead is the *expected* outcome there, and treating it as an intrusion
     // fired a warning for every device after every password reset — noise that
     // would bury the real signal this check exists to raise.
+    //
+    // Except moments after the rotation, while nobody has used the
+    // replacement: then the answer most likely never reached its holder, and
+    // the replacement is retired in place of this token. See
+    // LOST_ROTATION_GRACE_MS.
+    let lost: { replacementId: string; rotatedAt: Date } | null = null;
     if (existing.revokedAt && existing.replacedById) {
-      await this.revokeAllFor(existing.authUserId, 'refresh token reuse');
-      this.logger.warn(
-        `Refresh token reuse detected for ${existing.authUserId}; all sessions revoked.`,
-      );
-      throw REJECTED;
-    }
-    if (existing.revokedAt) throw REJECTED;
+      const replacementId = await this.unusedReplacement(existing.revokedAt, existing.replacedById);
+      if (replacementId) lost = { replacementId, rotatedAt: existing.revokedAt };
+      else {
+        await this.revokeAllFor(existing.authUserId, 'refresh token reuse');
+        this.logger.warn(
+          `Refresh token reuse detected for ${existing.authUserId}; all sessions revoked.`,
+        );
+        throw REJECTED;
+      }
+    } else if (existing.revokedAt) throw REJECTED;
+
+    // What ends this session if it is refused below: the token presented and,
+    // after a lost answer, the replacement nobody received.
+    const retireAll = async () => {
+      await this.retire(existing.id);
+      if (lost) await this.retire(lost.replacementId);
+    };
 
     if (existing.expiresAt.getTime() <= Date.now()) throw REJECTED;
     if (!existing.credential.profile.isActive) throw REJECTED;
@@ -215,13 +250,13 @@ export class SessionService {
     if (portalSessionId) {
       const renewal = this.portal ? await this.portal.renew(portalSessionId, existing.authUserId) : { live: false as const };
       if (!renewal.live) {
-        await this.retire(existing.id);
+        await retireAll();
         throw PORTAL_SESSION_ENDED;
       }
       accessTtlSeconds = renewal.accessTtlSeconds;
     } else if (existing.fromConsole && this.portal && !this.portal.passwordLoginAllowed()) {
       if (await this.isStaff(existing.authUserId)) {
-        await this.retire(existing.id);
+        await retireAll();
         this.logger.log(`Ended a console password session for ${existing.authUserId}: password sign-in is off for staff.`);
         throw REJECTED;
       }
@@ -249,11 +284,34 @@ export class SessionService {
         },
         select: { id: true },
       });
+      if (!lost) {
+        await tx.authRefreshToken.update({
+          where: { id: existing.id },
+          data: { revokedAt: new Date(), replacedById: created.id },
+        });
+        return;
+      }
+      // After a lost answer: the replacement nobody received is retired in
+      // this one's place, and pointed at the new token, so whoever offers it
+      // later is caught as a replay. Retired as of the rotation that made it,
+      // which is when it stopped being of use to anyone: the grace runs from
+      // that rotation for every token in it, and no exchange extends it. Only
+      // while it is still unused: two of these at once must not both succeed.
+      const { count } = await tx.authRefreshToken.updateMany({
+        where: { id: lost.replacementId, revokedAt: null },
+        data: { revokedAt: lost.rotatedAt, replacedById: created.id },
+      });
+      if (count !== 1) throw REJECTED;
+      // `revokedAt` is left as it was, for the same reason.
       await tx.authRefreshToken.update({
         where: { id: existing.id },
-        data: { revokedAt: new Date(), replacedById: created.id },
+        data: { replacedById: created.id },
       });
     });
+    if (lost)
+      this.logger.log(
+        `Renewed a session for ${existing.authUserId} again: the answer to its last renewal never arrived.`,
+      );
 
     // A portal sign-in is never sent to replace a temporary password: the
     // password is not what signed them in. The column is left as it is.
@@ -380,6 +438,21 @@ export class SessionService {
     });
     if (count > 0) this.logger.log(`Revoked ${count} session(s) for ${authUserId}: ${reason}.`);
     return count;
+  }
+
+  /**
+   * The replacement a just-rotated token may be exchanged in place of, or
+   * null when offering that token again is a replay: rotated longer ago than
+   * LOST_ROTATION_GRACE_MS, or its replacement already used, signed out or
+   * gone.
+   */
+  private async unusedReplacement(rotatedAt: Date, replacedById: string) {
+    if (Date.now() - rotatedAt.getTime() > LOST_ROTATION_GRACE_MS) return null;
+    const replacement = await this.prisma.authRefreshToken.findUnique({
+      where: { id: replacedById },
+      select: { id: true, revokedAt: true },
+    });
+    return replacement && !replacement.revokedAt ? replacement.id : null;
   }
 
   /** Ends one session without treating it as anything worse. */
