@@ -51,7 +51,7 @@ it('lists a record\'s attachments, then copies the ones not yet stored into our 
   const { prisma, client, storage, worker } = setup({
     pending: [{ id: 'file-a', recordId: 'rec-1', jobberFileId: 'att-1', contentType: 'image/jpeg', copyAttempts: 0, copyAttemptedAt: null }],
   });
-  client.request.mockResolvedValueOnce({ job: { id: 'job-1', noteAttachments: { nodes: [link('att-1')] } } });
+  client.request.mockResolvedValueOnce({ job: { id: 'job-1', noteAttachments: { totalCount: 1, nodes: [link('att-1')] } } });
 
   const result = await worker.run(ORG);
 
@@ -59,7 +59,7 @@ it('lists a record\'s attachments, then copies the ones not yet stored into our 
   expect(prisma.jobberRecordFile.upsert).toHaveBeenCalledWith(
     expect.objectContaining({ where: { organizationId_jobberFileId: { organizationId: ORG, jobberFileId: 'att-1' } } }),
   );
-  expect(prisma.jobberRecord.update).toHaveBeenCalledWith({ where: { id: 'rec-1' }, data: { filesListedAt: expect.any(Date) } });
+  expect(prisma.jobberRecord.update).toHaveBeenCalledWith({ where: { id: 'rec-1' }, data: { filesListedAt: expect.any(Date), filesTruncated: false } });
   expect(storage.put).toHaveBeenCalledWith(mirrorFileKey(ORG, 'rec-1', 'file-a'), Buffer.from('bytes'), 'image/jpeg');
   // The link is used, never kept.
   expect(JSON.stringify(prisma.jobberRecordFile.update.mock.calls)).not.toContain('files.example.com');
@@ -84,4 +84,44 @@ it('copies nothing once the daily ceiling is reached', async () => {
   const { client, worker } = setup({ copiedToday: 2_000 });
   expect(await worker.run(ORG)).toEqual({ listed: 0, copied: 0, failed: 0, skipped: 'CEILING' });
   expect(client.request).not.toHaveBeenCalled();
+});
+
+it('stamps a record Jobber no longer has as listed, so it is not asked about every tick', async () => {
+  const { prisma, client, worker } = setup();
+  client.request.mockResolvedValueOnce({ job: null });
+
+  await worker.run(ORG);
+
+  expect(prisma.jobberRecord.update).toHaveBeenCalledWith({
+    where: { id: 'rec-1' },
+    data: { filesListedAt: expect.any(Date), filesTruncated: false },
+  });
+});
+
+it('carries on with the next record when listing one fails', async () => {
+  const { prisma, client, worker } = setup();
+  prisma.jobberRecord.findMany = jest
+    .fn()
+    .mockResolvedValueOnce([record, { id: 'rec-2', kind: 'JOB', jobberId: 'job-2' }])
+    .mockResolvedValue([]);
+  client.request
+    .mockRejectedValueOnce(new Error('Jobber said no'))
+    .mockResolvedValueOnce({ job: { id: 'job-2', noteAttachments: { totalCount: 0, nodes: [] } } });
+
+  const result = await worker.run(ORG);
+
+  expect(client.request).toHaveBeenCalledTimes(2);
+  expect(result).toMatchObject({ listed: 1, failed: 0 });
+});
+
+it('flags a record with more attachments than one listing carries', async () => {
+  const { prisma, client, worker } = setup();
+  client.request.mockResolvedValueOnce({ job: { id: 'job-1', noteAttachments: { totalCount: 150, nodes: [link('att-1')] } } });
+
+  await worker.run(ORG);
+
+  expect(prisma.jobberRecord.update).toHaveBeenCalledWith({
+    where: { id: 'rec-1' },
+    data: { filesListedAt: expect.any(Date), filesTruncated: true },
+  });
 });

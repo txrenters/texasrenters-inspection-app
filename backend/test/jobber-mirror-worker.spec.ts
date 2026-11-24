@@ -34,6 +34,7 @@ type Cursor = Partial<{
   changesStartedAt: Date | null;
   changesCompletedAt: Date | null;
   changesSince: Date | null;
+  previousWalkStartedAt: Date | null;
 }>;
 
 /** Every kind caught up an hour ago unless a test says otherwise, so only the kind under test reads. */
@@ -88,23 +89,42 @@ describe('the first walk', () => {
     expect(last).toMatchObject({ walkCursor: null, walkCompletedAt: NOW, walkSeen: 3, changesCursor: null });
     // Five minutes before the walk began, so what changed during it is read again.
     expect(last.changesSince).toEqual(new Date(NOW.getTime() - 5 * 60_000));
-    expect(markUnseenDeleted).toHaveBeenCalledWith(expect.anything(), ORG, 'JOB', NOW, 3);
+    // A first walk has nothing to compare with: nothing is marked deleted.
+    expect(markUnseenDeleted).not.toHaveBeenCalled();
   });
 
   it('resumes a walk from the cursor it saved, counting what it already saw', async () => {
     const started = new Date(NOW.getTime() - 3 * HOUR);
-    const { client, worker, savedCursors } = setup({ JOB: { walkCursor: 'c-9', walkStartedAt: started, walkSeen: 500 } });
+    const before = new Date(NOW.getTime() - 8 * 24 * HOUR);
+    const { client, worker, savedCursors } = setup({
+      JOB: { walkCursor: 'c-9', walkStartedAt: started, walkSeen: 500, previousWalkStartedAt: before },
+    });
     client.requestDetailed.mockResolvedValueOnce(page('jobs', [{ id: 'job-501' }], false, null));
 
     await worker.run(ORG, NOW);
 
     expect(client.requestDetailed.mock.calls[0][2]).toEqual({ first: 25, after: 'c-9' });
     expect(savedCursors()[0]).toMatchObject({ walkSeen: 501 });
-    expect(markUnseenDeleted).toHaveBeenCalledWith(expect.anything(), ORG, 'JOB', started, 501);
+    // Deleted only when unseen since the walk before this one began: missed by two walks in a row.
+    expect(markUnseenDeleted).toHaveBeenCalledWith(expect.anything(), ORG, 'JOB', before, 501);
   });
 
-  it('records WALK_SHORT and keeps every row when the walk saw too few', async () => {
-    const { client, worker, prisma } = setup({ JOB: {} });
+  it('remembers when the previous walk began when a new walk starts', async () => {
+    const previous = new Date(NOW.getTime() - 8 * 24 * HOUR);
+    const { client, worker, savedCursors } = setup({
+      JOB: { ...caughtUp, walkStartedAt: previous, walkCompletedAt: new Date(previous.getTime() + HOUR) },
+    });
+    client.requestDetailed.mockResolvedValueOnce(page('jobs', [{ id: 'job-1' }], false, null));
+
+    await worker.run(ORG, NOW);
+
+    expect(savedCursors()[0]).toMatchObject({ walkStartedAt: NOW, previousWalkStartedAt: previous });
+    expect(markUnseenDeleted).toHaveBeenCalledWith(expect.anything(), ORG, 'JOB', previous, 1);
+  });
+
+  it('records WALK_SHORT where an hourly pass cannot clear it, and keeps every row', async () => {
+    const before = new Date(NOW.getTime() - 8 * 24 * HOUR);
+    const { client, worker, prisma } = setup({ JOB: { walkCursor: 'c-1', walkStartedAt: NOW, previousWalkStartedAt: before } });
     client.requestDetailed.mockResolvedValueOnce(page('jobs', [{ id: 'job-1' }], false, null));
     jest.mocked(markUnseenDeleted).mockResolvedValueOnce({ deleted: 0, short: true });
 
@@ -112,22 +132,48 @@ describe('the first walk', () => {
 
     expect(result.kinds[0]).toMatchObject({ problem: 'WALK_SHORT', deleted: 0 });
     expect(prisma.jobberMirrorCursor.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ update: expect.objectContaining({ lastError: 'WALK_SHORT' }) }),
+      expect.objectContaining({ update: expect.objectContaining({ lastError: 'WALK_SHORT', walkShortAt: NOW }) }),
     );
+  });
+
+  it('clears the WALK_SHORT mark when a later walk ends whole', async () => {
+    const before = new Date(NOW.getTime() - 8 * 24 * HOUR);
+    const { client, worker, savedCursors } = setup({ JOB: { walkCursor: 'c-1', walkStartedAt: NOW, previousWalkStartedAt: before } });
+    client.requestDetailed.mockResolvedValueOnce(page('jobs', [{ id: 'job-1' }], false, null));
+
+    await worker.run(ORG, NOW);
+
+    expect(savedCursors()[0]).toMatchObject({ walkShortAt: null });
   });
 
   it('reads a job with more notes than a page carries again by itself', async () => {
     const { client, worker } = setup({ JOB: {} });
     const long = { id: 'job-1', notes: { totalCount: 7, nodes: [1, 2, 3, 4, 5] } };
     const whole = { id: 'job-1', notes: { totalCount: 7, nodes: [1, 2, 3, 4, 5, 6, 7] } };
-    client.requestDetailed.mockResolvedValueOnce(page('jobs', [long], false, null));
-    client.request.mockResolvedValueOnce({ job: whole });
+    client.requestDetailed
+      .mockResolvedValueOnce(page('jobs', [long], false, null))
+      .mockResolvedValueOnce({ data: { job: whole }, cost: page('jobs', [], false, null).cost });
 
     const result = await worker.run(ORG, NOW);
 
-    expect(client.request.mock.calls[0][2]).toEqual({ id: 'job-1' });
+    expect(client.requestDetailed.mock.calls[1][2]).toEqual({ id: 'job-1' });
     expect(jest.mocked(saveMirrorPage).mock.calls[0][3]).toEqual([whole]);
+    // A read by itself counts against the run's pages like any other.
+    expect(result).toMatchObject({ pages: 2 });
     expect(result.kinds[0]).toMatchObject({ readAlone: 1 });
+  });
+
+  it('stops the run on THROTTLED during a read by itself, saving nothing from that page', async () => {
+    const { client, worker } = setup({ JOB: {} });
+    const long = { id: 'job-1', notes: { totalCount: 7, nodes: [1, 2, 3, 4, 5] } };
+    client.requestDetailed
+      .mockResolvedValueOnce(page('jobs', [long], true, 'c-1'))
+      .mockRejectedValue(new JobberError('Throttled', 'JOBBER_THROTTLED', 429, true));
+
+    const result = await worker.run(ORG, NOW);
+
+    expect(result.kinds).toEqual([expect.objectContaining({ kind: 'JOB', problem: 'THROTTLED' })]);
+    expect(saveMirrorPage).not.toHaveBeenCalled();
   });
 });
 

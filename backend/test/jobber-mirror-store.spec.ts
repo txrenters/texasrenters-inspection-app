@@ -55,6 +55,21 @@ describe('saveMirrorPage', () => {
   });
 });
 
+describe('a record still cut short', () => {
+  it('is flagged, so the status shows the copy is not complete', async () => {
+    const { prisma, tx } = setup();
+    const long = { id: 'job-3', createdAt: '2026-11-01T00:00:00Z', notes: { totalCount: 80, nodes: [1, 2] } };
+    await saveMirrorPage(prisma as never, ORG, JobberRecordKind.JOB, [long], SEEN, {});
+    expect(tx.jobberRecord.upsert.mock.calls[0][0].update).toMatchObject({ truncated: true });
+  });
+
+  it('is not flagged when everything came', async () => {
+    const { prisma, tx } = setup();
+    await saveMirrorPage(prisma as never, ORG, JobberRecordKind.JOB, [{ id: 'job-4', notes: { totalCount: 1, nodes: [1] } }], SEEN, {});
+    expect(tx.jobberRecord.upsert.mock.calls[0][0].update).toMatchObject({ truncated: false });
+  });
+});
+
 describe('markUnseenDeleted', () => {
   it('marks rows the finished walk did not see', async () => {
     const { prisma, tx } = setup();

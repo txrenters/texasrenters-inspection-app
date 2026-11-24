@@ -160,6 +160,7 @@ export function mirrorFilesQuery(spec: MirrorKind): string {
     ${spec.single}(id: $id) {
       id
       noteAttachments(first: 100) {
+        totalCount
         nodes { id fileName contentType fileSize url downloadUrl downloadContentType }
       }
     }

@@ -74,6 +74,7 @@ type CursorState = Partial<Pick<
   | 'changesStartedAt'
   | 'changesCompletedAt'
   | 'changesSince'
+  | 'previousWalkStartedAt'
 >>;
 
 class Throttled extends Error {}
@@ -174,14 +175,17 @@ export class JobberMirrorWorker {
     const passStartedAt = continuing ? ((mode === 'walk' ? cursor.walkStartedAt : cursor.changesStartedAt) ?? now) : now;
     let after = continuing ? ((mode === 'walk' ? cursor.walkCursor : cursor.changesCursor) ?? null) : null;
     let walkSeen = mode === 'walk' && continuing ? (cursor.walkSeen ?? 0) : 0;
+    // When the walk before this one began: a new walk takes the last walk's
+    // start, a resumed one keeps what it took. Null on the very first walk.
+    const previousWalkStartedAt = continuing ? (cursor.previousWalkStartedAt ?? null) : (cursor.walkStartedAt ?? null);
     const variables = this.variablesFor(spec, mode, cursor, passStartedAt);
     const query = mirrorPageQuery(spec, mode);
 
     while (run.pages < MAX_PAGES_PER_RUN && Date.now() - started < RUN_BUDGET_MS) {
       const { data, cost } = await this.readPage(organizationId, query, { first: spec.pageSize, after, ...variables }, started);
       const page = pageSchema.parse((data as Record<string, unknown>)[spec.connection]);
-      const nodes = await this.complete(organizationId, spec, page.nodes as MirrorNode[], result);
       run.pages += 1;
+      const nodes = await this.complete(organizationId, spec, page.nodes as MirrorNode[], started, run, result);
       result.pages += 1;
       result.saved += nodes.length;
       after = page.pageInfo.endCursor;
@@ -193,23 +197,29 @@ export class JobberMirrorWorker {
         await saveMirrorPage(this.prisma, organizationId, spec.kind, nodes, now, {
           ...checked,
           walkStartedAt: passStartedAt,
+          previousWalkStartedAt,
           walkSeen,
           ...(caughtUp
             ? {
                 walkCursor: null,
                 walkCompletedAt: now,
+                walkShortAt: null,
                 changesCursor: null,
                 changesStartedAt: null,
                 changesSince: new Date(passStartedAt.getTime() - PASS_MARGIN_MS),
               }
             : { walkCursor: after }),
         });
-        if (caughtUp) {
-          const marked = await markUnseenDeleted(this.prisma, organizationId, spec.kind, passStartedAt, walkSeen);
+        // Deleted only when unseen since the walk BEFORE this one began, i.e.
+        // missed by two walks in a row: a walk spread over days can miss a
+        // record that moved behind its cursor, two in a row do not. Costs a
+        // week before a real deletion shows; the first walk marks nothing.
+        if (caughtUp && previousWalkStartedAt) {
+          const marked = await markUnseenDeleted(this.prisma, organizationId, spec.kind, previousWalkStartedAt, walkSeen);
           result.deleted = marked.deleted;
           if (marked.short) {
             result.problem = 'WALK_SHORT';
-            await this.recordError(organizationId, spec.kind, 'WALK_SHORT', now);
+            await this.recordError(organizationId, spec.kind, 'WALK_SHORT', now, { walkShortAt: now });
           }
         }
       } else {
@@ -244,8 +254,19 @@ export class JobberMirrorWorker {
     return { since: new Date(since.getTime() - OVERLAP_MS).toISOString() };
   }
 
-  /** Records with more notes or lines than a page carries, read again by themselves. */
-  private async complete(organizationId: string, spec: MirrorKind, nodes: MirrorNode[], result: MirrorKindResult) {
+  /**
+   * Records with more notes or lines than a page carries, read again by
+   * themselves -- through the same throttle handling and pacing as a page, and
+   * counted against the run's pages, since one costs about as much.
+   */
+  private async complete(
+    organizationId: string,
+    spec: MirrorKind,
+    nodes: MirrorNode[],
+    started: number,
+    run: MirrorRunResult,
+    result: MirrorKindResult,
+  ) {
     if (!spec.single) return nodes;
     const out: MirrorNode[] = [];
     for (const node of nodes) {
@@ -254,16 +275,22 @@ export class JobberMirrorWorker {
         continue;
       }
       result.readAlone += 1;
-      const data = await this.client.request<Record<string, MirrorNode | null>>(organizationId, mirrorOneQuery(spec), {
-        id: node.id,
-      });
-      out.push(data[spec.single] ?? node);
+      run.pages += 1;
+      const { data, cost } = await this.readPage(organizationId, mirrorOneQuery(spec), { id: node.id }, started);
+      out.push((data as Record<string, MirrorNode | null>)[spec.single] ?? node);
+      await this.pace(cost, started);
     }
     return out;
   }
 
-  private async recordError(organizationId: string, kind: JobberRecordKind, code: string, now: Date) {
-    const data = { lastError: code, lastErrorAt: now, lastCheckedAt: now };
+  private async recordError(
+    organizationId: string,
+    kind: JobberRecordKind,
+    code: string,
+    now: Date,
+    extra: { walkShortAt?: Date } = {},
+  ) {
+    const data = { lastError: code, lastErrorAt: now, lastCheckedAt: now, ...extra };
     await this.prisma.jobberMirrorCursor.upsert({
       where: { organizationId_kind: { organizationId, kind } },
       create: { organizationId, kind, ...data },

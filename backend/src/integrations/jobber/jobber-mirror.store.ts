@@ -1,6 +1,6 @@
 import type { JobberRecordKind, Prisma, PrismaClient } from '@prisma/client';
 
-import { summarize, type RecordSummary } from './jobber-mirror.kinds';
+import { isCutShort, summarize, type RecordSummary } from './jobber-mirror.kinds';
 
 export type MirrorNode = Record<string, unknown> & { id: string };
 
@@ -24,9 +24,13 @@ const EMPTY: RecordSummary = {
 const SHORT_WALK_RATIO = 0.5;
 
 /**
- * One page of mirrored records and the cursor that follows it, in one
- * transaction (2026-11-24): a run cut off after this returns resumes after
- * this page, never before or past it.
+ * One page of mirrored records and the cursor that follows it (2026-11-24).
+ *
+ * Asked for as one transaction, but not relied on as one: under the tenant
+ * scope each statement commits on its own (`PrismaService`), which QA showed.
+ * So the records are written first and the cursor last -- a run cut off in
+ * between reads the same page again, which the upsert makes harmless, and a
+ * cursor is never ahead of what was saved.
  *
  * Upserted on organization, kind and Jobber id, so a page read twice -- a
  * resumed walk, a "what changed" overlapping the walk -- leaves one row. A
@@ -55,6 +59,8 @@ export async function saveMirrorPage(
         ...summary,
         payload: node as Prisma.InputJsonValue,
         extractFailed: failed,
+        // Still short after the worker read it by itself: the status shows it.
+        truncated: isCutShort(node),
         lastSeenAt: seenAt,
         deletedInJobberAt: null,
       };

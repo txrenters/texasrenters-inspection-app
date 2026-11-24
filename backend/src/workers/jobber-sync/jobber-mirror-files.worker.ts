@@ -78,7 +78,20 @@ export class JobberMirrorFileWorker {
 
     for (const record of await this.recordsToVisit(organizationId)) {
       if (allowance <= 0 || clock() - started >= RUN_BUDGET_MS) break;
-      const attachments = await this.list(organizationId, record);
+      let attachments: Map<string, Attachment> | null;
+      try {
+        attachments = await this.list(organizationId, record);
+      } catch (error) {
+        // One record Jobber will not list must not stop every other record's
+        // attachments; it is asked again on a later run.
+        this.logger.warn({
+          event: 'jobber_mirror_files_not_listed',
+          organizationId,
+          recordId: record.id,
+          message: error instanceof Error ? error.message : 'unexpected',
+        });
+        continue;
+      }
       result.listed += 1;
       const pending = await this.prisma.jobberRecordFile.findMany({
         where: { organizationId, recordId: record.id, storageKey: null, copyAttempts: { lt: MAX_COPY_ATTEMPTS } },
@@ -107,6 +120,8 @@ export class JobberMirrorFileWorker {
         OR: [{ filesListedAt: null }, { filesListedAt: { lt: this.prisma.jobberRecord.fields.jobberUpdatedAt } }],
       },
       select,
+      // Least recently listed first, so the same few records cannot hold every run.
+      orderBy: [{ filesListedAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
       take: RECORDS_PER_RUN,
     });
     if (unlisted.length >= RECORDS_PER_RUN) return unlisted;
@@ -125,13 +140,18 @@ export class JobberMirrorFileWorker {
   /** The record's attachments as Jobber has them now, recorded; null when Jobber no longer has the record. */
   private async list(organizationId: string, record: { id: string; kind: JobberRecordKind; jobberId: string }) {
     const spec = mirrorKind(record.kind);
-    const data = await this.client.request<Record<string, { noteAttachments: { nodes: unknown[] } } | null>>(
+    const data = await this.client.request<Record<string, { noteAttachments: { totalCount?: number; nodes: unknown[] } } | null>>(
       organizationId,
       mirrorFilesQuery(spec),
       { id: record.jobberId },
     );
     const parent = data[spec.single!];
-    if (!parent) return null;
+    if (!parent) {
+      // Gone from Jobber: stamped, so it is not asked about every tick; its
+      // waiting files end as failed when they are tried.
+      await this.prisma.jobberRecord.update({ where: { id: record.id }, data: { filesListedAt: new Date(), filesTruncated: false } });
+      return null;
+    }
     const attachments = parent.noteAttachments.nodes.map((node) => attachmentSchema.parse(node));
     for (const a of attachments) {
       const meta = { fileName: a.fileName ?? null, contentType: a.contentType ?? null, sizeBytes: a.fileSize ?? null };
@@ -141,7 +161,9 @@ export class JobberMirrorFileWorker {
         update: meta,
       });
     }
-    await this.prisma.jobberRecord.update({ where: { id: record.id }, data: { filesListedAt: new Date() } });
+    // More than one listing carries: what came is copied, and the status shows the rest is missing.
+    const filesTruncated = (parent.noteAttachments.totalCount ?? 0) > attachments.length;
+    await this.prisma.jobberRecord.update({ where: { id: record.id }, data: { filesListedAt: new Date(), filesTruncated } });
     return new Map(attachments.map((a) => [a.id, a]));
   }
 

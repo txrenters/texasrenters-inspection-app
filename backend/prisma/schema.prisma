@@ -3085,9 +3085,14 @@ model JobberRecord {
   jobberUpdatedAt   DateTime?
   /// The payload saved, but the columns above could not be read from it.
   extractFailed     Boolean          @default(false)
+  /// A nested list (notes, quote lines) still holds fewer than Jobber has,
+  /// even read by itself: the copy of this record is incomplete.
+  truncated         Boolean          @default(false)
   /// Note attachments Jobber reports on the record, and when they were last listed.
   fileCount         Int              @default(0)
   filesListedAt     DateTime?
+  /// More attachments than one listing carries: some were not copied.
+  filesTruncated    Boolean          @default(false)
   /// Stamped every time a read returns the record; a full walk that ends marks
   /// rows it did not see as deleted.
   lastSeenAt        DateTime
@@ -3143,6 +3148,12 @@ model JobberMirrorCursor {
   walkStartedAt      DateTime?
   walkCompletedAt    DateTime?
   walkSeen           Int              @default(0)
+  /// When the walk before this one began. A record unseen since then was
+  /// missed by two walks in a row, which is what marks it deleted.
+  previousWalkStartedAt DateTime?
+  /// The last walk saw too few records to mark any deleted. Cleared only by a
+  /// walk that ends whole, so the hourly passes cannot hide it.
+  walkShortAt        DateTime?
   changesCursor      String?
   changesStartedAt   DateTime?
   changesCompletedAt DateTime?

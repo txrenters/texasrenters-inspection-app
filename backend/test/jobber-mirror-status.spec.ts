@@ -12,6 +12,7 @@ function setup() {
         if ('deletedInJobberAt' in where && where.deletedInJobberAt === null && !('extractFailed' in where))
           return [{ kind: 'JOB', _count: { _all: 120 } }];
         if ('extractFailed' in where) return [{ kind: 'JOB', _count: { _all: 2 } }];
+        if ('OR' in where) return [{ kind: 'JOB', _count: { _all: 4 } }];
         return [{ kind: 'JOB', _count: { _all: 3 } }];
       }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -22,7 +23,7 @@ function setup() {
       { storageKey: null, copyAttempts: 5, record: { kind: 'JOB' } },
     ]) },
     jobberMirrorCursor: { findMany: jest.fn().mockResolvedValue([
-      { kind: 'JOB', walkCompletedAt: null, walkCursor: 'c-1', lastCheckedAt: null, lastError: null, lastErrorAt: null },
+      { kind: 'JOB', walkCompletedAt: null, walkCursor: 'c-1', walkShortAt: null, lastCheckedAt: null, lastError: null, lastErrorAt: null },
     ]) },
   };
   return { prisma, service: new JobberMirrorService(prisma as never) };
@@ -39,11 +40,13 @@ it('reports every kind, with records, deletions, unreadable rows and files, scop
     records: 120,
     deleted: 3,
     extractFailed: 2,
+    truncated: 4,
     filesStored: 1,
     filesPending: 1,
     filesFailed: 1,
     walkCompletedAt: null,
     walkInProgress: true,
+    walkShortAt: null,
     lastCheckedAt: null,
     lastError: null,
     lastErrorAt: null,
