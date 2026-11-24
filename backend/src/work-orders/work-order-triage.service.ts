@@ -9,6 +9,7 @@ import {
   WorkOrderImportStatus,
   WorkOrderTriageOutcome,
 } from '@prisma/client';
+import { haversineMeters } from '@texasrenters/shared';
 import { z } from 'zod';
 
 import { AdminService } from '../admin/admin.service';
@@ -152,6 +153,17 @@ export function parseReading(answer: string, catalogKeys: ReadonlySet<string>): 
   };
 }
 
+type Place = { latitude: number; longitude: number };
+const METERS_PER_MILE = 1609.344;
+
+/** A building's stored coordinates as numbers, or null when it was never placed. */
+function placeOf(building: { latitude: unknown; longitude: unknown } | null | undefined): Place | null {
+  if (building?.latitude == null || building.longitude == null) return null;
+  const latitude = Number(building.latitude);
+  const longitude = Number(building.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
+}
+
 @Injectable()
 export class WorkOrderTriageService {
   private readonly logger = new Logger(WorkOrderTriageService.name);
@@ -187,6 +199,7 @@ export class WorkOrderTriageService {
         status: true,
         scheduledAt: true,
         assignments: { where: { isCurrent: true }, select: { id: true }, take: 1 },
+        propertywareBuilding: { select: { latitude: true, longitude: true } },
         workOrderTriage: { select: { inputHash: true, skillKeys: true, scope: true, confidence: true, summary: true, outcome: true } },
       },
     });
@@ -260,7 +273,7 @@ export class WorkOrderTriageService {
       const skill = catalog.find((entry) => entry.key === key)!;
       return { id: skill.id, label: skill.label };
     });
-    const result = await this.rank(organizationId, inspection.scheduledAt, skills, reading.scope);
+    const result = await this.rank(organizationId, inspectionId, inspection.scheduledAt, skills, reading.scope, placeOf(inspection.propertywareBuilding));
     const ranking = result.ranking as unknown as Prisma.InputJsonValue;
 
     if (!result.picked)
@@ -365,7 +378,15 @@ export class WorkOrderTriageService {
   }
 
   /** Every active technician, the grants good on the visit's day, and how full that day already is. */
-  private async rank(organizationId: string, day: Date, skills: MatchSkill[], scope: JobScope) {
+  private async rank(
+    organizationId: string,
+    inspectionId: string,
+    day: Date,
+    skills: MatchSkill[],
+    scope: JobScope,
+    /** Where the work order is; null when its property has no coordinates. */
+    at: Place | null,
+  ) {
     const dayStart = new Date(`${day.toISOString().slice(0, 10)}T00:00:00.000Z`);
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     // The office's work-order crew, when it has picked one; everyone otherwise.
@@ -390,21 +411,31 @@ export class WorkOrderTriageService {
         },
         select: { technicianId: true, skillId: true, level: true, note: true },
       }),
-      this.prisma.inspectionAssignment.groupBy({
-        by: ['technicianId'],
+      // Each visit already on them that day, and where it is: how many, and how
+      // close the nearest is (2026-11-25). One read of the day, whatever the crew.
+      this.prisma.inspectionAssignment.findMany({
         where: {
           isCurrent: true,
           technicianId: { in: ids },
+          inspectionId: { not: inspectionId },
           inspection: {
             organizationId,
             scheduledAt: { gte: dayStart, lt: dayEnd },
             status: { not: InspectionStatus.CANCELLED },
           },
         },
-        _count: { _all: true },
+        select: { technicianId: true, inspection: { select: { propertywareBuilding: { select: { latitude: true, longitude: true } } } } },
       }),
     ]);
-    const load = new Map(loads.map((row) => [row.technicianId, row._count._all]));
+    const load = new Map<string, number>();
+    const nearest = new Map<string, number>();
+    for (const stop of loads) {
+      load.set(stop.technicianId, (load.get(stop.technicianId) ?? 0) + 1);
+      const place = placeOf(stop.inspection.propertywareBuilding);
+      if (!at || !place) continue;
+      const miles = haversineMeters(at, place) / METERS_PER_MILE;
+      if (miles < (nearest.get(stop.technicianId) ?? Infinity)) nearest.set(stop.technicianId, miles);
+    }
     return rankWorkOrderTechnicians({
       skills,
       scope,
@@ -412,6 +443,8 @@ export class WorkOrderTriageService {
       technicians: technicians.map((technician) => ({
         ...technician,
         load: load.get(technician.id) ?? 0,
+        // Left out when the work order's own place is unknown: nothing was measured.
+        ...(at ? { nearestMiles: nearest.get(technician.id) ?? null } : {}),
       })),
     });
   }

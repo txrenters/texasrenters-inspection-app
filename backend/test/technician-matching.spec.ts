@@ -127,3 +127,74 @@ describe('rankWorkOrderTechnicians', () => {
     expect(result.picked).toBeNull();
   });
 });
+
+describe('already working nearby (2026-11-25)', () => {
+  // The office: "auto assign by tech and clusters of existing job, and close to the job".
+  it('prefers, among the equally skilled, the one already working closest, over a lighter day', () => {
+    const result = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [
+        { ...ana, load: 0, nearestMiles: null },
+        { ...ben, load: 4, nearestMiles: 6.4 },
+        { ...cal, load: 3, nearestMiles: 1.2 },
+      ],
+      grants: [grant(ana, plumbing, 'FULL'), grant(ben, plumbing, 'FULL'), grant(cal, plumbing, 'FULL')],
+    });
+    expect(result.ranking.map((r) => r.technicianId)).toEqual([cal.id, ben.id, ana.id]);
+  });
+
+  it('never lets nearby beat a better skill', () => {
+    const result = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [
+        { ...ana, nearestMiles: 15 },
+        { ...ben, nearestMiles: 0.5 },
+      ],
+      grants: [grant(ana, plumbing, 'FULL'), grant(ben, plumbing, 'LIMITED', 'MINOR REPAIRS ONLY')],
+    });
+    expect(result.picked?.technicianId).toBe(ana.id);
+  });
+
+  it('treats a job more than 10 miles off as not nearby, and falls back to the lighter day', () => {
+    const result = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [
+        { ...ana, load: 5, nearestMiles: 10.5 },
+        { ...ben, load: 1, nearestMiles: 14 },
+      ],
+      grants: [grant(ana, plumbing, 'FULL'), grant(ben, plumbing, 'FULL')],
+    });
+    expect(result.picked?.technicianId).toBe(ben.id);
+  });
+
+  it('says how close in the reason, or that nobody was close', () => {
+    const near = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [{ ...cal, load: 3, nearestMiles: 1.24 }],
+      grants: [grant(cal, plumbing, 'FULL')],
+    });
+    expect(pickedReason(near.picked!, 'MINOR')).toBe('Cal: Plumbing; minor job; already working 1.2 mi away (3 jobs that day).');
+
+    const far = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [{ ...cal, load: 1, nearestMiles: 22 }],
+      grants: [grant(cal, plumbing, 'FULL')],
+    });
+    expect(pickedReason(far.picked!, 'MINOR')).toBe('Cal: Plumbing; minor job; no job within 10 miles that day, fewest visits.');
+  });
+
+  it('says nothing about distance when it could not be measured', () => {
+    const result = rankWorkOrderTechnicians({
+      skills: [plumbing],
+      scope: 'MINOR',
+      technicians: [ana],
+      grants: [grant(ana, plumbing, 'FULL')],
+    });
+    expect(pickedReason(result.picked!, 'MINOR')).toBe('Ana: Plumbing; minor job.');
+  });
+});

@@ -72,7 +72,18 @@ function aiAnswers(...answers: string[]) {
   return fetchMock;
 }
 
-function harness(options: { assigned?: boolean; crew?: string[]; grants?: { technicianId: string; skillId: string; level: string; note: string | null }[] } = {}) {
+type Place = { latitude: number; longitude: number } | null;
+function harness(
+  options: {
+    assigned?: boolean;
+    crew?: string[];
+    grants?: { technicianId: string; skillId: string; level: string; note: string | null }[];
+    /** Where the work order is. */
+    at?: Place;
+    /** Each technician's visits that day, and where. */
+    day?: { technicianId: string; at: Place }[];
+  } = {},
+) {
   let triageRow: Record<string, unknown> | null = null;
   const prisma = {
     inspection: {
@@ -81,6 +92,7 @@ function harness(options: { assigned?: boolean; crew?: string[]; grants?: { tech
         scheduledAt: new Date('2026-11-24T00:00:00.000Z'),
         assignments: options.assigned ? [{ id: 'a-1' }] : [],
         workOrderTriage: triageRow,
+        propertywareBuilding: options.at ?? null,
       })),
     },
     technicianSkill: { findMany: jest.fn(async () => catalog) },
@@ -100,7 +112,14 @@ function harness(options: { assigned?: boolean; crew?: string[]; grants?: { tech
         options.grants ?? [{ technicianId: 'tech-kevin', skillId: 'skill-faucet', level: 'FULL', note: null }],
       ),
     },
-    inspectionAssignment: { groupBy: jest.fn(async () => []) },
+    inspectionAssignment: {
+      findMany: jest.fn(async () =>
+        (options.day ?? []).map((stop) => ({
+          technicianId: stop.technicianId,
+          inspection: { propertywareBuilding: stop.at },
+        })),
+      ),
+    },
     workOrderTriage: {
       upsert: jest.fn(async ({ create }: { create: Record<string, unknown> }) => {
         triageRow = create;
@@ -178,6 +197,62 @@ describe('WorkOrderTriageService', () => {
       outcome: WorkOrderTriageOutcome.ASSIGNED,
       technicianId: 'tech-kevin',
       reason: 'Kevin: Faucet Leak; minor job.',
+    });
+  });
+
+  describe('already working nearby (2026-11-25)', () => {
+    const grants = [
+      { technicianId: 'tech-kevin', skillId: 'skill-faucet', level: 'FULL', note: null },
+      { technicianId: 'tech-amy', skillId: 'skill-faucet', level: 'FULL', note: null },
+    ];
+    // Downtown Houston; Amy's job is about 0.7 miles north, Kevin's 25 miles off.
+    const workOrder = { latitude: 29.76, longitude: -95.37 };
+
+    it('suggests the equally skilled technician already working close by, and says how close', async () => {
+      delete process.env.WORK_ORDER_AUTO_ASSIGN;
+      aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+      const { service, row, prisma } = harness({
+        grants,
+        at: workOrder,
+        day: [
+          { technicianId: 'tech-amy', at: { latitude: 29.77, longitude: -95.37 } },
+          { technicianId: 'tech-amy', at: null },
+          { technicianId: 'tech-kevin', at: { latitude: 30.1, longitude: -95.5 } },
+        ],
+      });
+
+      await service.triage(machine, VISIT, handoff());
+
+      expect(row()).toMatchObject({
+        outcome: WorkOrderTriageOutcome.SUGGESTED,
+        technicianId: 'tech-amy',
+        reason: 'Would assign Amy: Faucet Leak; minor job; already working 0.7 mi away (2 jobs that day).',
+      });
+      // The visit being matched is not one of the day's stops.
+      expect(prisma.inspectionAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ inspectionId: { not: VISIT } }) }),
+      );
+    });
+
+    it('falls back to the lighter day when nobody is within ten miles', async () => {
+      delete process.env.WORK_ORDER_AUTO_ASSIGN;
+      aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+      const { service, row } = harness({
+        grants,
+        at: workOrder,
+        day: [
+          { technicianId: 'tech-kevin', at: { latitude: 30.1, longitude: -95.5 } },
+          { technicianId: 'tech-kevin', at: { latitude: 30.1, longitude: -95.5 } },
+          { technicianId: 'tech-amy', at: { latitude: 30.2, longitude: -95.6 } },
+        ],
+      });
+
+      await service.triage(machine, VISIT, handoff());
+
+      expect(row()).toMatchObject({
+        technicianId: 'tech-amy',
+        reason: 'Would assign Amy: Faucet Leak; minor job; no job within 10 miles that day, fewest visits.',
+      });
     });
   });
 
