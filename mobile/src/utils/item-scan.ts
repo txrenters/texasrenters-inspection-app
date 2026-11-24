@@ -69,6 +69,6 @@ export function scanOntoSlip(
   const left = item.quantity - now - 1;
   return {
     quantities: kept,
-    said: { words: mode === 'RETURN' ? `${item.code} · ${item.name}: ${now + 1} going back.` : `${item.code} · ${item.name}: ${now + 1} taken. ${left} left. Scan it again for one more.`, bad: false },
+    said: { words: mode === 'RETURN' ? `${item.code} · ${item.name}: ${now + 1} going back.` : `${item.code} · ${item.name}: ${now + 1} taken. ${left} left. Move the label away and back for one more.`, bad: false },
   };
 }
