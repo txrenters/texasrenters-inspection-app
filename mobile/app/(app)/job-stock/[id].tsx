@@ -1,12 +1,13 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { MinusIcon, PlusIcon } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { jobStockProblem, type JobStockItem, type PhoneSlipKind } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { ItemScanner } from '@/src/components/ItemScanner';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Badge, Button, Card, SegmentedControl } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useJobStock, useJobStockActions, useJobStockLocal } from '@/src/features/queries';
@@ -142,7 +143,12 @@ export default function JobStockScreen() {
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-5 pb-10 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        // A style, not classes: the list adds the keyboard's height to this padding on Android.
+        contentContainerStyle={{ gap: 20, paddingBottom: 40, paddingTop: 8 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
         {data.places.length ? (
           <>
             <SegmentedControl accessibilityLabel="What you are recording" onChange={change} options={MODES} value={mode} />
@@ -311,11 +317,11 @@ export default function JobStockScreen() {
             ))}
           </Card>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       {scanning ? (
         <ItemScanner
-          hint="Point the camera at the label. Scan the same label again for one more."
+          hint="Hold a label inside the corners: it counts once. Move it away and back for one more."
           onClose={() => setScanning(false)}
           onCode={scanned}
           said={said}

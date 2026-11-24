@@ -1,7 +1,8 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { StatusBar } from 'expo-status-bar';
 import { FlashlightIcon, FlashlightOffIcon } from 'lucide-react-native';
 import { useRef, useState, type ReactNode } from 'react';
-import { Linking, Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/src/components/ui';
@@ -26,6 +27,13 @@ registerIcons(FlashlightIcon, FlashlightOffIcon);
  * The camera's surface is the one place colours are fixed rather than themed:
  * it is a picture of a truck, not a themed page (like GuidedCaptureOverlay).
  * Nothing leaves the phone to read a label, and nothing billed is called.
+ *
+ * On an iPhone (2026-11-24, checked against the notch, the home indicator and
+ * the keyboard): the status bar is light over the black camera, as on the
+ * video camera, where the app's "auto" bar drew dark text on black; the screen
+ * moves up for the keyboard when a code is typed, as BottomSheet does, where
+ * it had sat underneath it; and what has been scanned scrolls inside a fixed
+ * height, so a long list never squeezes the camera away.
  */
 export function ItemScanner({
   title,
@@ -61,7 +69,9 @@ export function ItemScanner({
 
   return (
     <Modal animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen" visible>
-      <View className="flex-1 bg-black" style={{ paddingTop: insets.top }}>
+      <StatusBar style="light" />
+      {/* iOS lifts the screen by the keyboard's height; its modal window resizes, so padding is enough. */}
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1 bg-black" style={{ paddingTop: insets.top }}>
         <View className="flex-row items-center gap-2 px-4 py-2">
           <Pressable accessibilityRole="button" className="min-h-11 justify-center rounded-xl bg-white/15 px-4 active:opacity-70" onPress={onClose}>
             <Text className="text-base font-semibold text-white">Done</Text>
@@ -147,10 +157,14 @@ export function ItemScanner({
           >
             {said ? said.words : hint}
           </Text>
-          {tray}
+          {tray ? (
+            <ScrollView className="max-h-36" keyboardShouldPersistTaps="handled">
+              {tray}
+            </ScrollView>
+          ) : null}
           <Button label="Done scanning" onPress={onClose} />
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

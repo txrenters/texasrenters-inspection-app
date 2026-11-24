@@ -117,7 +117,7 @@ describe('scanning a label (2026-11-19)', () => {
 
   it('is one more of that item, exactly as a tap on + is', () => {
     const first = scanOntoSlip(OFFERED, {}, 'FLT-0003', 'WITHDRAWAL');
-    expect(first).toEqual({ quantities: { 'item-filter': 1 }, said: { words: 'FLT-0003 · Filter 20x25x1: 1 taken. 1 left. Scan it again for one more.', bad: false } });
+    expect(first).toEqual({ quantities: { 'item-filter': 1 }, said: { words: 'FLT-0003 · Filter 20x25x1: 1 taken. 1 left. Move the label away and back for one more.', bad: false } });
     // The label's letters as a scanner or a hand might give them.
     expect(scanOntoSlip(OFFERED, first.quantities, ' flt-0003 ', 'WITHDRAWAL').quantities).toEqual({ 'item-filter': 2 });
   });

@@ -1,11 +1,13 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { normalizeStockCode, type PhoneCatalogItem } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { ItemScanner } from '@/src/components/ItemScanner';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Badge, Button, Card } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useMyTrucks, useTruckAskActions } from '@/src/features/queries';
@@ -34,6 +36,8 @@ export default function TruckAskScreen() {
   const truck = trucks.data?.trucks.find((one) => one.id === placeId);
   const [draft, setDraft] = useState<AskDraftLine[] | null>(null);
   const [note, setNote] = useState('');
+  // The bar pinned at the foot clears the home indicator, measured (2026-11-24): BelowHeader pads only the top.
+  const insets = useSafeAreaInsets();
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -94,7 +98,12 @@ export default function TruckAskScreen() {
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-4 pb-6 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        // A style, not classes: the list adds the keyboard's height to this padding on Android.
+        contentContainerStyle={{ gap: 16, paddingBottom: 24, paddingTop: 8 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
         <View className="mx-5 gap-1">
           <Text className="text-2xl font-bold text-foreground">Ask for more</Text>
           <Text className="text-sm leading-relaxed text-muted-foreground">The office fills {truck.name} from the Storeroom. Nothing moves until they do.</Text>
@@ -182,9 +191,9 @@ export default function TruckAskScreen() {
             ))}
           </Card>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
-      <View className="gap-2 border-t border-border bg-background px-5 pb-6 pt-3">
+      <View className="gap-2 border-t border-border bg-background px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 24) }}>
         {problem && ticked ? (
           <Text accessibilityRole="alert" className="text-xs text-destructive">
             {problem}
