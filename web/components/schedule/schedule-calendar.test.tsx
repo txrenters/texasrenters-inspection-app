@@ -168,6 +168,42 @@ describe('the Day view', () => {
   });
 });
 
+describe('Jobber work that is not an inspection (2026-11-25)', () => {
+  const omega = {
+    jobberVisitId: 'v-omega',
+    title: '3301 Omega B - Zone 1 - General Maintenance - WO#44805',
+    property: '3301 Omega B',
+    technician: 'Ada Lane',
+    technicianId: 'tech-a',
+    startAt: null,
+    completed: false,
+    reason: 'Not named as an inspection',
+  };
+
+  beforeEach(() => {
+    asked.days['2026-11-04'] = { ...day('2026-11-04', [row({ inspectionId: 'insp-ada', property: '12 Elm Ct' })]), otherWork: [omega] };
+  });
+
+  it("is on the calendar under its technician, named as Jobber names it, and counted in the day's visits", async () => {
+    mount({ view: 'week' });
+
+    const card = await screen.findByRole('button', { name: /General Maintenance - WO#44805/ });
+    expect(card).toBeTruthy();
+    expect(screen.getByText('2 visits')).toBeTruthy();
+  });
+
+  it('opens as Jobber work, with nothing to open here and nothing that changes it', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
+
+    const popover = await screen.findByRole('dialog');
+    expect(within(popover).getByText('Jobber work · To do')).toBeTruthy();
+    expect(within(popover).getByText('Not named as an inspection')).toBeTruthy();
+    expect(within(popover).queryByRole('link', { name: 'Open inspection' })).toBeNull();
+    expect(within(popover).queryByRole('checkbox')).toBeNull();
+  });
+});
+
 describe('the Week view', () => {
   it('runs Sunday to Saturday, and a day’s head opens its Day view', async () => {
     mount({ view: 'week' });

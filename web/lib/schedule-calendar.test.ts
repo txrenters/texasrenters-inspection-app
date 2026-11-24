@@ -2,6 +2,7 @@ import type { JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
 import {
+  calendarRows,
   dayColumns,
   daysToRead,
   hourWindow,
@@ -11,6 +12,7 @@ import {
   NO_FILTERS,
   oneCardPerJob,
   sortVisits,
+  STATUS_GROUPS,
   statusGroup,
   stepAnchor,
   sundayOf,
@@ -168,5 +170,57 @@ describe('one card a job (2026-11-20)', () => {
   it('leaves rows with no job as they are', () => {
     const rows = [row({ inspectionId: 'a' }), row({ inspectionId: 'b', job: null })];
     expect(oneCardPerJob(rows)).toEqual(rows);
+  });
+});
+
+describe('Jobber work on the calendar (2026-11-25)', () => {
+  const work = {
+    jobberVisitId: 'v-7',
+    title: '3301 Omega B - Zone 1 - General Maintenance - WO#44805',
+    property: '3301 Omega B',
+    technician: 'Kevin Granados',
+    technicianId: 'tech-k',
+    startAt: null,
+    completed: false,
+    reason: 'Not named as an inspection',
+  };
+  const withWork = {
+    date: '2026-11-24',
+    rows: [row({ inspectionId: 'inspection-1' })],
+    technicians: [{ technicianId: 'tech-a', name: 'Ada', here: 1, inJobber: 1, done: 0, differences: 0 }],
+    otherWork: [work, { ...work, jobberVisitId: 'v-8', title: 'Key information', technician: null, technicianId: null, completed: true }],
+  } as unknown as JobberDayComparison;
+
+  it("draws every Jobber visit that is not an inspection beside the day's inspections, as Jobber's calendar does", () => {
+    const rows = calendarRows(withWork);
+
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toMatchObject({
+      key: 'work:v-7',
+      jobberWork: true,
+      inspectionId: null,
+      jobberVisitId: 'v-7',
+      property: '3301 Omega B',
+      technicianId: 'tech-k',
+      state: 'MATCHES',
+      jobber: { title: '3301 Omega B - Zone 1 - General Maintenance - WO#44805', technician: 'Kevin Granados', completed: false, startAt: null },
+    });
+    expect(rows[2]).toMatchObject({ jobberWork: true, technicianId: null, jobber: { completed: true } });
+  });
+
+  it('reads a day with nothing extra, or none at all', () => {
+    expect(calendarRows({ ...withWork, otherWork: undefined } as unknown as JobberDayComparison)).toHaveLength(1);
+    expect(calendarRows(undefined)).toEqual([]);
+  });
+
+  it('gives Jobber work its own Status group, so it can be hidden', () => {
+    const [, jobberWork] = calendarRows(withWork);
+    expect(statusGroup(jobberWork)).toBe('work');
+    expect(STATUS_GROUPS.map((group) => group.value)).toContain('work');
+    expect(isShown(jobberWork, { ...NO_FILTERS, statuses: new Set(['work']) })).toBe(false);
+  });
+
+  it("gives a technician who only has Jobber work that day a column on the Day view", () => {
+    expect(dayColumns(withWork).map((column) => column.name)).toEqual(['Unassigned', 'Ada', 'Kevin Granados']);
   });
 });

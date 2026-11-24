@@ -1,4 +1,4 @@
-import { isFinishedStatus, type JobberDayComparison, type JobberDayRow } from '@texasrenters/shared';
+import { isFinishedStatus, type JobberDayComparison, type JobberDayOtherWork, type JobberDayRow } from '@texasrenters/shared';
 
 import { BUSINESS_TIME_ZONE, shiftDay } from '@/lib/clock';
 
@@ -115,7 +115,7 @@ export function hourWindow(minutes: readonly number[]): { from: number; to: numb
  * Where a visit stands, as the Status filter offers it. "Only in Jobber" is a
  * visit named as an inspection in Jobber that has no inspection here.
  */
-export type VisitStatusGroup = 'upcoming' | 'active' | 'done' | 'cancelled' | 'jobber';
+export type VisitStatusGroup = 'upcoming' | 'active' | 'done' | 'cancelled' | 'jobber' | 'work';
 
 export const STATUS_GROUPS = [
   { value: 'upcoming', label: 'To do' },
@@ -123,9 +123,11 @@ export const STATUS_GROUPS = [
   { value: 'done', label: 'Done' },
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'jobber', label: 'Only in Jobber' },
+  { value: 'work', label: 'Jobber work' },
 ] as const satisfies readonly { value: VisitStatusGroup; label: string }[];
 
 export function statusGroup(row: JobberDayRow): VisitStatusGroup {
+  if (row.jobberWork) return 'work';
   if (!row.inspectionId) return 'jobber';
   if (row.status === 'CANCELLED') return 'cancelled';
   if (row.status === 'IN_PROGRESS') return 'active';
@@ -169,11 +171,45 @@ export interface DayColumn {
  * technician with something on the day, by name.
  */
 export function dayColumns(day: JobberDayComparison | undefined): DayColumn[] {
-  const people = (day?.technicians ?? [])
-    .filter((person) => person.technicianId !== null)
-    .map((person) => ({ technicianId: person.technicianId, name: person.name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  return [{ technicianId: null, name: 'Unassigned' }, ...people];
+  const people = new Map<string, string>();
+  for (const person of day?.technicians ?? []) if (person.technicianId) people.set(person.technicianId, person.name);
+  // Somebody with only Jobber work that day still gets their column (2026-11-25).
+  for (const work of day?.otherWork ?? [])
+    if (work.technicianId && !people.has(work.technicianId)) people.set(work.technicianId, work.technician ?? 'Technician');
+  const columns = [...people].map(([technicianId, name]) => ({ technicianId, name }));
+  return [{ technicianId: null, name: 'Unassigned' }, ...columns.sort((a, b) => a.name.localeCompare(b.name))];
+}
+
+/** Jobber work that is not an inspection, as a calendar card: read-only, Jobber's own words. */
+function workRow(work: JobberDayOtherWork): JobberDayRow {
+  return {
+    key: `work:${work.jobberVisitId}`,
+    inspectionId: null,
+    jobberVisitId: work.jobberVisitId,
+    property: work.property,
+    inspectionType: null,
+    status: null,
+    technicianId: work.technicianId ?? null,
+    here: null,
+    jobber: { startAt: work.startAt, technician: work.technician, title: work.title, completed: Boolean(work.completed) },
+    // Nothing to compare: it is Jobber's own work, with no inspection here to differ from.
+    state: 'MATCHES',
+    differences: [],
+    waitingToSend: false,
+    importNote: work.reason,
+    jobberWork: true,
+  };
+}
+
+/**
+ * Everything on a day's calendar (2026-11-25): its inspections, and every
+ * other visit Jobber has that day -- work orders, key pickups -- so the
+ * calendar holds what Jobber's does. Both come from what the sync stored; no
+ * Jobber call is made to draw them.
+ */
+export function calendarRows(day: JobberDayComparison | undefined): JobberDayRow[] {
+  if (!day) return [];
+  return [...day.rows, ...(day.otherWork ?? []).map(workRow)];
 }
 
 /** A day's visits in reading order: timed ones by the clock, then Anytime by person and property. */
