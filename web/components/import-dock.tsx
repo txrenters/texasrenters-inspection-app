@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { AlertTriangleIcon, ChevronLeftIcon, ChevronRightIcon, FileTextIcon } from 'lucide-react';
 
@@ -366,6 +366,29 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
     if (uploading > 0 && wasUploading.current === 0) setOpen(true);
     wasUploading.current = uploading;
   }, [uploading]);
+
+  /**
+   * Out of the way on the next page when nothing is moving (2026-11-24).
+   *
+   * Opened once to look, it stayed open on every page after, over form fields:
+   * New place's Location code, an order's receipt card. With an import still
+   * running it stays, as before; idle, going to another page folds it back to
+   * the handle and forgets that it was open.
+   */
+  const pathname = usePathname();
+  const lastPath = useRef(pathname);
+  const idle = inFlight === 0;
+  useEffect(() => {
+    if (lastPath.current === pathname) return;
+    lastPath.current = pathname;
+    if (!idle) return;
+    setOpen(false);
+    try {
+      window.localStorage.setItem(DRAWER_KEY, 'closed');
+    } catch {
+      // As above: a preference lost is nothing.
+    }
+  }, [pathname, idle]);
 
   /**
    * A drawer that is always there, whether or not anything is running.

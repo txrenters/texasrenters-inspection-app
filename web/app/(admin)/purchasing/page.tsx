@@ -68,7 +68,7 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
     },
     { key: 'by', header: 'Asked by', hideBelow: 'md', cell: (row) => row.requestedBy.name },
     { key: 'day', header: 'Day', hideBelow: 'lg', cell: (row) => formatDay(row.submittedAt ?? row.createdAt), className: 'whitespace-nowrap' },
-    { key: 'department', header: 'Department', hideBelow: 'lg', cell: (row) => row.department?.code ?? EMPTY },
+    { key: 'department', header: 'Department', hideBelow: 'lg', cell: (row) => row.department?.code ?? (row.lineDepartments?.join(', ') || EMPTY) },
     { key: 'company', header: 'Company', hideBelow: 'xl', cell: (row) => row.company?.name ?? EMPTY },
     { key: 'total', header: 'Est. total', numeric: true, cell: (row) => formatMoney(row.estimatedTotalCents) },
     { key: 'needed', header: 'Needed by', hideBelow: 'lg', cell: (row) => (row.neededBy ? formatDay(row.neededBy) : EMPTY), className: 'whitespace-nowrap' },
@@ -101,7 +101,7 @@ export default function PurchasingPage() {
   const rows = (data?.requisitions ?? []).filter(
     (row) =>
       (state.status === ALL || row.stage === state.status) &&
-      (!words || `${row.number ?? ''} ${row.summary} ${row.requestedBy.name} ${row.department?.code ?? ''}`.toLowerCase().includes(words)),
+      (!words || `${row.number ?? ''} ${row.summary} ${row.requestedBy.name} ${row.department?.code ?? ''} ${row.lineDepartments?.join(' ') ?? ''}`.toLowerCase().includes(words)),
   );
   const count = (stage: RequisitionStage) => data?.requisitions.filter((row) => row.stage === stage).length ?? 0;
   const stages = REQUISITION_STAGES.filter((stage) => data?.requisitions.some((row) => row.stage === stage));
@@ -151,7 +151,7 @@ export default function PurchasingPage() {
         title="Purchasing"
       />
 
-      <Tabs onValueChange={(next) => setState({ tab: next, show: 'open', status: ALL, q: '' })} value={tab}>
+      <Tabs onValueChange={(next) => setState({ tab: next, show: 'open', status: ALL, q: '', view: 'orders' })} value={tab}>
         <TabsList>
           {/* NAV's names (the office, 2026-11-21). */}
           {canRequest ? <TabsTrigger value="requisitions">Purchase Requisitions</TabsTrigger> : null}

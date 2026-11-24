@@ -204,6 +204,7 @@ function database() {
             ...row,
             requestedBy: nameOf(row.requestedById),
             department: null,
+            lines: requisitionLines.filter((line) => line.requisitionId === row.id).map((line) => ({ department: (line as { departmentCode?: string }).departmentCode ? { code: (line as { departmentCode?: string }).departmentCode } : null })),
             _count: { lines: requisitionLines.filter((line) => line.requisitionId === row.id).length },
             orderSources: sources.filter((source) => source.requisitionId === row.id && source.releasedAt === null).map((source) => ({ order: { status: orders.find((one) => one.id === source.orderId)!.status } })),
           })),

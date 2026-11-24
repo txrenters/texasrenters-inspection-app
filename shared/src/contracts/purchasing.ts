@@ -260,6 +260,12 @@ export interface RequisitionRow {
   stage: RequisitionStage;
   /** The department it is for: its approvers are that department's. */
   department: PurchasingCodeRef | null;
+  /**
+   * The departments its lines name, each once (2026-11-24): what a list shows
+   * when the requisition itself names none, so it does not read "—" beside a
+   * line coded MAINT.
+   */
+  lineDepartments?: string[];
 }
 
 export interface RequisitionList {

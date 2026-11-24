@@ -28,6 +28,7 @@ const failure = vi.fn();
 vi.mock('sonner', () => ({ toast: { success: (...a: unknown[]) => success(...a), error: (...a: unknown[]) => failure(...a) } }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => '/inspections',
   // The dialog reads `?import=<jobId>` so a drawer row can open the review
   // directly. Absent here, so these tests exercise the ordinary entry point.
   useSearchParams: () => new URLSearchParams(),

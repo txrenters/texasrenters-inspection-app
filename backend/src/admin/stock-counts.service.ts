@@ -26,6 +26,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { shownItem } from './deleted-items';
 import { nextDocumentCode } from './purchasing-settings';
 import { OPEN_COUNT } from './stock-freeze';
 
@@ -98,7 +99,7 @@ const DETAIL = {
       expectedQuantity: true,
       unitCostCents: true,
       reason: true,
-      item: { select: { code: true, name: true, unit: true } },
+      item: { select: { code: true, name: true, unit: true, deletedAt: true } },
       place: { select: { id: true, name: true } },
     },
     orderBy: [{ place: { nameKey: 'asc' } }, { item: { codeKey: 'asc' } }],
@@ -144,7 +145,8 @@ function detail(count: Detail, user: AuthenticatedUser): StockCountDetail {
       id: line.id,
       itemId: line.itemId,
       itemCode: line.item.code,
-      itemName: line.item.name,
+      // A code deleted since says so (2026-11-24), as on requisitions and orders.
+      itemName: shownItem(line.item).name,
       unit: line.item.unit,
       place: line.place,
       counted: line.countedQuantity,

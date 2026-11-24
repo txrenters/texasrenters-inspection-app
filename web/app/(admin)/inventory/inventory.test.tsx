@@ -300,6 +300,8 @@ describe('the stock list', () => {
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Gloves' } });
     fireEvent.keyDown(within(dialog).getByLabelText('Category'), { key: 'ArrowDown' });
     fireEvent.click(screen.getByRole('option', { name: 'Filters (FLT)' }));
+    fireEvent.keyDown(within(dialog).getByLabelText('Company'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: 'THMP' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add item' }));
     await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ name: 'Gloves', unit: 'box' })));
   });
@@ -320,9 +322,14 @@ describe('the stock list', () => {
     expect(screen.queryByRole('option', { name: /Old parts/ })).toBeNull();
     fireEvent.click(screen.getByRole('option', { name: 'Filters (FLT)' }));
     expect(within(dialog).getByText('Its code will be FLT-0003.')).toBeTruthy();
+    // And its company (the office, 2026-11-24): an item of no company is not added.
+    expect(add.disabled).toBe(true);
+    fireEvent.keyDown(within(dialog).getByLabelText('Company'), { key: 'ArrowDown' });
+    expect(screen.queryByRole('option', { name: /No company/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'THMP' }));
     fireEvent.click(add);
 
-    await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith({ name: 'Filter 20x20x1', unit: 'each', categoryId: 'cat-filters', reorderLevel: 24, reorderQuantity: 0 }));
+    await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith({ name: 'Filter 20x20x1', unit: 'each', categoryId: 'cat-filters', xeroTenantId: 'tenant-thmp', reorderLevel: 24, reorderQuantity: 0 }));
   });
 
   it('lists the categories with the code each will give next, and adds one with a prefix', async () => {

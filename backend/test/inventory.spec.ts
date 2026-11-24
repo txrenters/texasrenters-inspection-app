@@ -42,6 +42,7 @@ const OTHER_ORG = '70000000-0000-4000-8000-000000000002';
 const TECH = '70000000-0000-4000-8000-000000000003';
 const STRANGER = '70000000-0000-4000-8000-000000000004';
 const THMP = 'tenant-thmp';
+const PEST = 'tenant-pest';
 const id = (n: number) => `70000000-0000-4000-8000-${String(1000 + n).padStart(12, '0')}`;
 const FILTER = id(1);
 const BATTERY = id(2);
@@ -189,7 +190,7 @@ function database() {
     },
     xeroOrganisation: {
       findMany: jest.fn(async () => [{ xeroTenantId: THMP, name: 'THMP', status: 'CONNECTED' }]),
-      findFirst: jest.fn(async ({ where }: { where: Row }) => (where.xeroTenantId === THMP ? { id: 'x', xeroTenantId: THMP, name: 'THMP' } : null)),
+      findFirst: jest.fn(async ({ where }: { where: Row }) => (where.xeroTenantId === THMP || where.xeroTenantId === PEST ? { id: 'x', xeroTenantId: where.xeroTenantId, name: 'A company' } : null)),
     },
     organizationMember: {
       findMany: jest.fn(async () => [{ userProfile: { id: TECH, displayName: 'Sample Technician' } }]),
@@ -366,7 +367,7 @@ describe('items', () => {
     expect(items.at(-1)).toMatchObject({ organizationId: ORG, code: 'FLT-0003', codeKey: 'flt-0003', categoryId: FILTERS, unit: 'each', reorderLevel: 24, xeroTenantId: THMP });
     expect(audits).toEqual([expect.objectContaining({ action: 'STOCK_ITEM_CREATED', metadata: { code: 'FLT-0003', name: 'Filter 20x20x1' } })]);
 
-    expect((await service.createItem(office, { name: 'Filter 20x25x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
+    expect((await service.createItem(office, { xeroTenantId: THMP, name: 'Filter 20x25x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
     expect(categories[0]).toMatchObject({ nextNumber: 5 });
   });
 
@@ -374,7 +375,7 @@ describe('items', () => {
     const { service, items } = database();
     items.push({ id: id(60), organizationId: ORG, code: 'flt-0003', codeKey: 'flt-0003', name: 'Typed by hand', unit: 'each', categoryId: null, category: null, xeroTenantId: null, reorderLevel: 0, reorderQuantity: 0, active: true, usualVendor: null });
 
-    expect((await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
+    expect((await service.createItem(office, { xeroTenantId: THMP, name: 'Filter 20x20x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
   });
 
   it('need a name and a category in use, and a company and vendor of this office', async () => {
@@ -382,10 +383,13 @@ describe('items', () => {
     const before = items.length;
     await expect(service.createItem(office, { name: ' ', categoryId: FILTERS })).rejects.toMatchObject({ code: 'STOCK_ITEM_INCOMPLETE' });
     await expect(service.createItem(office, { name: 'No category' })).rejects.toMatchObject({ code: 'STOCK_ITEM_INCOMPLETE' });
-    await expect(service.createItem(office, { name: 'New', categoryId: RETIRED })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
-    await expect(service.createItem(office, { name: 'New', categoryId: id(79) })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'New', categoryId: RETIRED })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'New', categoryId: id(79) })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
     await expect(service.createItem(office, { name: 'New', categoryId: FILTERS, xeroTenantId: 'tenant-of-another-office' })).rejects.toMatchObject({ code: 'STOCK_COMPANY_NOT_FOUND' });
-    await expect(service.createItem(office, { name: 'New', categoryId: FILTERS, usualVendorId: id(70) })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'New', categoryId: FILTERS, usualVendorId: id(70) })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
+    // Codes come first (the office, 2026-11-24): an item of no company would be ordered into no books.
+    await expect(service.createItem(office, { name: 'New', categoryId: FILTERS })).rejects.toMatchObject({ code: 'STOCK_ITEM_NEEDS_COMPANY' });
+    await expect(service.updateItem(office, FILTER, { xeroTenantId: null })).rejects.toMatchObject({ code: 'STOCK_ITEM_NEEDS_COMPANY' });
     expect(items).toHaveLength(before);
   });
 
@@ -411,26 +415,26 @@ describe('items', () => {
 
   it('take the code the stock keeper types, in capitals, with what one usually costs', async () => {
     const { service, items, categories } = database();
-    const made = await service.createItem(office, { code: ' flt-20201 ', name: 'Filter 20x20x1', unit: 'pcs', categoryId: FILTERS, priceCents: 360 });
+    const made = await service.createItem(office, { xeroTenantId: THMP, code: ' flt-20201 ', name: 'Filter 20x20x1', unit: 'pcs', categoryId: FILTERS, priceCents: 360 });
     expect(made.item).toMatchObject({ code: 'FLT-20201', name: 'Filter 20x20x1', unit: 'pcs', priceCents: 360 });
     expect(items.at(-1)).toMatchObject({ code: 'FLT-20201', codeKey: 'flt-20201', priceCents: 360 });
     // A typed code takes no number from the category: the next suggestion is still FLT-0003.
     expect(categories[0]).toMatchObject({ nextNumber: 3 });
     // No price is no price, not nothing.
-    expect((await service.createItem(office, { name: 'Filter 20x25x1', categoryId: FILTERS })).item).toMatchObject({ code: 'FLT-0003', priceCents: null });
+    expect((await service.createItem(office, { xeroTenantId: THMP, name: 'Filter 20x25x1', categoryId: FILTERS })).item).toMatchObject({ code: 'FLT-0003', priceCents: null });
   });
 
   it('never share a code, whatever its case, and say whose it is', async () => {
     const { service, items } = database();
     const before = items.length;
-    await expect(service.createItem(office, { code: 'flt-16251', name: 'Another filter', categoryId: FILTERS })).rejects.toMatchObject({ status: 409, code: 'STOCK_ITEM_CODE_TAKEN', message: 'FLT-16251 is already Filter 16x25x1. Choose another code.' });
-    for (const code of ['F', 'FLT 16251!', '-FLT', 'X'.repeat(25), 'FLT_1']) await expect(service.createItem(office, { code, name: 'Bad code', categoryId: FILTERS })).rejects.toMatchObject({ status: 400, code: 'STOCK_ITEM_CODE_INVALID' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, code: 'flt-16251', name: 'Another filter', categoryId: FILTERS })).rejects.toMatchObject({ status: 409, code: 'STOCK_ITEM_CODE_TAKEN', message: 'FLT-16251 is already Filter 16x25x1. Choose another code.' });
+    for (const code of ['F', 'FLT 16251!', '-FLT', 'X'.repeat(25), 'FLT_1']) await expect(service.createItem(office, { xeroTenantId: THMP, code, name: 'Bad code', categoryId: FILTERS })).rejects.toMatchObject({ status: 400, code: 'STOCK_ITEM_CODE_INVALID' });
     expect(items).toHaveLength(before);
   });
 
   it('change their code only while nothing has asked for, ordered or stocked them; the price any time', async () => {
     const { service, db, audits } = database();
-    const fresh = await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS });
+    const fresh = await service.createItem(office, { xeroTenantId: THMP, name: 'Filter 20x20x1', categoryId: FILTERS });
     // Nothing names it yet: its code can be put right.
     await expect(service.updateItem(office, fresh.item.id, { code: 'flt-20201', priceCents: 360 })).resolves.toMatchObject({ item: { code: 'FLT-20201', priceCents: 360 } });
     expect(audits.at(-1)).toMatchObject({ action: 'STOCK_ITEM_CHANGED', metadata: { changed: expect.arrayContaining(['code', 'codeKey', 'priceCents']) } });
@@ -453,7 +457,7 @@ describe('items', () => {
     const { service } = database();
     await service.enterOpeningBalance(office, FILTER, opening());
 
-    await expect(service.updateItem(office, FILTER, { xeroTenantId: null })).rejects.toMatchObject({ code: 'STOCK_ITEM_COMPANY_FIXED' });
+    await expect(service.updateItem(office, FILTER, { xeroTenantId: PEST })).rejects.toMatchObject({ code: 'STOCK_ITEM_COMPANY_FIXED' });
     await expect(service.updateItem(office, FILTER, { active: false })).rejects.toMatchObject({ code: 'STOCK_ITEM_HAS_STOCK' });
     await expect(service.updateItem(office, BATTERY, { active: false })).resolves.toMatchObject({ item: { active: false } });
     await expect(service.updateItem(office, THEIRS, { name: 'Ours now' })).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
@@ -654,7 +658,7 @@ describe('deleting an item code (2026-11-24)', () => {
     await expect(service.reverseMovement(office, movements.at(-1)!.id as string, { reason: 'Oops' })).rejects.toMatchObject({ code: 'STOCK_ITEM_DELETED' });
     await expect(service.deleteItem(office, FILTER, deleting())).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
     // Its code is free: a new item may have it.
-    await expect(service.createItem(office, { name: 'Filter 16x25x1, new', categoryId: FILTERS, code: 'FLT-16251' })).resolves.toMatchObject({ item: { code: 'FLT-16251' } });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'Filter 16x25x1, new', categoryId: FILTERS, code: 'FLT-16251' })).resolves.toMatchObject({ item: { code: 'FLT-16251' } });
   });
 
   it('is refused while it is still on something open, and names what', async () => {
@@ -708,14 +712,14 @@ describe('deleting an item code (2026-11-24)', () => {
 describe('the codes items, places and vendors carry (2026-11-20)', () => {
   it('make an item an Item unless the stock keeper chose another type, and only a type in use', async () => {
     const { service, items } = database();
-    await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS });
+    await service.createItem(office, { xeroTenantId: THMP, name: 'Filter 20x20x1', categoryId: FILTERS });
     expect(items.at(-1)).toMatchObject({ name: 'Filter 20x20x1', lineTypeId: id(901) });
 
-    await service.createItem(office, { name: 'Duct cleaning', categoryId: FILTERS, lineTypeId: id(902) });
+    await service.createItem(office, { xeroTenantId: THMP, name: 'Duct cleaning', categoryId: FILTERS, lineTypeId: id(902) });
     expect(items.at(-1)).toMatchObject({ name: 'Duct cleaning', lineTypeId: id(902) });
 
-    await expect(service.createItem(office, { name: 'X', categoryId: FILTERS, lineTypeId: id(903) })).rejects.toMatchObject({ code: 'LINE_TYPE_SWITCHED_OFF' });
-    await expect(service.createItem(office, { name: 'X', categoryId: FILTERS, lineTypeId: id(999) })).rejects.toMatchObject({ code: 'LINE_TYPE_NOT_FOUND' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'X', categoryId: FILTERS, lineTypeId: id(903) })).rejects.toMatchObject({ code: 'LINE_TYPE_SWITCHED_OFF' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'X', categoryId: FILTERS, lineTypeId: id(999) })).rejects.toMatchObject({ code: 'LINE_TYPE_NOT_FOUND' });
   });
 
   it('keep an item with stock on hand a type that keeps stock', async () => {
@@ -855,15 +859,15 @@ describe('who keeps each list, and units of measure (Purchasing Setup, 2026-11-2
 
   it('counts an item in any word until the office keeps units of measure, then in one of them', async () => {
     const { lineTypes, service } = database();
-    expect((await service.createItem(office, { name: 'Glue boards', categoryId: FILTERS, unit: 'tube' })).item.unit).toBe('tube');
+    expect((await service.createItem(office, { xeroTenantId: THMP, name: 'Glue boards', categoryId: FILTERS, unit: 'tube' })).item.unit).toBe('tube');
 
     lineTypes.push(
       { id: id(904), organizationId: ORG, kind: 'UNIT', code: 'EACH', name: 'each', keepsStock: false, active: true },
       { id: id(905), organizationId: ORG, kind: 'UNIT', code: 'PACK', name: 'pack', keepsStock: false, active: true },
     );
-    await expect(service.createItem(office, { name: 'Glue traps', categoryId: FILTERS, unit: 'tube' })).rejects.toMatchObject({ code: 'ITEM_UNIT_UNKNOWN', message: 'Choose a unit from the units of measure: each, pack.' });
+    await expect(service.createItem(office, { xeroTenantId: THMP, name: 'Glue traps', categoryId: FILTERS, unit: 'tube' })).rejects.toMatchObject({ code: 'ITEM_UNIT_UNKNOWN', message: 'Choose a unit from the units of measure: each, pack.' });
     // Matched by name, written as the list writes it.
-    expect((await service.createItem(office, { name: 'Glue traps', categoryId: FILTERS, unit: 'PACK' })).item.unit).toBe('pack');
+    expect((await service.createItem(office, { xeroTenantId: THMP, name: 'Glue traps', categoryId: FILTERS, unit: 'PACK' })).item.unit).toBe('pack');
     expect((await service.stock(office)).units?.map((unit) => unit.name)).toEqual(['each', 'pack']);
   });
 });

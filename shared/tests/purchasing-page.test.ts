@@ -5,6 +5,7 @@ import {
   DEFAULT_PAGE_LAYOUT,
   audienceSaying,
   codeKeepersProblem,
+  codeList,
   completePageLayout,
   factBoxesFor,
   keepsList,
@@ -86,11 +87,20 @@ describe('the requisition page', () => {
 
   it('refuses to send a requisition missing a field the office requires', () => {
     const lines = [{ quantity: 1, estimatedUnitCostCents: 390, departmentId: null, notes: null }];
-    expect(missingFieldProblem({ lines }, DEFAULT_PAGE_LAYOUT)).toBeNull();
-    expect(missingFieldProblem({ lines }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBe('Choose the request code.');
-    expect(missingFieldProblem({ requestCodeId: 'restock', lines }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBe('Choose a department code on every line.');
-    expect(missingFieldProblem({ requestCodeId: 'restock', lines: [{ departmentId: 'maint' }] }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBeNull();
+    const company = { xeroTenantId: 'tenant-thmp' };
+    expect(missingFieldProblem({ ...company, lines }, DEFAULT_PAGE_LAYOUT)).toBeNull();
+    expect(missingFieldProblem({ ...company, lines }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBe('Choose the request code.');
+    expect(missingFieldProblem({ ...company, requestCodeId: 'restock', lines }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBe('Choose a department code on every line.');
+    expect(missingFieldProblem({ ...company, requestCodeId: 'restock', lines: [{ departmentId: 'maint' }] }, required('REQUEST_CODE', 'LINE_DEPARTMENT'))).toBeNull();
     const settings = { steps: stepsFromLimit(50000, 2), files: DEFAULT_FILE_RULES, page: required('EXPECTED_RECEIPT') };
-    expect(requisitionSubmitProblem({ reason: '', lines, quotes: [], neededBy: null }, settings)).toBe('Give the expected receipt date.');
+    expect(requisitionSubmitProblem({ ...company, reason: '', lines, quotes: [], neededBy: null }, settings)).toBe('Give the expected receipt date.');
+  });
+
+  // The office, 2026-11-24: codes come first, and an order of no company reaches no books.
+  it('always needs the company, whatever the office ticked', () => {
+    const lines = [{ departmentId: null, notes: null }];
+    expect(missingFieldProblem({ lines }, DEFAULT_PAGE_LAYOUT)).toBe('Choose the company it is for.');
+    expect(missingFieldProblem({ lines }, required('REQUEST_CODE'))).toBe('Choose the request code.');
+    expect(codeList('PURCHASER_CODES')).toMatchObject({ field: null, fixed: 'Required' });
   });
 });

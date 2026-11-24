@@ -31,7 +31,7 @@ const REQUISITION_COLUMNS: Array<Column<RequisitionRow>> = [
       </span>
     ),
   },
-  { key: 'department', header: 'Department', hideBelow: 'md', cell: (row) => row.department?.code ?? EMPTY },
+  { key: 'department', header: 'Department', hideBelow: 'md', cell: (row) => row.department?.code ?? (row.lineDepartments?.join(', ') || EMPTY) },
   { key: 'company', header: 'Company', hideBelow: 'lg', cell: (row) => row.company?.purchaserCode ?? row.company?.name ?? EMPTY },
   { key: 'sent', header: 'Sent', hideBelow: 'lg', cell: (row) => formatDay(row.submittedAt ?? row.createdAt), className: 'whitespace-nowrap' },
   { key: 'total', header: 'Est. total', numeric: true, cell: (row) => formatMoney(row.estimatedTotalCents) },

@@ -63,6 +63,7 @@ import { assertKeeps, nextDocumentCode, readPurchasingSetup } from './purchasing
 /** One the client sent: a value, or null to clear. The validation pipe hands over every field the DTO names, `undefined` where none came. */
 const sent = (input: object, field: string) => (input as Record<string, unknown>)[field] !== undefined;
 const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g, ' ') || null;
+const NEEDS_COMPANY = 'An item needs a company: a purchase request is for one company, and its bill goes to that company\'s books.';
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
 const taken = (error: unknown) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -304,6 +305,8 @@ export class InventoryService {
     const name = text(input.name);
     const categoryId = input.categoryId;
     if (!name || !categoryId) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a name and a category. The category gives it its code.');
+    // Codes come first (the office, 2026-11-24): an item is one company's, or its order reaches no books.
+    if (!input.xeroTenantId) throw new ApplicationError(400, 'STOCK_ITEM_NEEDS_COMPANY', NEEDS_COMPANY);
     await this.itemChoicesAreOurs(organizationId, input);
     const typed = sent(input, 'code') ? this.typedCode(input.code) : null;
     try {
@@ -386,7 +389,10 @@ export class InventoryService {
       data.name = name;
     }
     if (sent(input, 'unit')) data.unit = await this.unitOf(this.prisma, organizationId, input.unit);
-    if (sent(input, 'xeroTenantId')) data.xeroTenantId = input.xeroTenantId ?? null;
+    if (sent(input, 'xeroTenantId')) {
+      if (!input.xeroTenantId) throw new ApplicationError(400, 'STOCK_ITEM_NEEDS_COMPANY', NEEDS_COMPANY);
+      data.xeroTenantId = input.xeroTenantId;
+    }
     if (sent(input, 'reorderLevel')) data.reorderLevel = input.reorderLevel;
     if (sent(input, 'reorderQuantity')) data.reorderQuantity = input.reorderQuantity;
     if (sent(input, 'usualVendorId')) data.usualVendorId = input.usualVendorId ?? null;
