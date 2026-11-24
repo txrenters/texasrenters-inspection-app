@@ -58,6 +58,29 @@ async function main() {
       }
     }
   }
+  // The order the office drags a technician's Anytime visits into is the
+  // order they drive (2026-11-25). Print one day's visits as Jobber returns
+  // them, with every field that could carry that order, to compare with
+  // Jobber's own screen. JOBBER_PROBE_DATE=YYYY-MM-DD picks the day (today by default).
+  const visitFields = await ask<{ __type: { fields: Field[] } }>(`query { __type(name: "Visit") { fields { name type { ${TYPE_REF} } } } }`);
+  const scalar = (f: Field) => !/Connection$/.test(named(f.type) ?? '') && !['Job', 'Client', 'Property', 'User'].includes(named(f.type) ?? '');
+  const orderLike = visitFields.__type.fields
+    .filter((f) => /position|order|sequence|rank|index|sort|route|priority/i.test(f.name) && scalar(f))
+    .map((f) => f.name);
+  console.log(`\nVisit fields that could hold the order: ${orderLike.join(', ') || '(none by name)'}`);
+  const date = process.env.JOBBER_PROBE_DATE ?? new Date().toISOString().slice(0, 10);
+  const day = await ask<{ visits: { nodes: Record<string, unknown>[] } }>(`query {
+    visits(first: 60, filter: { startAt: { after: "${date}T00:00:00-06:00", before: "${date}T23:59:59-06:00" } }) {
+      nodes { id title startAt endAt allDay createdAt ${orderLike.join(' ')} assignedUsers(first: 3) { nodes { name { full } } } }
+    }
+  }`);
+  console.log(`Visits on ${date}, in the order Jobber returned them:`);
+  for (const visit of day.visits.nodes) {
+    const people = (visit.assignedUsers as { nodes: { name: { full: string } }[] }).nodes.map((n) => n.name.full).join(' + ') || 'nobody';
+    const extra = orderLike.map((name) => `${name}=${JSON.stringify(visit[name])}`).join(' ');
+    console.log(`  [${people}] ${visit.title} | start ${visit.startAt} end ${visit.endAt} allDay ${visit.allDay} created ${visit.createdAt} ${extra}`);
+  }
+
   // Jobber's calendar also shows tasks ("Key information", "Get Materials"),
   // which are not visits (2026-11-25). Whatever the schema calls them --
   // tasks, events, assessments -- list it with its arguments and fields, so
