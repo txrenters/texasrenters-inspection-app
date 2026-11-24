@@ -57,6 +57,9 @@ export function KeepLevelsDialog({ placeId, onClose }: { placeId: string; onClos
           <div className="text-muted-foreground flex items-center gap-2 text-sm" role="status">
             <Spinner /> Loading
           </div>
+        ) : !rows.length ? (
+          // Said, not an empty table (2026-11-24): with no item codes there is nothing to keep.
+          <p className="text-muted-foreground text-sm">There are no item codes yet. Once the stock keeper adds them on Item codes, what this truck keeps of each is set here.</p>
         ) : (
           <div className="grid gap-3">
             <Input aria-label="Find an item" onChange={(event) => setFilter(event.target.value)} placeholder="Item code or name" type="search" value={filter} />
@@ -71,6 +74,13 @@ export function KeepLevelsDialog({ placeId, onClose }: { placeId: string; onClos
                   </TableRow>
                 </TableHeader>
                 <TableBody>
+                  {!shown.length ? (
+                    <TableRow>
+                      <TableCell className="text-muted-foreground text-center" colSpan={4}>
+                        No item matches that.
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
                   {shown.map((row) => {
                     const value = typed[row.itemId] ?? (row.keepAtLeast === null ? '' : String(row.keepAtLeast));
                     const keep = readKeep(value);

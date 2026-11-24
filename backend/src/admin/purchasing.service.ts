@@ -174,6 +174,7 @@ function row(requisition: Requisition, companies: Companies): RequisitionRow {
     decisionNote: requisition.decisionNote,
     stage: stageOf(requisition),
     department: requisition.department,
+    lineDepartments: [...new Set(requisition.lines.flatMap((line) => (line.department ? [line.department.code] : [])))],
   };
 }
 
@@ -236,6 +237,13 @@ const STEP: Record<string, string> = {
   PURCHASE_REQUISITION_FILE_REMOVED: 'took a file off',
   PURCHASE_REQUISITION_FILE_FOR_VENDOR: 'ticked a file to go to the vendor',
   PURCHASE_REQUISITION_FILE_NOT_FOR_VENDOR: 'unticked a file for the vendor',
+};
+
+/** What happened on an order carrying its lines that its history tells too (2026-11-24). */
+const ORDER_STEP: Record<string, string> = {
+  GOODS_RECEIVED: 'received goods',
+  GOODS_RECEIPT_REVERSED: 'reversed a receipt',
+  PURCHASE_ORDER_CLOSED_SHORT: 'closed the order short',
 };
 
 /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
@@ -363,13 +371,26 @@ export class PurchasingService {
       // Its lines with an item and on no live order: what Make orders may still order (2026-11-23).
       this.prisma.purchaseRequisitionLine.count({ where: { organizationId, requisitionId, itemId: { not: null }, orderSources: { none: { releasedAt: null } } } }),
     ]);
-    const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
+    // What arrived on its orders (2026-11-24): it reached Received with nothing in its history saying so.
+    const orderNumber = new Map(orders.map((order) => [order.id, order.number]));
+    const arrivals = orders.length
+      ? await this.prisma.auditLog.findMany({
+          where: { organizationId, entityType: 'PurchaseOrder', entityId: { in: orders.map((order) => order.id) }, action: { in: Object.keys(ORDER_STEP) } },
+          select: { action: true, actorUserId: true, metadata: true, createdAt: true, entityId: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      : [];
+    const steps = [
+      ...audits.map((audit) => ({ ...audit, what: STEP[audit.action] ?? 'changed it' })),
+      ...arrivals.map((audit) => ({ ...audit, what: `${ORDER_STEP[audit.action]} on ${orderNumber.get(audit.entityId) ?? 'its order'}` })),
+    ].sort((one, other) => other.createdAt.getTime() - one.createdAt.getTime());
+    const actorIds = [...new Set(steps.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
     const nameOf = new Map(actors.map((actor) => [actor.id, actor.displayName]));
     const onHand = new Map(levels.map((level) => [level.itemId, level._sum.quantity ?? 0]));
-    const history: RequisitionHistoryEntry[] = audits.map((audit) => {
+    const history: RequisitionHistoryEntry[] = steps.map((audit) => {
       const note = (audit.metadata as { note?: string | null } | null)?.note;
-      return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${STEP[audit.action] ?? 'changed it'}${note ? `: ${note}` : ''}` };
+      return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${audit.what}${note ? `: ${note}` : ''}` };
     });
     const summary = row(requisition, companies.names);
     return {

@@ -25,6 +25,20 @@ beforeEach(() => {
 });
 
 describe('keep at least on a truck', () => {
+  // Production, 2026-11-24: with no item codes it opened onto an empty table.
+  it('says there are no item codes yet, rather than showing an empty table', () => {
+    hooks.useTruckKeepLevels.mockReturnValue({ isError: false, data: { ...LEVELS, levels: [] } });
+    render(<KeepLevelsDialog onClose={vi.fn()} placeId="place-van" />);
+    expect(screen.getByText(/There are no item codes yet/)).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('says when nothing matches what was typed', () => {
+    render(<KeepLevelsDialog onClose={vi.fn()} placeId="place-van" />);
+    fireEvent.change(screen.getByLabelText('Find an item'), { target: { value: 'sprayer' } });
+    expect(screen.getByText('No item matches that.')).toBeTruthy();
+  });
+
   it('shows what is kept and on hand, marks what is running low, and saves only what changed', async () => {
     render(<KeepLevelsDialog onClose={vi.fn()} placeId="place-van" />);
     const table = screen.getByRole('table', { name: 'What is kept on the truck' });

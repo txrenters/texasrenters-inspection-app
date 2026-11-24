@@ -27,7 +27,8 @@ const push = vi.fn();
 vi.mock('next/link', () => ({
   default: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+let pathname = '/inventory';
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), usePathname: () => pathname }));
 vi.mock('sonner', () => ({
   toast: {
     success: (...a: unknown[]) => success(...a),
@@ -153,6 +154,31 @@ describe('what the drawer shows', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
     expect(screen.queryByText('1532 Pretense Way')).toBeNull();
+  });
+
+  // Production, 2026-11-24: opened once, it covered New place's Location code and an order's receipt card on every page after.
+  it('folds back to its handle on the next page when nothing is moving', () => {
+    imports = [];
+    pathname = '/inventory';
+    const view = render(<ImportDockProvider>page</ImportDockProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Show imports' }));
+    expect(screen.queryByRole('button', { name: 'Show imports' })).toBeNull();
+
+    pathname = '/purchasing';
+    view.rerender(<ImportDockProvider>page</ImportDockProvider>);
+    expect(screen.getByRole('button', { name: 'Show imports' })).toBeTruthy();
+    expect(window.localStorage.getItem('import-dock-drawer') ?? 'closed').toBe('closed');
+  });
+
+  it('stays open on the next page while an import is still running', () => {
+    imports = [job()];
+    pathname = '/inventory';
+    const view = render(<ImportDockProvider>page</ImportDockProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
+
+    pathname = '/purchasing';
+    view.rerender(<ImportDockProvider>page</ImportDockProvider>);
+    expect(screen.getByText('1532 Pretense Way')).toBeTruthy();
   });
 
   it('remembers being opened across a reload', () => {

@@ -75,8 +75,8 @@ describe('the fields', () => {
   it('marks the required fields, and says the first one empty until it is filled', () => {
     mount(layout({ fields: { EXPECTED_RECEIPT: { shown: true, required: true }, LINE_DEPARTMENT: { shown: true, required: true } } }));
     pick(1, 'BAT-9V');
-    // The General field and the lines column each carry the mark.
-    expect(screen.getAllByText('(required)')).toHaveLength(2);
+    // The General field and the lines column each carry the mark, and the Purchaser Code always (2026-11-24).
+    expect(screen.getAllByText('(required)')).toHaveLength(3);
     expect(screen.getByRole('columnheader', { name: /Department Code/ }).textContent).toContain('*');
     expect(screen.getByRole('status').textContent).toBe('Give the expected receipt date.');
     // Greyed, and pressed it says why (2026-11-21).
@@ -89,8 +89,8 @@ describe('the fields', () => {
   it('asks for nothing more than before while the office has required nothing', () => {
     mount(DEFAULT_PAGE_LAYOUT);
     pick(1, 'BAT-9V');
-    expect(screen.queryAllByText('(required)')).toHaveLength(0);
-    expect(screen.queryByRole('status')).toBeNull();
+    // Only the Purchaser Code, always (2026-11-24): an order of no company reaches no books.
+    expect(screen.queryAllByText('(required)')).toHaveLength(1);
   });
 });
 

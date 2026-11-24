@@ -194,7 +194,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, counts, lines, movements, audits, onHand, added: () => movements.slice(SEEDED), service: new StockCountsService(db as never) };
+  return { db, items, counts, lines, movements, audits, onHand, added: () => movements.slice(SEEDED), service: new StockCountsService(db as never) };
 }
 
 const monthly = (over: Partial<StartStockCountInput> = {}): StartStockCountInput => ({ kind: 'MONTHLY', placeId: STOCKROOM, itemIds: [FILTER, BATTERY], note: null, requestKey: key(1), ...over });
@@ -224,6 +224,14 @@ describe('starting a count', () => {
     ]);
     expect(count.can).toEqual({ count: true, recount: false, post: false, cancel: true });
     expect(audits).toEqual([expect.objectContaining({ action: 'STOCK_COUNT_STARTED', actorUserId: counter.id, metadata: { number: 'CNT-0001', kind: 'MONTHLY', lines: 2 } })]);
+  });
+
+  // Production, 2026-11-24: CNT-0001 named OFF-0002 and FLT-0001 after both were deleted, unmarked.
+  it('marks an item code deleted since on the count that names it', async () => {
+    const { service, items } = database();
+    const count = await service.start(counter, monthly());
+    items.find((one) => one.code === 'FLT-0003')!.deletedAt = new Date();
+    expect((await service.get(counter, count.id)).rows.map((line) => line.itemName)).toContain('Filter 20x25x1 (deleted)');
   });
 
   it('starts one count however many times the same press arrives', async () => {

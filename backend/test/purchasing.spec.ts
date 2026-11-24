@@ -921,6 +921,30 @@ describe('Cancel Approval Request and Reopen (2026-11-20, the NAV ribbon)', () =
   });
 });
 
+describe('what a requisition shows of its lines and orders (production, 2026-11-24)', () => {
+  it('names the departments its lines are coded to when it names none itself', async () => {
+    const { service } = database();
+    const draft = await service.create(asker, small({ lines: [{ ...line(FILTER, 36, 390), departmentId: id(53) }, line(BATTERY, 24, 185)] }));
+    expect(draft).toMatchObject({ department: null, lineDepartments: ['HVAC'] });
+    expect((await service.list(asker)).requisitions[0]).toMatchObject({ department: null, lineDepartments: ['HVAC'] });
+  });
+
+  it('tells in its history what arrived on its order, beside its own steps', async () => {
+    const { service, audits, liveOrders } = database();
+    const draft = await service.create(asker, small());
+    await service.submit(asker, draft.id);
+    await service.decide(manager, draft.id, 'APPROVED', {});
+    liveOrders.push({ requisitionId: draft.id });
+    audits.push({ organizationId: ORG, entityType: 'PurchaseOrder', entityId: 'order-0', action: 'GOODS_RECEIVED', actorUserId: manager.id, metadata: { note: 'RCV-0001, 36 units' }, createdAt: new Date(Date.now() + 60_000) });
+    // Another order's receipt is not its.
+    audits.push({ organizationId: ORG, entityType: 'PurchaseOrder', entityId: 'order-9', action: 'GOODS_RECEIVED', actorUserId: manager.id, metadata: { note: 'RCV-0002, 1 unit' }, createdAt: new Date(Date.now() + 60_000) });
+    const history = (await service.detail(asker, draft.id)).history.map((entry) => `${entry.by} ${entry.what}`);
+    expect(history[0]).toBe('Sample Manager received goods on its order: RCV-0001, 36 units');
+    expect(history).not.toContain('Sample Manager received goods on its order: RCV-0002, 1 unit');
+    expect(history.slice(1)).toEqual(['Sample Manager approved it', 'Sample Requester submitted it', 'Sample Requester started it']);
+  });
+});
+
 describe('notes, comments and links (2026-11-20, Show Attached)', () => {
   it('writes notes and comments, each in its own list, and lists them oldest first with who and when', async () => {
     const { service, notesService, audits } = database();
@@ -1045,7 +1069,8 @@ describe('companies and approver limits (Purchasing Setup, 2026-11-21)', () => {
     loose.xeroTenantId = null;
     const draft = await service.create(asker, small({ xeroTenantId: null, lines: [line(FILTER, 2, 390)] }));
     persons.push(person(asker, { companyTenantIds: [PEST] }));
-    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_COMPANY_NOT_YOURS', message: 'You ask for stock only for your own companies: choose one of them.' });
+    // Since 2026-11-24 a requisition names its company before it is sent, whoever sends it.
+    await expect(service.submit(asker, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_READY', message: 'Choose the company it is for.' });
   });
 
   it('lets an approver decide only for their own companies while the office says so', async () => {

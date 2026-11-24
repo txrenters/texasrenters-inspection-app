@@ -31,7 +31,7 @@ describe('what it comes to', () => {
 });
 
 describe('whether it can be submitted', () => {
-  const ready = { reason: 'Filters are out.', lines: [line(36, 390)], quotes: [] as { chosen: boolean }[] };
+  const ready = { xeroTenantId: 'tenant-thmp', reason: 'Filters are out.', lines: [line(36, 390)], quotes: [] as { chosen: boolean }[] };
 
   // The reason is optional since 2026-11-20: it sits under "Show more fields" on the NAV-style page.
   it('needs something asked for, and no reason', () => {

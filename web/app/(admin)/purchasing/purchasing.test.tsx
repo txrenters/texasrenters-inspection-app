@@ -158,6 +158,21 @@ describe('the requisitions list', () => {
     return render(<PurchasingPage />);
   };
 
+  // Production, 2026-11-24: PR-00003 read "—" beside its line coded MAINT.
+  it('shows the department its lines are coded to when it names none itself', () => {
+    mount(list([row({ lineDepartments: ['MAINT'] }), row({ id: 'req-11', number: 'PR-0011', department: { id: 'code-hvac', code: 'HVAC', name: 'HVAC' }, lineDepartments: ['MAINT'] })]));
+    const table = screen.getByRole('table', { name: 'Purchase requisitions' });
+    expect(within(table).getByRole('row', { name: /PR-0012/ }).textContent).toContain('MAINT');
+    expect(within(table).getByRole('row', { name: /PR-0011/ }).textContent).toContain('HVAC');
+  });
+
+  // Production, 2026-11-24: ?view=pending stayed on the address from one tab to the next.
+  it('leaves the Pending Processing view of the orders behind when another tab is opened', () => {
+    mount(list([row()]));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Purchase Orders' }));
+    expect(url.set).toHaveBeenCalledWith(expect.objectContaining({ tab: 'orders', view: 'orders' }));
+  });
+
   it('shows each requisition with who it waits on, and opens it', () => {
     mount(
       list([

@@ -15,6 +15,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { shownItem } from './deleted-items';
 import { nextDocumentCode } from './purchasing-settings';
 import { assertStockNotFrozen } from './stock-freeze';
 import { TruckStockService } from './truck-stock.service';
@@ -74,7 +75,7 @@ const SLIP = {
   fromPlace: { select: { id: true, name: true } },
   toPlace: { select: { id: true, name: true } },
   inspection: { select: VISIT },
-  lines: { select: { quantity: true, unitCostCents: true, item: { select: { code: true, name: true } } }, orderBy: { item: { codeKey: 'asc' } } },
+  lines: { select: { quantity: true, unitCostCents: true, item: { select: { code: true, name: true, deletedAt: true } } }, orderBy: { item: { codeKey: 'asc' } } },
 } satisfies Prisma.StockSlipSelect;
 type Slip = Prisma.StockSlipGetPayload<{ select: typeof SLIP }>;
 
@@ -89,7 +90,7 @@ function row(slip: Slip): StockSlipRow {
     to: slip.toPlace,
     visit: slip.inspection ? visitRow(slip.inspection) : null,
     note: slip.note,
-    lines: slip.lines.map((line) => ({ itemCode: line.item.code, itemName: line.item.name, quantity: line.quantity, unitCostCents: line.unitCostCents })),
+    lines: slip.lines.map((line) => ({ itemCode: line.item.code, itemName: shownItem(line.item).name, quantity: line.quantity, unitCostCents: line.unitCostCents })),
     costCents: slip.lines.reduce((sum, line) => sum + line.quantity * line.unitCostCents, 0),
     by: slip.createdByName,
     at: slip.createdAt.toISOString(),

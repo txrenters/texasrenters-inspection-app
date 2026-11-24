@@ -201,7 +201,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, slips, slipLines, movements, audits, onHand, asks, service: new StockSlipsService(db as never, new TruckStockService(db as never)) };
+  return { db, items, slips, slipLines, movements, audits, onHand, asks, service: new StockSlipsService(db as never, new TruckStockService(db as never)) };
 }
 
 const slip = (over: Partial<PostStockSlipInput> = {}): PostStockSlipInput => ({
@@ -228,6 +228,14 @@ afterAll(() => {
 });
 
 describe('a withdrawal', () => {
+  // Production, 2026-11-24: RT-0001 and TR-0001 named FLT-0001 after it was deleted, unmarked.
+  it('marks an item code deleted since on the slips that name it', async () => {
+    const { service, items } = database();
+    await service.post(keeper, slip());
+    items.find((one) => one.id === FILTER)!.deletedAt = new Date();
+    expect((await service.list(keeper)).slips[0]!.lines).toEqual([expect.objectContaining({ itemCode: 'FLT-0003', itemName: 'Filter 20x25x1 (deleted)' })]);
+  });
+
   it('takes stock out of the place at what the item costs on average, for the technician and the visit', async () => {
     const { service, movements, onHand, audits } = database();
     const { slips } = await service.post(keeper, slip({ note: '  for the   upstairs unit ' }));

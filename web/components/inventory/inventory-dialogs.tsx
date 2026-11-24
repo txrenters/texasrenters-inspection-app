@@ -262,7 +262,8 @@ export function ItemDialog({
   const reorderLevel = whole(level);
   const reorderQuantity = whole(quantity);
   // A new item's code comes from its category, so it must have one.
-  const invalid = !name.trim() || !unit.trim() || reorderLevel === null || reorderQuantity === null || (!item && category === NONE);
+  // And a company (the office, 2026-11-24, codes come first): its orders' bills go to that company's books.
+  const invalid = !name.trim() || !unit.trim() || reorderLevel === null || reorderQuantity === null || (!item && category === NONE) || company === NONE;
   // The categories in use, and this item's own even if it has been switched off since.
   const categoryOptions = categories.filter((option) => option.active || option.id === item?.category?.id);
   const picked = categories.find((option) => option.id === category);
@@ -335,7 +336,7 @@ export function ItemDialog({
         disabled={companyFixed}
         id="item-company"
         label="Company"
-        none="No company yet"
+        none="Choose a company"
         onChange={setCompany}
         options={companyOptions.map((option) => ({ value: option.tenantId, label: option.name }))}
         value={company}

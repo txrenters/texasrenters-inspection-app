@@ -164,7 +164,7 @@ function database() {
     purchaseRequisition: {
       updateMany: updateMany(requisitions),
       // The requisitions on an order, for its page.
-      findMany: jest.fn(async () => requisitions.map((row) => ({ ...row, requestedBy: { displayName: 'Sample Requester' }, department: null, _count: { lines: 2 }, orderSources: [] }))),
+      findMany: jest.fn(async () => requisitions.map((row) => ({ ...row, requestedBy: { displayName: 'Sample Requester' }, department: null, lines: [], _count: { lines: 2 }, orderSources: [] }))),
     },
     // A requisition closes with the last of the orders carrying its lines (2026-11-20; by its lines since 2026-11-23).
     purchaseOrderSource: {

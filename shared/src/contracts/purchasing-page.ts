@@ -70,7 +70,8 @@ export const CODE_LISTS = [
   { key: 'COST_CENTER', label: 'Cost center codes', keeper: 'CODE_ADMIN', field: 'COST_CENTER', fixed: null },
   { key: 'PLACES', label: 'Location codes (places)', keeper: 'STOCK_KEEPER', field: 'LOCATION', fixed: null },
   { key: 'VENDORS', label: 'Vendor numbers', keeper: 'STOCK_KEEPER', field: null, fixed: 'From the item code' },
-  { key: 'PURCHASER_CODES', label: 'Purchaser codes (companies)', keeper: 'CODE_ADMIN', field: 'COMPANY', fixed: null },
+  // Always required (the office, 2026-11-24, codes come first): an order of no company reaches no books.
+  { key: 'PURCHASER_CODES', label: 'Purchaser codes (companies)', keeper: 'CODE_ADMIN', field: null, fixed: 'Required' },
 ] as const satisfies readonly { key: string; label: string; keeper: KeeperRole; field: RequisitionFieldKey | null; fixed: string | null }[];
 export type CodeListKey = (typeof CODE_LISTS)[number]['key'];
 export const CODE_LIST_KEYS = CODE_LISTS.map((list) => list.key) as readonly CodeListKey[];
@@ -183,6 +184,7 @@ export function missingFieldProblem(values: RequisitionFieldValues, layout: Pick
     LOCATION: Boolean(values.deliverToPlaceId),
     COMPANY: Boolean(values.xeroTenantId),
   };
-  const missing = REQUISITION_FIELDS.find((field) => layout.fields[field.key]?.required && !given[field.key]);
+  // The company is always required, whatever the layout says (the office, 2026-11-24): its bill goes to that company's books.
+  const missing = REQUISITION_FIELDS.find((field) => (field.key === 'COMPANY' || layout.fields[field.key]?.required) && !given[field.key]);
   return missing?.missing ?? null;
 }

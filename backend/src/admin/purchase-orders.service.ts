@@ -381,6 +381,7 @@ export class PurchaseOrdersService {
         status: true,
         requestedBy: { select: { displayName: true } },
         department: { select: { code: true } },
+        lines: { select: { department: { select: { code: true } } } },
         _count: { select: { lines: true } },
         orderSources: { where: { releasedAt: null }, select: { order: { select: { status: true } } } },
       },
@@ -467,7 +468,8 @@ export class PurchaseOrdersService {
             id: requisition.id,
             number: requisition.number,
             requestedBy: requisition.requestedBy.displayName,
-            department: requisition.department?.code ?? null,
+            // Its own, else the ones its lines name (2026-11-24): never "—" beside a line coded MAINT.
+            department: requisition.department?.code ?? ([...new Set(requisition.lines.flatMap((line) => (line.department ? [line.department.code] : [])))].join(', ') || null),
             linesHere: shares.filter((share) => share.requisitionId === requisition.id).length,
             lineCount: requisition._count.lines,
             stage: requisitionStage(

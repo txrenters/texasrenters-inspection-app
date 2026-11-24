@@ -732,7 +732,7 @@ export function RequisitionForm({
                 </FieldRow>
                 <FieldRow label="Requisitioner ID">{generalValue(requisition?.requestedBy.code ?? choices.me?.code)}</FieldRow>
                 <FieldRow label="Requisitioner Name">{generalValue(requisition?.requestedBy.name ?? choices.me?.name)}</FieldRow>
-                <FieldRow htmlFor={editing ? `${ids}-company` : undefined} label="Purchaser Code" required={editing && required('COMPANY')}>
+                <FieldRow htmlFor={editing ? `${ids}-company` : undefined} label="Purchaser Code" required={editing}>
                   {editing ? (
                     <Pick
                       id={`${ids}-company`}
@@ -772,7 +772,14 @@ export function RequisitionForm({
                         value={department}
                       />
                     ) : (
-                      generalValue(requisition?.department ? `${requisition.department.code} · ${requisition.department.name}` : null)
+                      // None of its own, its lines' (2026-11-24): never "—" above a line coded MAINT.
+                      generalValue(
+                        requisition?.department
+                          ? `${requisition.department.code} · ${requisition.department.name}`
+                          : requisition?.lineDepartments?.length
+                            ? `${requisition.lineDepartments.join(', ')}, on its lines`
+                            : null,
+                      )
                     )}
                   </FieldRow>
                 ) : null}

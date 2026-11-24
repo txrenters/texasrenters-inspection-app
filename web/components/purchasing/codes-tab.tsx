@@ -180,7 +180,7 @@ function CompanyCode({ company }: { company: PurchasingCompanyRow }) {
       </div>
       <Field className="w-44">
         <FieldLabel htmlFor={id}>Purchaser code</FieldLabel>
-        <Input autoCapitalize="characters" autoComplete="off" className="font-mono" id={id} maxLength={20} onChange={(event) => setTyped(event.target.value.toUpperCase())} placeholder="None" value={typed} />
+        <Input aria-label={`Purchaser code of ${company.name}`} autoCapitalize="characters" autoComplete="off" className="font-mono" id={id} maxLength={20} onChange={(event) => setTyped(event.target.value.toUpperCase())} placeholder="None" value={typed} />
       </Field>
       <Button disabled={Boolean(problem) || !changed || setPurchaserCode.isPending} type="submit" variant="outline">
         {setPurchaserCode.isPending ? <Spinner /> : null}
