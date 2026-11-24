@@ -166,6 +166,17 @@ describe('the item codes tab', () => {
   });
 });
 
+// Production, 2026-11-24: somebody with no inventory permission saw all eight tabs over a refusal.
+describe('opened by somebody with no inventory permission', () => {
+  it('says so plainly, with no tabs and nothing to press', () => {
+    account.permissions = new Set(['inspections:read']);
+    render(<InventoryPage />);
+    expect(screen.getByText('You do not have access to inventory')).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('button', { name: /New item|Import stock/ })).toBeNull();
+  });
+});
+
 describe('removing stock and deleting an item code (2026-11-24)', () => {
   it('offers Remove stock on each item with stock in it, to whoever manages stock', () => {
     hooks.useStockItem.mockReturnValue({ isLoading: false, isError: false, data: { item: ITEMS[0], levels: [{ placeId: 'place-stockroom', placeName: 'Stockroom', kind: 'STOCKROOM', quantity: 18 }], averageCostCents: 342, movements: [], movementsTotal: 1 } });
