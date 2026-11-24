@@ -137,6 +137,11 @@ export interface JobStockSlip {
   kind: PhoneSlipKind;
   at: string;
   place: string;
+  /**
+   * The truck it left, or went back into (2026-11-24): what was taken from a
+   * truck goes back only into that truck. Null from a server older than this.
+   */
+  placeId: string | null;
   /** The office reversed it: it no longer counts. */
   reversed: boolean;
   lines: JobStockItem[];
@@ -150,7 +155,7 @@ export interface JobStock {
   stock: (JobStockItem & { placeId: string })[];
   /** What this technician has recorded for this job, newest first. */
   slips: JobStockSlip[];
-  /** What they took for this job less what came back: what can still be brought back. */
+  /** What they took for this job less what came back, from every truck: what the job has used. What can go back into one truck is `jobStockTaken(slips, placeId)`. */
   taken: JobStockItem[];
   /**
    * Every item in use (2026-11-24): a search finds one with none in the truck, and a
@@ -162,16 +167,17 @@ export interface JobStock {
 /**
  * Why the phone's slip cannot be recorded yet, in the technician's words; null
  * when it can. `available` is what is in the truck (taking out) or what was
- * taken for the job (bringing back), by item.
+ * taken from that truck for the job (bringing back), by item; `placeName`
+ * names the truck in a refusal to bring back.
  */
-export function jobStockProblem(kind: PhoneSlipKind, lines: readonly { itemId: string; quantity: number }[], available: ReadonlyMap<string, number>, name: (itemId: string) => string): string | null {
+export function jobStockProblem(kind: PhoneSlipKind, lines: readonly { itemId: string; quantity: number }[], available: ReadonlyMap<string, number>, name: (itemId: string) => string, placeName?: string): string | null {
   const asked = lines.filter((line) => line.quantity > 0);
   if (!asked.length) return kind === 'RETURN' ? 'Choose what is going back.' : 'Choose what you took.';
   for (const line of asked) {
     const most = available.get(line.itemId) ?? 0;
     if (line.quantity > most)
       return kind === 'RETURN'
-        ? `You took ${most} of ${name(line.itemId)} for this job, so ${line.quantity} cannot go back.`
+        ? `You took ${most} of ${name(line.itemId)}${placeName ? ` from ${placeName}` : ''} for this job, so ${line.quantity} cannot go back${placeName ? ' into it' : ''}.`
         : most
           ? `Only ${most} of ${name(line.itemId)} ${most === 1 ? 'is' : 'are'} in the truck.`
           : `None of ${name(line.itemId)} is in the truck.`;
@@ -179,11 +185,21 @@ export function jobStockProblem(kind: PhoneSlipKind, lines: readonly { itemId: s
   return null;
 }
 
-/** What a technician has taken for a job less what came back, by item, from the slips that still stand. */
-export function jobStockTaken(slips: readonly Pick<JobStockSlip, 'kind' | 'reversed' | 'lines'>[]): JobStockItem[] {
+/**
+ * What a technician has taken for a job less what came back, by item, from the
+ * slips that still stand.
+ *
+ * With `placeId`, from that one truck only (2026-11-24): what can go back
+ * into it. Capped across every truck, a technician could take five from the
+ * shared truck and "put back" five into their own -- a move between trucks,
+ * which stays with the office. A slip with no truck (from a server older than
+ * this) counts for any truck, as every slip did before.
+ */
+export function jobStockTaken(slips: readonly (Pick<JobStockSlip, 'kind' | 'reversed' | 'lines'> & { placeId?: string | null })[], placeId?: string): JobStockItem[] {
   const net = new Map<string, JobStockItem>();
   for (const slip of slips) {
     if (slip.reversed) continue;
+    if (placeId !== undefined && slip.placeId && slip.placeId !== placeId) continue;
     for (const line of slip.lines) {
       const kept = net.get(line.itemId) ?? { ...line, quantity: 0 };
       kept.quantity += slip.kind === 'RETURN' ? -line.quantity : line.quantity;

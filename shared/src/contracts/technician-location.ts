@@ -1,3 +1,5 @@
+import { isWithinOfficeHours } from './office-hours.js';
+
 /**
  * Position reports from a technician's handset.
  *
@@ -123,7 +125,11 @@ export function isMoving(position: {
 }
 
 export type LocationFixRejection =
-  'IMPOSSIBLE_COORDINATE' | 'UNREADABLE_TIMESTAMP' | 'FUTURE_TIMESTAMP' | 'TOO_IMPRECISE';
+  | 'IMPOSSIBLE_COORDINATE'
+  | 'UNREADABLE_TIMESTAMP'
+  | 'FUTURE_TIMESTAMP'
+  | 'TOO_IMPRECISE'
+  | 'OUTSIDE_OFFICE_HOURS';
 
 /**
  * Why this fix cannot be stored, or `null` if it can.
@@ -145,6 +151,11 @@ export function rejectLocationFix(
   const recordedAt = Date.parse(fix.recordedAt);
   if (Number.isNaN(recordedAt)) return 'UNREADABLE_TIMESTAMP';
   if (recordedAt > now + MAX_CLOCK_SKEW_MS) return 'FUTURE_TIMESTAMP';
+
+  // Taken on a weekend, a holiday or outside office hours: never sent, never
+  // stored. The phone stops recording outside them, and this is the same rule
+  // asked of anything already queued and of anything an older build sends.
+  if (!isWithinOfficeHours(recordedAt)) return 'OUTSIDE_OFFICE_HOURS';
 
   // Absent accuracy is accepted: some devices simply do not report it, and
   // refusing those would silently exclude whole handset models.
@@ -227,8 +238,17 @@ export interface TechnicianTrackingStatus {
    * nothing.
    */
   recording: 'BACKGROUND' | 'FOREGROUND_ONLY' | 'OFF';
-  /** Why recording is not running, when the phone knows. */
-  stoppedBecause: 'PAUSED' | 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | null;
+  /**
+   * Why recording is not running, when the phone knows. `OFF_HOURS` is the
+   * office's rule rather than a fault: outside office hours nothing records.
+   */
+  stoppedBecause:
+    | 'PAUSED'
+    | 'FOREGROUND_DENIED'
+    | 'UNAVAILABLE'
+    | 'UNSUPPORTED'
+    | 'OFF_HOURS'
+    | null;
   /** "While using the app". */
   foregroundPermission: TrackingPermission;
   /** "All the time" / "Always". */
@@ -363,6 +383,9 @@ export function isLocationPaused(
   now = Date.now(),
 ): boolean {
   if (!position?.app?.connected) return false;
+  // Outside office hours the phone records nothing by design, so silence then
+  // is the rule working, not a fault to show in warning colours.
+  if (!isWithinOfficeHours(now)) return false;
   const at = Date.parse(position.recordedAt);
   if (!Number.isFinite(at) || now - at <= LOCATION_PAUSED_AFTER_MS) return false;
   const tracking = position.tracking;

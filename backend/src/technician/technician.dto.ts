@@ -511,8 +511,8 @@ export class TechnicianLocationStatusDto {
   recording!: 'BACKGROUND' | 'FOREGROUND_ONLY' | 'OFF';
 
   @IsOptional()
-  @IsIn(['PAUSED', 'FOREGROUND_DENIED', 'UNAVAILABLE', 'UNSUPPORTED'])
-  stoppedBecause?: 'PAUSED' | 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | null;
+  @IsIn(['PAUSED', 'FOREGROUND_DENIED', 'UNAVAILABLE', 'UNSUPPORTED', 'OFF_HOURS'])
+  stoppedBecause?: 'PAUSED' | 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'OFF_HOURS' | null;
 
   @IsIn(TRACKING_PERMISSIONS)
   foregroundPermission!: (typeof TRACKING_PERMISSIONS)[number];

@@ -127,6 +127,9 @@ describe('a purchase requisition as a PDF (2026-11-20)', () => {
   it('prints each line with its codes, taking the requisition\'s place and day when the line names none', () => {
     expect(requisitionLineCells(REQUISITION.lines[0]!, REQUISITION)).toEqual(['Item', 'FLT-16251', 'Filter 16x25x1', 'STORE', '48', 'PCS', '3.42', '164.16', '11/24/2026', 'V00003', 'MAINT']);
     expect(requisitionLineCells(REQUISITION.lines[1]!, REQUISITION)).toEqual(['Service', 'SVC-0002', 'Duct cleaning, one unit', 'YARD', '1', 'JOB', '180.00', '180.00', '12/02/2026', '', 'MAINT']);
+    // An item code deleted since (2026-11-24) still prints, and says so.
+    const deleted = { ...REQUISITION.lines[0]!, item: { ...REQUISITION.lines[0]!.item!, deleted: true } };
+    expect(requisitionLineCells(deleted, REQUISITION)[1]).toBe('FLT-16251 (deleted)');
   });
 
   it('says what it was ordered as, one line an order', () => {

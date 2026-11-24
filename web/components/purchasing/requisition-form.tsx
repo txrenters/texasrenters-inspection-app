@@ -1045,7 +1045,15 @@ export function RequisitionForm({
                         <tr className={cn(line.id === currentKey ? 'bg-accent/40' : 'hover:bg-muted/40')} key={line.id} onClick={() => setCurrentKey(line.id)}>
                           <RowNumber current={line.id === currentKey} n={index + 1} />
                           <td className={CELL_TEXT}>{line.lineType?.name ?? EMPTY}</td>
-                          <td className={cn(CELL_TEXT, 'font-mono font-semibold')}>{line.item?.code ?? EMPTY}</td>
+                          <td className={cn(CELL_TEXT, 'font-mono font-semibold')}>
+                            {line.item?.code ?? EMPTY}
+                            {/* Its item code was deleted since (2026-11-24): the line stays, and says so. */}
+                            {line.item?.deleted ? (
+                              <Badge className="ml-1.5 font-sans" variant="outline">
+                                Deleted
+                              </Badge>
+                            ) : null}
+                          </td>
                           <td className={CELL_TEXT}>{line.description ?? line.item?.name}</td>
                           <td className={CELL_TEXT}>{line.place?.code ?? line.place?.name ?? EMPTY}</td>
                           <td className={cn(CELL_TEXT, 'text-right tabular-nums')}>{formatCount(line.quantity)}</td>

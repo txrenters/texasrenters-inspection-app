@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { Prisma, StockMovementKind, StockPlaceKind, UserRole } from '@prisma/client';
+import { Prisma, PurchaseOrderStatus, PurchaseRequisitionStatus, StockCountStatus, StockMovementKind, StockPlaceKind, TruckStockAskStatus, UserRole } from '@prisma/client';
 import {
+  DELETION_DOCUMENTS_SHOWN,
+  REMOVAL_FOR_DELETE,
+  STOCK_ITEM_DELETE_REASON_LABEL,
   STOCK_MOVEMENTS_SHOWN,
   STOCK_PREFIX,
   averageCostCents,
@@ -9,8 +12,12 @@ import {
   normalizeStockCode,
   stockKey,
   stockStatus,
+  type DeleteStockItemInput,
   type OpeningBalanceInput,
+  type RemoveStockInput,
   type ReverseMovementInput,
+  type StockItemDeletion,
+  type StockItemDocument,
   type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
@@ -143,6 +150,19 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
   };
 }
 
+/** A requisition still being written or approved: one whose line is on no order would ask for a deleted item. */
+const OPEN_REQUISITION: ReadonlySet<PurchaseRequisitionStatus> = new Set([PurchaseRequisitionStatus.DRAFT, PurchaseRequisitionStatus.SUBMITTED, PurchaseRequisitionStatus.SENT_BACK, PurchaseRequisitionStatus.APPROVED]);
+/** An order not yet cancelled, closed or fully received. */
+const OPEN_ORDER: ReadonlySet<PurchaseOrderStatus> = new Set([
+  PurchaseOrderStatus.DRAFT,
+  PurchaseOrderStatus.AWAITING_APPROVAL,
+  PurchaseOrderStatus.APPROVED,
+  PurchaseOrderStatus.SENT,
+  PurchaseOrderStatus.PARTLY_RECEIVED,
+]);
+/** A count not yet posted or cancelled. */
+const OPEN_COUNT: ReadonlySet<StockCountStatus> = new Set([StockCountStatus.OPEN, StockCountStatus.COUNTING, StockCountStatus.REVIEW]);
+
 @Injectable()
 export class InventoryService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -153,7 +173,8 @@ export class InventoryService {
   async stock(user: AuthenticatedUser): Promise<StockList> {
     const organizationId = user.organizationId;
     const [items, levels, places, organisations, vendors, categories, lineTypes, units, setup] = await Promise.all([
-      this.prisma.stockItem.findMany({ where: { organizationId }, select: ITEM_SELECT, orderBy: [{ active: 'desc' }, { codeKey: 'asc' }] }),
+      // A deleted item code is gone from the lists (2026-11-24); a switched-off one still shows.
+      this.prisma.stockItem.findMany({ where: { organizationId, deletedAt: null }, select: ITEM_SELECT, orderBy: [{ active: 'desc' }, { codeKey: 'asc' }] }),
       this.prisma.stockLevel.findMany({ where: { organizationId }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: PLACE_SELECT, orderBy: [{ active: 'desc' }, { kind: 'asc' }, { nameKey: 'asc' }] }),
       this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, status: true }, orderBy: { name: 'asc' } }),
@@ -208,8 +229,8 @@ export class InventoryService {
   /** One item: where it is, what it cost, and its movements, newest first. */
   async item(user: AuthenticatedUser, itemId: string): Promise<StockItemDetail> {
     const organizationId = user.organizationId;
-    const item = await this.prisma.stockItem.findFirst({ where: { id: itemId, organizationId }, select: ITEM_SELECT });
-    if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory.');
+    const item = await this.prisma.stockItem.findFirst({ where: { id: itemId, organizationId, deletedAt: null }, select: ITEM_SELECT });
+    if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory, or its code was deleted.');
     const [levels, places, organisation, movements, movementsTotal] = await Promise.all([
       this.prisma.stockLevel.findMany({ where: { organizationId, itemId }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: { id: true, name: true, kind: true } }),
@@ -232,6 +253,7 @@ export class InventoryService {
           createdAt: true,
           reversesId: true,
           reversedBy: { select: { id: true } },
+          removalReason: true,
         },
       }),
       this.prisma.stockMovement.count({ where: { organizationId, itemId } }),
@@ -269,6 +291,7 @@ export class InventoryService {
           createdAt: movement.createdAt.toISOString(),
           reversesId: movement.reversesId,
           reversedById: movement.reversedBy?.id ?? null,
+          removalReason: movement.removalReason,
         };
       }),
       movementsTotal,
@@ -380,8 +403,8 @@ export class InventoryService {
     }
     const typed = sent(input, 'code') ? this.typedCode(input.code) : null;
     await this.prisma.$transaction(async (tx) => {
-      const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { id: true, code: true, xeroTenantId: true, active: true, categoryId: true } });
-      if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory.');
+      const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId, deletedAt: null }, select: { id: true, code: true, xeroTenantId: true, active: true, categoryId: true } });
+      if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory, or its code was deleted.');
       // A code people have already asked for, ordered or counted by stays: papers that name it would no longer find it.
       if (typed && typed !== item.code) {
         const [moved, requested, ordered] = await Promise.all([
@@ -582,7 +605,7 @@ export class InventoryService {
       await this.prisma.$transaction(async (tx) => {
         const movement = await tx.stockMovement.findFirst({
           where: { id: movementId, organizationId },
-          select: { itemId: true, placeId: true, kind: true, quantity: true, unitCostCents: true, reversedBy: { select: { id: true } }, item: { select: { code: true } }, place: { select: { name: true } } },
+          select: { itemId: true, placeId: true, kind: true, quantity: true, unitCostCents: true, reversedBy: { select: { id: true } }, item: { select: { code: true, deletedAt: true } }, place: { select: { name: true } } },
         });
         if (!movement) throw new ApplicationError(404, 'STOCK_MOVEMENT_NOT_FOUND', 'That movement is not in the ledger.');
         itemId = movement.itemId;
@@ -590,8 +613,10 @@ export class InventoryService {
         if (movement.kind === StockMovementKind.REVERSAL) throw new ApplicationError(409, 'STOCK_REVERSAL_OF_REVERSAL', 'A reversal cannot be reversed. Enter the movement again instead.');
         if (movement.reversedBy) throw new ApplicationError(409, 'STOCK_MOVEMENT_ALREADY_REVERSED', 'That movement has already been reversed.');
         // A movement a document made is put right through its document, which keeps the two in step.
-        if (movement.kind !== StockMovementKind.OPENING_BALANCE)
+        // An opening balance and a removal (2026-11-24) were typed here, so they are put right here.
+        if (movement.kind !== StockMovementKind.OPENING_BALANCE && movement.kind !== StockMovementKind.REMOVAL)
           throw new ApplicationError(409, 'STOCK_MOVEMENT_HAS_DOCUMENT', 'Goods received are reversed from their purchase order, with the receipt.');
+        if (movement.item.deletedAt) throw new ApplicationError(409, 'STOCK_ITEM_DELETED', `${movement.item.code} was deleted, so its stock cannot come back. Add a new item code.`);
         if (movement.quantity > 0) {
           const level = await tx.stockLevel.findUnique({ where: { itemId_placeId: { itemId: movement.itemId, placeId: movement.placeId } }, select: { quantity: true } });
           const there = level?.quantity ?? 0;
@@ -630,6 +655,236 @@ export class InventoryService {
       throw error;
     }
     return this.item(user, itemId);
+  }
+
+  /**
+   * Takes stock off the books with a reason (2026-11-24): tested with,
+   * damaged, lost, used and never recorded, entered by mistake. From one place
+   * no more than it holds; from every place, all of it. Each place's stock
+   * leaves at its own average cost, as a REMOVAL movement that says why, so
+   * the history shows it and Reverse puts it back. Sent twice -- a second
+   * click, a retry -- it is taken once, by its request key.
+   */
+  async removeStock(user: AuthenticatedUser, itemId: string, input: RemoveStockInput): Promise<StockItemDetail> {
+    const organizationId = user.organizationId;
+    const note = text(input.note);
+    if (input.reason === 'OTHER' && !note) throw new ApplicationError(400, 'STOCK_REMOVAL_NEEDS_NOTE', 'Say why it is being removed.');
+    const keyOf = (placeId: string) => `remove:${input.requestKey}:${placeId}`;
+    const write = () =>
+      this.prisma.$transaction(async (tx) => {
+        const already = await tx.stockMovement.findFirst({ where: { organizationId, requestKey: { startsWith: `remove:${input.requestKey}:` } }, select: { itemId: true } });
+        if (already) {
+          if (already.itemId !== itemId) throw new ApplicationError(409, 'STOCK_REQUEST_REUSED', 'That entry was already made for another item.');
+          return;
+        }
+        await assertStockNotFrozen(tx, organizationId);
+        const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId, deletedAt: null }, select: { code: true } });
+        if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory, or its code was deleted.');
+        // Two removals of one item at once: the second waits here, then sees what the first left.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`stock-remove:${itemId}`}, 0))::text AS locked`;
+        const levels = await tx.stockLevel.findMany({
+          where: { organizationId, itemId, quantity: { gt: 0 }, ...(input.placeId ? { placeId: input.placeId } : {}) },
+          select: { placeId: true, quantity: true, valueCents: true, place: { select: { name: true } } },
+        });
+        let taking: { placeId: string; placeName: string; quantity: number; unitCostCents: number }[];
+        if (input.placeId) {
+          const place = await tx.stockPlace.findFirst({ where: { id: input.placeId, organizationId }, select: { name: true } });
+          if (!place) throw new ApplicationError(404, 'STOCK_PLACE_NOT_FOUND', 'That place is not on the list.');
+          const level = levels[0];
+          if (!level) throw new ApplicationError(409, 'STOCK_NOT_ENOUGH', `${place.name} has none of ${item.code}. Choose a place that has some.`);
+          if (input.quantity > level.quantity)
+            throw new ApplicationError(409, 'STOCK_NOT_ENOUGH', `${place.name} has ${level.quantity} of ${item.code}, so ${input.quantity} cannot be removed.`);
+          taking = [{ placeId: level.placeId, placeName: place.name, quantity: input.quantity, unitCostCents: averageCostCents(level.valueCents, level.quantity) ?? 0 }];
+        } else {
+          const total = levels.reduce((sum, level) => sum + level.quantity, 0);
+          if (!total) throw new ApplicationError(409, 'STOCK_NOT_ENOUGH', `There is none of ${item.code} anywhere to remove.`);
+          // What the page showed is what goes: if stock moved since, the office looks again.
+          if (input.quantity !== total) throw new ApplicationError(409, 'STOCK_REMOVAL_CHANGED', `${item.code} now has ${total} in all. Look again before removing it.`);
+          taking = levels.map((level) => ({ placeId: level.placeId, placeName: level.place.name, quantity: level.quantity, unitCostCents: averageCostCents(level.valueCents, level.quantity) ?? 0 }));
+        }
+        const day = dateOf(businessDate());
+        for (const one of taking)
+          await tx.stockMovement.create({
+            data: {
+              organizationId,
+              itemId,
+              placeId: one.placeId,
+              kind: StockMovementKind.REMOVAL,
+              quantity: -one.quantity,
+              unitCostCents: one.unitCostCents,
+              day,
+              note,
+              removalReason: input.reason,
+              requestKey: keyOf(one.placeId),
+              createdById: user.principalType === 'API_KEY' ? null : user.id,
+              createdByName: user.displayName,
+            },
+            select: { id: true },
+          });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            ...auditActor(user),
+            action: 'STOCK_REMOVED',
+            entityType: 'StockItem',
+            entityId: itemId,
+            metadata: { item: item.code, reason: input.reason, note, removed: taking.map((one) => ({ place: one.placeName, quantity: one.quantity, unitCostCents: one.unitCostCents })) },
+          },
+        });
+      });
+    try {
+      await write();
+    } catch (error) {
+      // The same removal, sent at the same moment by a retry: the other one took it.
+      if (!taken(error)) throw error;
+    }
+    return this.item(user, itemId);
+  }
+
+  // ── Deleting an item code (2026-11-24) ─────────────────────────────────
+
+  /** What deleting an item would do: read by the page before the office confirms, and again inside the deletion. */
+  async deletion(user: AuthenticatedUser, itemId: string): Promise<StockItemDeletion> {
+    await assertKeeps(this.prisma, user, 'ITEMS');
+    return this.deletionOf(this.prisma, user.organizationId, itemId);
+  }
+
+  private async deletionOf(db: Prisma.TransactionClient, organizationId: string, itemId: string): Promise<StockItemDeletion> {
+    const item = await db.stockItem.findFirst({ where: { id: itemId, organizationId, deletedAt: null }, select: { id: true, code: true, name: true, unit: true } });
+    if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory, or its code was already deleted.');
+    const where = { organizationId, itemId };
+    const [levels, moved, slipLines, requisitionLines, orderLines, receiptLines, countLines, askLines] = await Promise.all([
+      db.stockLevel.findMany({ where: { ...where, quantity: { gt: 0 } }, select: { quantity: true, place: { select: { name: true, kind: true, nameKey: true } } } }),
+      db.stockMovement.count({ where }),
+      db.stockSlipLine.count({ where }),
+      db.purchaseRequisitionLine.findMany({ where, select: { requisition: { select: { id: true, number: true, status: true } }, orderSources: { select: { id: true }, take: 1 } } }),
+      db.purchaseOrderLine.findMany({ where, select: { quantity: true, receivedQuantity: true, order: { select: { id: true, number: true, status: true } } } }),
+      db.goodsReceiptLine.findMany({ where, select: { receipt: { select: { id: true, number: true } } } }),
+      db.stockCountLine.findMany({ where, select: { count: { select: { id: true, number: true, status: true } } } }),
+      db.truckStockAskLine.findMany({ where, select: { ask: { select: { id: true, status: true, place: { select: { name: true } } } } } }),
+    ]);
+    const open = new Map<string, StockItemDocument>();
+    const used = new Map<string, StockItemDocument>();
+    const add = (into: Map<string, StockItemDocument>, document: StockItemDocument) => into.set(`${document.kind}:${document.id}`, document);
+    for (const line of requisitionLines) {
+      const document: StockItemDocument = { kind: 'REQUISITION', id: line.requisition.id, number: line.requisition.number ?? 'A draft requisition' };
+      // A requisition still being written or approved, whose line is on no order yet, would ask for an item that is gone.
+      if (OPEN_REQUISITION.has(line.requisition.status) && !line.orderSources.length) add(open, document);
+      else add(used, document);
+    }
+    for (const line of orderLines) {
+      const document: StockItemDocument = { kind: 'ORDER', id: line.order.id, number: line.order.number ?? 'A draft order' };
+      // An order still to arrive would bring in an item that is gone.
+      if (OPEN_ORDER.has(line.order.status) && line.receivedQuantity < line.quantity) add(open, document);
+      else add(used, document);
+    }
+    for (const line of receiptLines) add(used, { kind: 'RECEIPT', id: line.receipt.id, number: line.receipt.number });
+    for (const line of countLines) {
+      const document: StockItemDocument = { kind: 'COUNT', id: line.count.id, number: line.count.number };
+      if (OPEN_COUNT.has(line.count.status)) add(open, document);
+      else add(used, document);
+    }
+    // A truck's ask waiting for it: filled ones are history, and are not listed.
+    for (const line of askLines) if (line.ask.status === TruckStockAskStatus.ASKED) add(open, { kind: 'TRUCK_ASK', id: line.ask.id, number: `${line.ask.place.name}'s ask` });
+    const usedOn = [...used.values()].filter((document) => !open.has(`${document.kind}:${document.id}`));
+    return {
+      item,
+      neverUsed: !moved && !slipLines && !requisitionLines.length && !orderLines.length && !receiptLines.length && !countLines.length && !askLines.length,
+      onHand: levels
+        .sort((left, right) => left.place.kind.localeCompare(right.place.kind) || left.place.nameKey.localeCompare(right.place.nameKey))
+        .map((level) => ({ placeName: level.place.name, quantity: level.quantity })),
+      open: [...open.values()],
+      usedOn: usedOn.slice(0, DELETION_DOCUMENTS_SHOWN),
+      usedOnMore: Math.max(0, usedOn.length - DELETION_DOCUMENTS_SHOWN),
+    };
+  }
+
+  /**
+   * Deletes an item code (2026-11-24, from the approved DeleteItem board),
+   * once its code is typed to confirm. One nothing names is removed outright.
+   * One that has been used is marked deleted: what stock it has is removed
+   * first, with the reason given; it leaves every list, picker, label sheet
+   * and the phone; and its code is given up, so a new item can have it. The
+   * documents that named it keep their lines and show it marked deleted.
+   * Refused while it is still on something open. Never undone: a trigger
+   * keeps it deleted.
+   */
+  async deleteItem(user: AuthenticatedUser, itemId: string, input: DeleteStockItemInput): Promise<StockList> {
+    await assertKeeps(this.prisma, user, 'ITEMS');
+    const organizationId = user.organizationId;
+    const note = text(input.note);
+    if (input.reason === 'OTHER' && !note) throw new ApplicationError(400, 'STOCK_ITEM_DELETE_NEEDS_NOTE', 'Say why it is being deleted.');
+    await this.prisma.$transaction(async (tx) => {
+      // Deleted twice at once, or stock moving while it is: the second waits, then sees the first.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`stock-remove:${itemId}`}, 0))::text AS locked`;
+      const check = await this.deletionOf(tx, organizationId, itemId);
+      const { code, name } = check.item;
+      if (normalizeStockCode(input.confirmCode ?? '') !== code) throw new ApplicationError(400, 'STOCK_ITEM_CONFIRM_CODE', `Type ${code} to confirm.`);
+      if (check.open.length) {
+        const names = check.open.map((document) => document.number);
+        throw new ApplicationError(409, 'STOCK_ITEM_STILL_OPEN', `${code} is still on ${names.join(', ')}. Finish or cancel ${names.length === 1 ? 'that' : 'those'} first.`);
+      }
+      const why = STOCK_ITEM_DELETE_REASON_LABEL[input.reason];
+      if (check.neverUsed) {
+        await tx.stockKeepLevel.deleteMany({ where: { organizationId, itemId } });
+        await tx.stockItem.delete({ where: { id: itemId } });
+        await tx.auditLog.create({
+          data: { organizationId, ...auditActor(user), action: 'STOCK_ITEM_DELETED', entityType: 'StockItem', entityId: itemId, metadata: { code, name, reason: input.reason, note, outright: true } },
+        });
+        return;
+      }
+      const removed: { place: string; quantity: number }[] = [];
+      if (check.onHand.length) {
+        await assertStockNotFrozen(tx, organizationId);
+        const levels = await tx.stockLevel.findMany({ where: { organizationId, itemId, quantity: { gt: 0 } }, select: { placeId: true, quantity: true, valueCents: true, place: { select: { name: true } } } });
+        const day = dateOf(businessDate());
+        for (const level of levels) {
+          await tx.stockMovement.create({
+            data: {
+              organizationId,
+              itemId,
+              placeId: level.placeId,
+              kind: StockMovementKind.REMOVAL,
+              quantity: -level.quantity,
+              unitCostCents: averageCostCents(level.valueCents, level.quantity) ?? 0,
+              day,
+              note: note ?? `Removed when ${code} was deleted (${why}).`,
+              removalReason: REMOVAL_FOR_DELETE[input.reason],
+              createdById: user.principalType === 'API_KEY' ? null : user.id,
+              createdByName: user.displayName,
+            },
+            select: { id: true },
+          });
+          removed.push({ place: level.place.name, quantity: level.quantity });
+        }
+      }
+      // A truck keeps none of it any more.
+      await tx.stockKeepLevel.deleteMany({ where: { organizationId, itemId } });
+      await tx.stockItem.update({
+        where: { id: itemId },
+        data: {
+          active: false,
+          deletedAt: new Date(),
+          deletedById: user.principalType === 'API_KEY' ? null : user.id,
+          deletedByName: user.displayName,
+          deleteReason: input.reason,
+          deleteNote: note,
+          // The code is given up: a new item may have it. Codes hold no colon, so this is never one typed.
+          codeKey: `deleted:${itemId}`,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: 'STOCK_ITEM_DELETED',
+          entityType: 'StockItem',
+          entityId: itemId,
+          metadata: { code, name, reason: input.reason, note, outright: false, removed, usedOn: check.usedOn.length + check.usedOnMore },
+        },
+      });
+    });
+    return this.stock(user);
   }
 
   // ── Places ──────────────────────────────────────────────────────────────

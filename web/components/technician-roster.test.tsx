@@ -5,7 +5,7 @@ import type {
   TechnicianRoute,
 } from '@texasrenters/shared';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TechnicianRoster, type RosterEntry } from './technician-roster';
 
@@ -522,6 +522,16 @@ describe('choosing a stop', () => {
 });
 
 describe('a technician working with a stalled location', () => {
+  // Two and a half hours later, 1:32 PM on that Monday: a stalled location is
+  // only called that inside office hours, and the real clock is often outside
+  // them when this runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: Date.parse('2026-09-14T18:32:00.000Z'), toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('reads as the app open with the location paused, not as a last report hours ago', () => {
     // 16:02 UTC is 11:02 AM in Texas. Two and a half hours of submitted
     // inspections later, the row used to say only "2 hours ago".

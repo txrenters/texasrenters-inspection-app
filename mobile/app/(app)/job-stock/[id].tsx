@@ -1,12 +1,13 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { MinusIcon, PlusIcon } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { jobStockProblem, type JobStockItem, type PhoneSlipKind } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { ItemScanner } from '@/src/components/ItemScanner';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Badge, Button, Card, SegmentedControl } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useJobStock, useJobStockActions, useJobStockLocal } from '@/src/features/queries';
@@ -14,7 +15,7 @@ import { registerIcons } from '@/src/lib/icons';
 import { BelowHeader } from '@/src/lib/native-header';
 import { QueuedOfflineError } from '@/src/repositories/api/offline-writes';
 import { scanOntoSlip } from '@/src/utils/item-scan';
-import { newSlipKey, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '@/src/utils/job-stock';
+import { newSlipKey, slipLines, slipSummary, stepped, takenFromTruck, truckStock, type PendingSlip } from '@/src/utils/job-stock';
 import { findOnTruck } from '@/src/utils/truck-stock';
 
 registerIcons(MinusIcon, PlusIcon);
@@ -31,7 +32,8 @@ registerIcons(MinusIcon, PlusIcon);
  * the list says it was not recorded and why -- it is never dropped quietly.
  *
  * The phone only ever takes from a truck and puts back what was taken for this
- * job. An item the office's stock shows none of in the truck cannot be taken
+ * job, into the truck it came from (2026-11-24: into another truck would be a
+ * move between trucks). An item the office's stock shows none of in the truck cannot be taken
  * here: the technician tells the office from My truck. Moving stock into the
  * truck, and undoing a slip, are the office's.
  */
@@ -90,9 +92,9 @@ export default function JobStockScreen() {
   // What the phone is holding, and what this tap has just recorded: each once.
   const waiting = [...held, ...sending.filter((slip) => !held.some((kept) => kept.clientRequestId === slip.clientRequestId))];
   const refused = local.data?.refused ?? [];
-  const offered: JobStockItem[] = mode === 'RETURN' ? takenForJob(data.taken, waiting) : placeId ? truckStock(data.stock, placeId, waiting) : [];
+  const offered: JobStockItem[] = !placeId ? [] : mode === 'RETURN' ? takenFromTruck(data.slips, waiting, placeId) : truckStock(data.stock, placeId, waiting);
   const { lines, named } = slipLines(offered, quantities);
-  const problem = lines.length ? jobStockProblem(mode, lines, new Map(offered.map((item) => [item.itemId, item.quantity])), (itemId) => offered.find((item) => item.itemId === itemId)?.name ?? 'that item') : null;
+  const problem = lines.length ? jobStockProblem(mode, lines, new Map(offered.map((item) => [item.itemId, item.quantity])), (itemId) => offered.find((item) => item.itemId === itemId)?.name ?? 'that item', placeName) : null;
   const shown = findOnTruck(offered, search);
   // Found by name and none in the truck, by the office's stock: shown greyed, not offered (taking out, only).
   const noneHere = mode === 'WITHDRAWAL' && search.trim() ? findOnTruck(data.catalog, search).filter((item) => !offered.some((one) => one.itemId === item.itemId)).slice(0, 5) : [];
@@ -141,7 +143,12 @@ export default function JobStockScreen() {
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-5 pb-10 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        // A style, not classes: the list adds the keyboard's height to this padding on Android.
+        contentContainerStyle={{ gap: 20, paddingBottom: 40, paddingTop: 8 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
         {data.places.length ? (
           <>
             <SegmentedControl accessibilityLabel="What you are recording" onChange={change} options={MODES} value={mode} />
@@ -192,7 +199,7 @@ export default function JobStockScreen() {
               <View className="gap-1">
                 <Text className="text-base font-semibold text-foreground">{mode === 'RETURN' ? 'What is going back' : `In ${placeName}`}</Text>
                 <Text className="text-xs text-muted-foreground">
-                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job, or tap the number to type it.'}
+                  {mode === 'RETURN' ? `Only what you took from ${placeName} for this job can go back into it.` : 'Tap + for each one you used on this job, or tap the number to type it.'}
                 </Text>
               </View>
               {offered.length ? (
@@ -245,7 +252,7 @@ export default function JobStockScreen() {
                 })
               ) : (
                 <Text className="text-sm text-muted-foreground">
-                  {mode === 'RETURN' ? 'Nothing has been taken for this job, so there is nothing to put back.' : 'This truck is empty. The office fills it from the storeroom.'}
+                  {mode === 'RETURN' ? `Nothing was taken from ${placeName} for this job, so nothing can go back into it.` : 'This truck is empty. The office fills it from the storeroom.'}
                 </Text>
               )}
               {offered.length && !shown.length && !noneHere.length ? <Text className="text-sm text-muted-foreground">Nothing in the list has those words.</Text> : null}
@@ -310,11 +317,11 @@ export default function JobStockScreen() {
             ))}
           </Card>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       {scanning ? (
         <ItemScanner
-          hint="Point the camera at the label. Scan the same label again for one more."
+          hint="Hold a label inside the corners: it counts once. Move it away and back for one more."
           onClose={() => setScanning(false)}
           onCode={scanned}
           said={said}

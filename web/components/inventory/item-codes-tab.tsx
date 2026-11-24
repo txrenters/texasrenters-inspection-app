@@ -7,6 +7,7 @@ import { useState, type FormEvent } from 'react';
 import { DataTable, type Column } from '@/components/data-table';
 import { UnitField, firstUnit } from '@/components/inventory/inventory-dialogs';
 import { PrintLabels } from '@/components/inventory/print-labels';
+import { DeleteItemDialog } from '@/components/inventory/remove-and-delete';
 import { InUseBadge } from '@/components/inventory/stock-status';
 import { EmptyState } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -198,6 +199,7 @@ export function ItemCodesTab({
   lineTypes = [],
   units = [],
   canManage,
+  canDelete = false,
 }: {
   items: readonly StockItemRow[];
   categories: readonly StockCategoryRow[];
@@ -206,9 +208,12 @@ export function ItemCodesTab({
   /** The units of measure (Purchasing Setup, 2026-11-21); none yet, any word. */
   units?: readonly Unit[];
   canManage: boolean;
+  /** Keeps item codes and manages stock: an item code can be deleted, its stock removed first (2026-11-24). */
+  canDelete?: boolean;
 }) {
   const [words, setWords] = useState('');
   const [editing, setEditing] = useState<StockItemRow | null>(null);
+  const [deleting, setDeleting] = useState<StockItemRow | null>(null);
   const [printing, setPrinting] = useState(false);
   const sought = words.trim().toLowerCase();
   const rows = items.filter((row) => !sought || `${row.code} ${row.name} ${row.category?.name ?? ''}`.toLowerCase().includes(sought));
@@ -237,11 +242,20 @@ export function ItemCodesTab({
         {rows.length ? (
           <DataTable
             actions={
-              canManage
+              canManage || canDelete
                 ? (row) => (
-                    <Button aria-label={`Edit ${row.code}`} onClick={() => setEditing(row)} size="sm" variant="outline">
-                      Edit
-                    </Button>
+                    <>
+                      {canManage ? (
+                        <Button aria-label={`Edit ${row.code}`} onClick={() => setEditing(row)} size="sm" variant="outline">
+                          Edit
+                        </Button>
+                      ) : null}
+                      {canDelete ? (
+                        <Button aria-label={`Delete ${row.code}`} className="border-destructive text-destructive hover:text-destructive" onClick={() => setDeleting(row)} size="sm" variant="outline">
+                          Delete
+                        </Button>
+                      ) : null}
+                    </>
                   )
                 : undefined
             }
@@ -261,9 +275,16 @@ export function ItemCodesTab({
           A code is never used twice. Once an item has been requested, ordered or stocked, its code stays; the description, unit and price can still be changed. A purchase request picks an item by its code, and
           the description, unit and price come with it.
         </p>
+        {canDelete ? (
+          <p className="text-muted-foreground text-xs">
+            Switched off: kept, and can be turned back on. Deleted: gone from every list, picker, label sheet and the phone, and its code can be given to a new item. A requisition, order or receipt that
+            already names it still shows it, marked deleted.
+          </p>
+        ) : null}
       </section>
 
       {canManage ? <NewItemCode categories={inUse} companies={companies} lineTypes={lineTypes} units={units} /> : null}
+      {deleting ? <DeleteItemDialog item={deleting} onClose={() => setDeleting(null)} /> : null}
       {editing ? <EditItemCode categories={categories} companies={companies} item={editing} lineTypes={lineTypes} onClose={() => setEditing(null)} units={units} /> : null}
     </div>
   );

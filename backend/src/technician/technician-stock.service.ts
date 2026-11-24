@@ -92,6 +92,8 @@ export class TechnicianStockService {
           kind: true,
           createdAt: true,
           reversedAt: true,
+          fromPlaceId: true,
+          toPlaceId: true,
           fromPlace: { select: { name: true } },
           toPlace: { select: { name: true } },
           lines: { select: { quantity: true, item: { select: { id: true, code: true, name: true, unit: true } } }, orderBy: { item: { codeKey: 'asc' } } },
@@ -107,6 +109,7 @@ export class TechnicianStockService {
       kind: slip.kind as PhoneSlipKind,
       at: slip.createdAt.toISOString(),
       place: (slip.fromPlace ?? slip.toPlace)?.name ?? 'A truck',
+      placeId: slip.fromPlaceId ?? slip.toPlaceId,
       reversed: slip.reversedAt !== null,
       lines: slip.lines.map((line) => ({ itemId: line.item.id, code: line.item.code, name: line.item.name, unit: line.item.unit, quantity: line.quantity })),
     }));
@@ -249,16 +252,21 @@ export class TechnicianStockService {
     await this.assigned(user, inspectionId);
     const lines = input.lines.filter((line) => line.quantity > 0);
     const places = await this.trucks(user);
-    if (!places.some((place) => place.id === input.placeId)) throw new ApplicationError(400, 'STOCK_PLACE_NOT_YOURS', 'That is not a truck you can take from. Ask the office to put you on it.');
-
-    if (input.kind === 'RETURN') {
-      // No more goes back than was taken for this job: a truck is not filled from the phone.
-      const taken = (await this.read(user, inspectionId)).taken;
-      const problem = jobStockProblem('RETURN', lines, new Map(taken.map((item) => [item.itemId, item.quantity])), (itemId) => taken.find((item) => item.itemId === itemId)?.code ?? 'that item');
-      if (problem) throw new ApplicationError(409, 'STOCK_SLIP_NOT_READY', problem);
-    } else if (!lines.length) throw new ApplicationError(409, 'STOCK_SLIP_NOT_READY', 'Choose what you took.');
+    const place = places.find((one) => one.id === input.placeId);
+    if (!place) throw new ApplicationError(400, 'STOCK_PLACE_NOT_YOURS', 'That is not a truck you can take from. Ask the office to put you on it.');
 
     try {
+      if (input.kind === 'RETURN') {
+        // No more goes back than was taken for this job, and only into the truck it came from
+        // (2026-11-24): a truck is not filled from the phone, and stock is not moved between trucks.
+        const job = await this.read(user, inspectionId);
+        const taken = jobStockTaken(job.slips, place.id);
+        // Named even when it never came from this truck: from the job's other slips, or the item list.
+        const codeOf = (itemId: string) => job.slips.flatMap((slip) => slip.lines).find((line) => line.itemId === itemId)?.code ?? job.catalog.find((item) => item.itemId === itemId)?.code ?? 'that item';
+        const problem = jobStockProblem('RETURN', lines, new Map(taken.map((item) => [item.itemId, item.quantity])), codeOf, place.name);
+        if (problem) throw new ApplicationError(409, 'STOCK_SLIP_NOT_READY', problem);
+      } else if (!lines.length) throw new ApplicationError(409, 'STOCK_SLIP_NOT_READY', 'Choose what you took.');
+
       await this.slips.write(user, {
         kind: input.kind,
         technicianId: user.id,
@@ -271,6 +279,17 @@ export class TechnicianStockService {
         askId: null,
       });
     } catch (error) {
+      /**
+       * The same slip, sent twice at once (2026-11-24). The phone saves a slip
+       * before sending it, and its queue may send that saved copy while the
+       * first send is still out. Both pass the key check above before either is
+       * written; the one that loses then sees the other's effect -- the stock
+       * already gone from the truck, or already back -- and was refused, so
+       * the phone said "Not recorded" for a slip that is on the books, and the
+       * technician recorded it again. A refusal whose key is now taken was
+       * this very slip: answered as recorded.
+       */
+      if (error instanceof ApplicationError && (await this.prisma.stockSlip.findFirst({ where: { organizationId, requestKey }, select: { id: true } }))) return this.read(user, inspectionId);
       // The office's sentence points at its own page: the phone's points at the truck.
       if (error instanceof ApplicationError && error.code === 'STOCK_NOT_ENOUGH') throw new ApplicationError(409, 'STOCK_NOT_ENOUGH', 'Somebody has just taken some of that from the truck. Look again at what is there.');
       throw error;

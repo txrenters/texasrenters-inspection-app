@@ -275,7 +275,7 @@ function database() {
   const client: unknown = Object.assign(db, transaction);
   const mail = { sendPurchaseOrder: jest.fn<Promise<{ status: string; message: string }>, [Row]>(async () => ({ status: 'SENT', message: 'Email sent successfully.' })) };
   const storage = { get: jest.fn(async (key: string) => Buffer.from(`the bytes of ${key}`)) };
-  return { db, mail, storage, orders, lines, sources, requisitions, requisitionLines, quotes, vendors, deliveries, audits, requisitionFiles, service: new PurchaseOrdersService(db as never, mail as never, storage as never) };
+  return { db, mail, storage, items, orders, lines, sources, requisitions, requisitionLines, quotes, vendors, deliveries, audits, requisitionFiles, service: new PurchaseOrdersService(db as never, mail as never, storage as never) };
 }
 
 const line = (itemId: string, quantity: number, unitPriceCents: number) => ({ itemId, quantity, unitPriceCents });
@@ -319,6 +319,21 @@ describe('making an order', () => {
     expect(draft.can).toMatchObject({ edit: true, submit: true, approve: false, send: false, cancel: true });
     expect(requisitions[0]).toMatchObject({ status: 'ORDERED' });
     expect(audits.map((audit) => [audit.action, audit.entityType])).toEqual([['PURCHASE_ORDER_CREATED', 'PurchaseOrder'], ['PURCHASE_REQUISITION_ORDERED', 'PurchaseRequisition']]);
+  });
+
+  it('keeps a line whose item code was deleted since, and says so (2026-11-24)', async () => {
+    const { service, items } = database();
+    const made = await service.createFromRequisition(buyer, REQUISITION);
+    items.find((item) => item.id === FILTER)!.deletedAt = new Date('2026-11-24T16:00:00.000Z');
+
+    const order = await service.detail(buyer, made.orders[0]!.id);
+    expect(order.lines.map((one) => [one.item.code, one.item.name, one.item.deleted])).toEqual([
+      ['FLT-0003', 'Filter 20x25x1 (deleted)', true],
+      ['PRT-0001', 'Battery, 9 V', false],
+    ]);
+    // When it was deleted is not sent.
+    expect(order.lines[0]!.item).not.toHaveProperty('deletedAt');
+    expect(order.subtotalCents).toBe(18480);
   });
 
   it('makes one order a vendor: each line to its own, else to the chosen quote, and with neither to one waiting for a vendor (2026-11-20)', async () => {

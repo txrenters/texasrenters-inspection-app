@@ -69,7 +69,8 @@ export function requisitionFacts(requisition: RequisitionDetail): { label: strin
 export function requisitionLineCells(line: RequisitionLine, requisition: Pick<RequisitionDetail, 'deliverTo' | 'neededBy'>): string[] {
   return [
     line.lineType?.name ?? '',
-    line.item?.code ?? '',
+    // A deleted item code (2026-11-24) still prints, and says so.
+    line.item ? (line.item.deleted ? `${line.item.code} (deleted)` : line.item.code) : '',
     line.description ?? line.item?.name ?? '',
     line.place?.code ?? requisition.deliverTo?.code ?? '',
     String(line.quantity),

@@ -326,6 +326,8 @@ export class SearchService {
     const rows = await this.prisma.stockItem.findMany({
       where: {
         organizationId: user.organizationId,
+        // A deleted item code is gone from the console (2026-11-24); a switched-off one is still found.
+        deletedAt: null,
         AND: everyWord<Prisma.StockItemWhereInput>(terms, (word) => [{ code: contains(word) }, { name: contains(word) }]),
       },
       select: { id: true, code: true, name: true, unit: true, active: true },

@@ -5,18 +5,35 @@ import { normalizeStockCode, type JobStockItem, type PhoneCatalogItem, type Phon
  * tested without a camera.
  */
 
-export interface LastScan {
-  code: string;
-  at: number;
-}
+/** When each code was last read by the camera, counted or not. One per scanner, kept while it is open. */
+export type SeenLabels = Map<string, number>;
 
-/** A label held in view is read again and again: the same code counts once, then again only after this pause. */
+/** How long a label must be out of the camera's view before it counts again. */
 export const SAME_LABEL_PAUSE_MS = 1_500;
 
-/** Whether a read is a new scan: another code, or the same one after the pause. */
-export function acceptScan(last: LastScan | null, code: string, now: number, pause: number = SAME_LABEL_PAUSE_MS): boolean {
+/** More codes than a truck holds: the oldest are forgotten past this. */
+const MOST_REMEMBERED = 200;
+
+/**
+ * Whether a read is a new scan: a code the camera has not seen for the pause.
+ *
+ * The camera reads a label in view many times a second, for as long as it is
+ * in view. Each read of a code moves its "last seen" on, counted or not, so a
+ * label held in front of the camera counts once however long it is held, and
+ * counts again only after it has been out of view for the pause -- "scan it
+ * again for one more". Remembered per code, because two labels in view at once
+ * are read in turn: compared only with the read before, each read was "another
+ * label" and both counted on every read (2026-11-24, found in review: held
+ * five seconds on one filter label recorded four filters).
+ */
+export function acceptScan(seen: SeenLabels, code: string, now: number, pause: number = SAME_LABEL_PAUSE_MS): boolean {
   if (!code.trim()) return false;
-  return !last || normalizeStockCode(last.code) !== normalizeStockCode(code) || now - last.at >= pause;
+  const key = normalizeStockCode(code);
+  const before = seen.get(key);
+  seen.delete(key);
+  seen.set(key, now);
+  if (seen.size > MOST_REMEMBERED) seen.delete(seen.keys().next().value as string);
+  return before === undefined || now - before >= pause;
 }
 
 /**
@@ -43,7 +60,7 @@ export function scanOntoSlip(
   const shown = code.slice(0, 24);
   if (!item) {
     if (known?.catalog.length && !known.catalog.some((one) => one.code === code)) return { quantities: kept, said: { words: `${shown} is not an item code. Check the label, or type it.`, bad: true } };
-    if (mode === 'RETURN') return { quantities: kept, said: { words: `${shown} was not taken for this job.`, bad: true } };
+    if (mode === 'RETURN') return { quantities: kept, said: { words: known ? `${shown} was not taken from ${known.placeName} for this job.` : `${shown} was not taken for this job.`, bad: true } };
     return { quantities: kept, said: { words: known ? `${shown} is not in ${known.placeName}.` : `${shown} is not in this truck.`, bad: true } };
   }
   const now = kept[item.itemId] ?? 0;
@@ -52,6 +69,6 @@ export function scanOntoSlip(
   const left = item.quantity - now - 1;
   return {
     quantities: kept,
-    said: { words: mode === 'RETURN' ? `${item.code} · ${item.name}: ${now + 1} going back.` : `${item.code} · ${item.name}: ${now + 1} taken. ${left} left. Scan it again for one more.`, bad: false },
+    said: { words: mode === 'RETURN' ? `${item.code} · ${item.name}: ${now + 1} going back.` : `${item.code} · ${item.name}: ${now + 1} taken. ${left} left. Move the label away and back for one more.`, bad: false },
   };
 }

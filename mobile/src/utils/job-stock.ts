@@ -1,4 +1,4 @@
-import type { JobStock, JobStockItem, PhoneSlipKind, RecordJobStockInput } from '@texasrenters/shared';
+import { jobStockTaken, type JobStock, type JobStockItem, type PhoneSlipKind, type RecordJobStockInput } from '@texasrenters/shared';
 
 /**
  * A job's materials on the phone (2026-11-19, phase 7): what the screen makes
@@ -64,6 +64,19 @@ export function takenForJob(taken: readonly JobStockItem[], pending: readonly Pe
       items.set(line.itemId, kept);
     }
   return [...items.values()].filter((item) => item.quantity > 0).sort((left, right) => left.code.localeCompare(right.code));
+}
+
+/**
+ * What can go back into one truck (2026-11-24): what was taken from that truck
+ * for the job, with what this phone is holding for it. Only into the truck it
+ * came from -- the server refuses anything else, because putting back into
+ * another truck would move stock between trucks, which stays with the office.
+ */
+export function takenFromTruck(slips: JobStock['slips'], pending: readonly PendingSlip[], placeId: string): JobStockItem[] {
+  return takenForJob(
+    jobStockTaken(slips, placeId),
+    pending.filter((slip) => slip.placeId === placeId),
+  );
 }
 
 /** The lines of a slip from what the steppers hold: only what was asked for, in the list's order. */

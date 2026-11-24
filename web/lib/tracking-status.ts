@@ -1,4 +1,4 @@
-import type { ReportedTrackingStatus } from '@texasrenters/shared';
+import { OFFICE_HOURS_TEXT, type ReportedTrackingStatus } from '@texasrenters/shared';
 
 /**
  * What the office should know about how a technician's phone is recording.
@@ -37,6 +37,13 @@ export function trackingProblem(
         return { tone: 'warning', message: 'Location services are turned off on their phone.' };
       case 'UNSUPPORTED':
         return { tone: 'warning', message: 'Their version of the app cannot record location.' };
+      // The office's rule working, not a fault: said so the last position on
+      // the map is read as from the end of the working day.
+      case 'OFF_HOURS':
+        return {
+          tone: 'advice',
+          message: `Location is shared only during office hours (${OFFICE_HOURS_TEXT}), and never on weekends or holidays.`,
+        };
       default:
         return { tone: 'warning', message: 'Their phone is not recording location.' };
     }

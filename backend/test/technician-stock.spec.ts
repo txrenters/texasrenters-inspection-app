@@ -153,6 +153,8 @@ function harness() {
       requestKey: input.requestKey,
       inspectionId: input.inspectionId,
       technicianId: input.technicianId,
+      fromPlaceId: input.fromPlaceId ?? null,
+      toPlaceId: input.toPlaceId ?? null,
       fromPlace: input.fromPlaceId ? { name: places.find((place) => place.id === input.fromPlaceId)!.name } : null,
       toPlace: input.toPlaceId ? { name: places.find((place) => place.id === input.toPlaceId)!.name } : null,
       lines: input.lines.map((line) => ({ quantity: line.quantity, item: items.get(line.itemId) })),
@@ -160,7 +162,7 @@ function harness() {
     });
   });
   const service = new TechnicianStockService(prisma as never, { write } as never);
-  return { service, write, posted, slips, levels, asks, askLines, audits, keeps };
+  return { service, prisma, write, posted, slips, levels, asks, askLines, audits, keeps };
 }
 
 const take = (over: Partial<RecordJobStockInput> = {}): RecordJobStockInput => ({ kind: 'WITHDRAWAL', placeId: MY_TRUCK, lines: [{ itemId: FILTER, quantity: 2 }], clientRequestId: 'phone-key-0001', ...over });
@@ -191,6 +193,41 @@ describe('what the phone is shown', () => {
   });
 });
 
+describe('a slip sent twice at once (2026-11-24)', () => {
+  /**
+   * The phone saves a slip before sending it, and its queue may send that copy
+   * while the first send is still out. Both pass the key check before either is
+   * written; the one that loses sees the other's effect and was refused, so the
+   * phone said "Not recorded" for a slip that is on the books.
+   */
+  it('answers the copy that lost the race as recorded, for a withdrawal', async () => {
+    const { service, prisma, write } = harness();
+    await service.record(ana, JOB, take());
+    // The second copy's key check ran before the first was written.
+    prisma.stockSlip.findFirst.mockResolvedValueOnce(null);
+    write.mockRejectedValueOnce(new ApplicationError(409, 'STOCK_SLIP_NOT_READY', 'Only 8 of FLT-0003 are there.'));
+
+    await expect(service.record(ana, JOB, take())).resolves.toMatchObject({ taken: [expect.objectContaining({ itemId: FILTER, quantity: 2 })] });
+  });
+
+  it('answers the copy that lost the race as recorded, for a return', async () => {
+    const { service, prisma, write } = harness();
+    await service.record(ana, JOB, take());
+    await service.record(ana, JOB, bringBack({ lines: [{ itemId: FILTER, quantity: 2 }] }));
+    prisma.stockSlip.findFirst.mockResolvedValueOnce(null);
+
+    // The first copy already put both back, so this one's own check finds none taken -- and it is the same slip.
+    await expect(service.record(ana, JOB, bringBack({ lines: [{ itemId: FILTER, quantity: 2 }] }))).resolves.toMatchObject({ taken: [] });
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('still refuses a slip that was never recorded', async () => {
+    const { service, write } = harness();
+    write.mockRejectedValueOnce(new ApplicationError(409, 'STOCK_SLIP_NOT_READY', 'Only 10 of FLT-0003 are there.'));
+    await expect(service.record(ana, JOB, take({ lines: [{ itemId: FILTER, quantity: 11 }] }))).rejects.toMatchObject({ status: 409 });
+  });
+});
+
 describe('taking stock for a job', () => {
   it('posts the office\'s own withdrawal: this technician, this job, from the truck', async () => {
     const { service, posted } = harness();
@@ -199,7 +236,7 @@ describe('taking stock for a job', () => {
     expect(posted).toHaveLength(1);
     expect(posted[0]!.user).toBe(ana);
     expect(posted[0]!.input).toEqual({ kind: 'WITHDRAWAL', technicianId: ana.id, fromPlaceId: MY_TRUCK, toPlaceId: null, inspectionId: JOB, note: null, requestKey: `phone:${ana.id}:phone-key-0001`, lines: [{ itemId: FILTER, quantity: 2 }], askId: null });
-    expect(stock.slips).toEqual([{ id: expect.any(String), number: 'WD-0001', kind: 'WITHDRAWAL', at: expect.any(String), place: 'Truck 1', reversed: false, lines: [{ itemId: FILTER, code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', quantity: 2 }] }]);
+    expect(stock.slips).toEqual([{ id: expect.any(String), number: 'WD-0001', kind: 'WITHDRAWAL', at: expect.any(String), place: 'Truck 1', placeId: MY_TRUCK, reversed: false, lines: [{ itemId: FILTER, code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each', quantity: 2 }] }]);
     expect(stock.taken).toEqual([expect.objectContaining({ itemId: FILTER, quantity: 2 })]);
     expect(stock.stock.find((item) => item.itemId === FILTER)!.quantity).toBe(8);
   });
@@ -239,6 +276,28 @@ describe('taking stock for a job', () => {
 });
 
 describe('bringing stock back', () => {
+  /**
+   * 2026-11-24, found in review: capped across every truck, a technician could
+   * take from the shared truck and "put back" into their own -- a move between
+   * trucks from the phone, which stays with the office.
+   */
+  it('puts back only into the truck it was taken from', async () => {
+    const { service, posted } = harness();
+    await service.record(ana, JOB, take({ placeId: SHARED_TRUCK, lines: [{ itemId: BATTERY, quantity: 2 }] }));
+
+    await expect(service.record(ana, JOB, bringBack({ placeId: MY_TRUCK, lines: [{ itemId: BATTERY, quantity: 2 }] }))).rejects.toMatchObject({
+      status: 409,
+      code: 'STOCK_SLIP_NOT_READY',
+      message: 'You took 0 of PRT-0001 from Truck 1 for this job, so 2 cannot go back into it.',
+    });
+    expect(posted).toHaveLength(1);
+
+    const after = await service.record(ana, JOB, bringBack({ clientRequestId: 'phone-key-0003', placeId: SHARED_TRUCK, lines: [{ itemId: BATTERY, quantity: 2 }] }));
+    expect(posted[1]!.input).toMatchObject({ kind: 'RETURN', toPlaceId: SHARED_TRUCK });
+    expect(after.slips.map((slip) => slip.placeId)).toEqual([SHARED_TRUCK, SHARED_TRUCK]);
+    expect(after.taken).toEqual([]);
+  });
+
   it('puts back into the truck what was taken for the job, and no more', async () => {
     const { service, posted } = harness();
     await service.record(ana, JOB, take({ lines: [{ itemId: FILTER, quantity: 3 }] }));
@@ -248,7 +307,7 @@ describe('bringing stock back', () => {
     expect(after.slips.map((slip) => slip.number)).toEqual(['RT-0002', 'WD-0001']);
     expect(after.taken).toEqual([expect.objectContaining({ itemId: FILTER, quantity: 2 })]);
 
-    await expect(service.record(ana, JOB, bringBack({ clientRequestId: 'phone-key-0003', lines: [{ itemId: FILTER, quantity: 3 }] }))).rejects.toMatchObject({ status: 409, message: 'You took 2 of FLT-0003 for this job, so 3 cannot go back.' });
+    await expect(service.record(ana, JOB, bringBack({ clientRequestId: 'phone-key-0003', lines: [{ itemId: FILTER, quantity: 3 }] }))).rejects.toMatchObject({ status: 409, message: 'You took 2 of FLT-0003 from Truck 1 for this job, so 3 cannot go back into it.' });
     // Something never taken for this job: a truck is not filled from the phone.
     await expect(service.record(ana, JOB, bringBack({ clientRequestId: 'phone-key-0004', lines: [{ itemId: BATTERY, quantity: 1 }] }))).rejects.toMatchObject({ status: 409, code: 'STOCK_SLIP_NOT_READY' });
     await expect(service.record(ana, OTHER_JOB, bringBack({ clientRequestId: 'phone-key-0005' }))).rejects.toMatchObject({ status: 409 });

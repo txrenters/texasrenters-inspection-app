@@ -1,11 +1,12 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { phoneCountProblem, readPhoneCount, type PhoneCatalogItem, type PhoneCountLine, type PhoneFoundItem } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { ItemScanner } from '@/src/components/ItemScanner';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Badge, Button, Card } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useTruckCountActions, useTruckCountLocal, useTruckCounts } from '@/src/features/queries';
@@ -173,7 +174,12 @@ export default function TruckCountScreen() {
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-5 pb-10 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        // A style, not classes: the list adds the keyboard's height to this padding on Android.
+        contentContainerStyle={{ gap: 20, paddingBottom: 40, paddingTop: 8 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
         <View className="mx-5 gap-1">
           <Text className="text-lg font-semibold text-foreground">{count.place.name}</Text>
           <Text className="text-sm text-muted-foreground">
@@ -331,7 +337,7 @@ export default function TruckCountScreen() {
             </View>
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
       {scanning && !handedIn ? (
         <ItemScanner
           hint="A scan finds the item and asks how many; it does not add one."

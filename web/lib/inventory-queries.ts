@@ -6,10 +6,12 @@ import type {
   StockImportDone,
   StockImportInput,
   CancelStockCountInput,
+  DeleteStockItemInput,
   InventoryMonitoring,
   OpeningBalanceInput,
   PostStockCountInput,
   PostStockSlipInput,
+  RemoveStockInput,
   ReverseMovementInput,
   ReverseStockSlipInput,
   SaveStockCategoryInput,
@@ -22,6 +24,7 @@ import type {
   StockCountChoices,
   StockCountDetail,
   StockCountList,
+  StockItemDeletion,
   StockItemDetail,
   StockList,
   StockPlaces,
@@ -59,6 +62,7 @@ export const inventoryKeys = {
   slipChoices: (technicianId: string | null) => ['inventory', 'slip-choices', technicianId] as const,
   truckAsks: ['inventory', 'truck-asks'] as const,
   keepLevels: (placeId: string) => ['inventory', 'keep', placeId] as const,
+  deletion: (itemId: string) => ['inventory', 'deletion', itemId] as const,
 };
 
 /**
@@ -97,6 +101,21 @@ export function useTruckKeepEdits() {
 
 export function useStock() {
   return useQuery({ queryKey: inventoryKeys.stock, queryFn: ({ signal }) => api<StockList>(`${BASE}/items`, { signal }), ...KEPT });
+}
+
+/**
+ * What deleting an item would do (2026-11-24): read each time the dialog
+ * opens and never kept, since what names the item can change any minute.
+ */
+export function useStockItemDeletion(itemId: string) {
+  return useQuery({
+    queryKey: inventoryKeys.deletion(itemId),
+    queryFn: ({ signal }) => api<StockItemDeletion>(`${BASE}/items/${encodeURIComponent(itemId)}/deletion`, { signal }),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 }
 
 export function useStockItem(itemId: string) {
@@ -226,7 +245,7 @@ export function useInventoryEdits() {
     void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] && JSON.stringify(query.queryKey) !== saved });
   };
   const itemSaved = (detail: StockItemDetail) => settle<StockItemDetail>(inventoryKeys.item(detail.item.id))(detail);
-  const send = <T,>(path: string, method: 'POST' | 'PATCH', input: object) => api<T>(`${BASE}${path}`, { method, body: JSON.stringify(input) });
+  const send = <T,>(path: string, method: 'POST' | 'PATCH' | 'DELETE', input: object) => api<T>(`${BASE}${path}`, { method, body: JSON.stringify(input) });
 
   return {
     createItem: useMutation({ mutationFn: (input: SaveStockItemInput) => send<StockItemDetail>('/items', 'POST', input), onSuccess: itemSaved }),
@@ -243,6 +262,19 @@ export function useInventoryEdits() {
       mutationFn: ({ movementId, input }: { movementId: string; input: ReverseMovementInput }) =>
         send<StockItemDetail>(`/movements/${encodeURIComponent(movementId)}/reverse`, 'POST', input),
       onSuccess: itemSaved,
+    }),
+    // Stock off the books with a reason (2026-11-24): the item's page as it now is.
+    removeStock: useMutation({
+      mutationFn: ({ itemId, input }: { itemId: string; input: RemoveStockInput }) => send<StockItemDetail>(`/items/${encodeURIComponent(itemId)}/remove`, 'POST', input),
+      onSuccess: itemSaved,
+    }),
+    // An item code deleted (2026-11-24): the list as it now is, and the item's own page forgotten.
+    deleteItem: useMutation({
+      mutationFn: ({ itemId, input }: { itemId: string; input: DeleteStockItemInput }) => send<StockList>(`/items/${encodeURIComponent(itemId)}`, 'DELETE', input),
+      onSuccess: (list: StockList, { itemId }) => {
+        client.removeQueries({ queryKey: inventoryKeys.item(itemId) });
+        settle<StockList>(inventoryKeys.stock)(list);
+      },
     }),
     createCategory: useMutation({ mutationFn: (input: SaveStockCategoryInput) => send<StockList>('/categories', 'POST', input), onSuccess: settle<StockList>(inventoryKeys.stock) }),
     updateCategory: useMutation({

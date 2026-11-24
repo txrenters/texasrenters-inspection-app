@@ -1,11 +1,13 @@
 import { Stack, router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { runningLow, type MyTruckItem } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { ItemScanner } from '@/src/components/ItemScanner';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Badge, Button, Card } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useMyTruckLocal, useMyTrucks, useJobStockActions } from '@/src/features/queries';
@@ -50,6 +52,8 @@ export default function MyTruckScreen() {
   const [chosen, setChosen] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [scanning, setScanning] = useState(false);
+  // The bar pinned at the foot clears the home indicator, measured (2026-11-24): BelowHeader pads only the top.
+  const insets = useSafeAreaInsets();
   const [said, setSaid] = useState<{ words: string; bad: boolean } | null>(null);
   const [found, setFound] = useState<string | null>(null);
 
@@ -107,7 +111,12 @@ export default function MyTruckScreen() {
   return (
     <BelowHeader className="bg-background">
       {header}
-      <ScrollView contentContainerClassName="gap-4 pb-6 pt-2" contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        // A style, not classes: the list adds the keyboard's height to this padding on Android.
+        contentContainerStyle={{ gap: 16, paddingBottom: 24, paddingTop: 8 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
         <View className="mx-5 gap-0.5">
           <Text className="text-2xl font-bold text-foreground">{truck.name}</Text>
           <Text className="text-sm text-muted-foreground">
@@ -230,9 +239,9 @@ export default function MyTruckScreen() {
             ))}
           </Card>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
-      <View className="flex-row gap-3 border-t border-border bg-background px-5 pb-6 pt-3">
+      <View className="flex-row gap-3 border-t border-border bg-background px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 24) }}>
         <Button className="flex-1" label="Scan to find" onPress={() => setScanning(true)} variant="secondary" />
         <Button className="flex-1" label="Ask for more" onPress={ask} />
       </View>
