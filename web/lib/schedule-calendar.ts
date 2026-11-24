@@ -203,7 +203,15 @@ function workRow(work: JobberDayOtherWork): JobberDayRow {
     technicianId: work.technicianId ?? null,
     technicianIds: work.technicianIds ?? [],
     here: null,
-    jobber: { startAt: work.startAt, technician: work.technician, title: work.title, completed: Boolean(work.completed) },
+    jobber: {
+      startAt: work.startAt,
+      technician: work.technician,
+      title: work.title,
+      completed: Boolean(work.completed),
+      jobNumber: work.jobNumber ?? null,
+      details: work.details ?? null,
+      address: work.address ?? null,
+    },
     // Nothing to compare: it is Jobber's own work, with no inspection here to differ from.
     state: 'MATCHES',
     differences: [],

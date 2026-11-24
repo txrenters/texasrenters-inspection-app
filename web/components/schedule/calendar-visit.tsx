@@ -97,6 +97,8 @@ export function CalendarVisit({
   const start = visitStart(row);
   const time = businessTimeOfDay(start);
   const person = named !== undefined ? named : personOf(row);
+  // Everyone Jobber has on its own work, as its popup lists them; one person otherwise.
+  const team: (string | null)[] = work && row.jobber?.technician?.includes(', ') ? row.jobber.technician.split(', ') : [person];
   const differs = row.state !== 'MATCHES';
   const warning = jobberDayTone(row.state);
   // The other kinds of work in its job, drawn on this one card (2026-11-20).
@@ -147,6 +149,10 @@ export function CalendarVisit({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] p-0">
+        {work ? (
+          <JobberWorkDetails date={date} done={done} row={row} team={team} time={time} />
+        ) : (
+          <>
         <div className={cn('border-l-4 px-4 pt-3 pb-3', tone.bar)}>
           <p className="text-muted-foreground text-xs">
             {work
@@ -157,6 +163,16 @@ export function CalendarVisit({
           {work && label !== row.property ? <p className="text-muted-foreground mt-0.5 text-xs">{row.property}</p> : null}
           {row.job ? <p className="text-muted-foreground mt-0.5 text-xs">{row.job.title}</p> : null}
         </div>
+        {/* What Jobber's popup shows under Details (2026-11-25): the job, and what to do there. */}
+        {row.jobber?.jobNumber || row.jobber?.details ? (
+          <div className="border-t px-4 py-3 text-sm">
+            <p className="text-muted-foreground text-xs font-medium">Details</p>
+            {row.jobber.jobNumber && !row.job ? <p className="mt-0.5 font-medium">Job #{row.jobber.jobNumber}</p> : null}
+            {row.jobber.details ? (
+              <p className="text-muted-foreground mt-1 line-clamp-4 text-xs whitespace-pre-line">{row.jobber.details}</p>
+            ) : null}
+          </div>
+        ) : null}
         <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 border-t px-4 py-3 text-sm">
           {row.job ? (
             <>
@@ -165,10 +181,20 @@ export function CalendarVisit({
             </>
           ) : null}
           <dt className="text-muted-foreground">Team</dt>
-          <dd className="flex min-w-0 items-center gap-2">
-            <PersonDisc name={person} />
-            <span className="truncate">{person ?? 'Unassigned'}</span>
+          <dd className="flex min-w-0 flex-col gap-1">
+            {team.map((name, index) => (
+              <span className="flex min-w-0 items-center gap-2" key={name ?? index}>
+                <PersonDisc name={name} />
+                <span className="truncate">{name ?? 'Unassigned'}</span>
+              </span>
+            ))}
           </dd>
+          {row.jobber?.address ? (
+            <>
+              <dt className="text-muted-foreground">Location</dt>
+              <dd>{row.jobber.address}</dd>
+            </>
+          ) : null}
           <dt className="text-muted-foreground">When</dt>
           <dd>
             {weekdayOf(date)}, {formatScheduledDate(date)} · {time ?? 'Anytime'}
@@ -203,7 +229,103 @@ export function CalendarVisit({
             </Button>
           )}
         </div>
+          </>
+        )}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Jobber work's popup, laid out as Jobber's own visit popup (the office,
+ * 2026-11-25: "we should copy jobber when clicking the job"): the title,
+ * "Visit", Completed, Details with the job, Team, Location, Start. Read-only:
+ * the Completed box shows Jobber's tick and changes nothing, and there is no
+ * Edit -- the visit is changed in Jobber.
+ */
+function JobberWorkDetails({
+  row,
+  date,
+  done,
+  team,
+  time,
+}: {
+  row: JobberDayRow;
+  date: string;
+  done: boolean;
+  team: (string | null)[];
+  time: string | null;
+}) {
+  const jobber = row.jobber;
+  return (
+    <>
+      <div className="px-4 pt-3 pb-3">
+        <p className="text-heading leading-snug font-semibold">{jobber?.title ?? row.property}</p>
+        <p className="text-muted-foreground text-xs">Visit</p>
+        <p className="mt-2 flex items-center gap-2 text-sm">
+          <span
+            aria-hidden
+            className={cn(
+              'inline-flex size-4 items-center justify-center rounded-sm border',
+              done ? 'border-success bg-success text-background' : 'border-muted-foreground/50',
+            )}
+          >
+            {done ? <CheckIcon className="size-3" /> : null}
+          </span>
+          {done ? 'Completed' : 'Not completed'}
+        </p>
+      </div>
+      <dl className="space-y-3 border-t px-4 py-3 text-sm">
+        {jobber?.jobNumber || jobber?.details ? (
+          <div>
+            <dt className="font-semibold">Details</dt>
+            <dd className="mt-0.5">
+              <p>
+                {row.property}
+                {jobber.jobNumber ? (
+                  <>
+                    {' - '}
+                    <span>Job #{jobber.jobNumber}</span>
+                  </>
+                ) : null}
+              </p>
+              {jobber.details ? (
+                <p className="text-muted-foreground mt-1 line-clamp-4 whitespace-pre-line">{jobber.details}</p>
+              ) : null}
+            </dd>
+          </div>
+        ) : null}
+        <div>
+          <dt className="font-semibold">Team</dt>
+          <dd className="mt-1 flex flex-wrap gap-1.5">
+            {team.map((name, index) => (
+              <span className="bg-muted flex min-w-0 items-center gap-1.5 rounded-full py-0.5 pr-2.5 pl-0.5" key={name ?? index}>
+                <PersonDisc name={name} />
+                <span className="truncate">{name ?? 'Unassigned'}</span>
+              </span>
+            ))}
+          </dd>
+        </div>
+        {jobber?.address ? (
+          <div>
+            <dt className="font-semibold">Location</dt>
+            <dd className="mt-0.5">{jobber.address}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt className="font-semibold">Start</dt>
+          <dd className="mt-0.5">
+            <p>{formatScheduledDate(date)}</p>
+            <p>{time ?? 'Anytime'}</p>
+          </dd>
+        </div>
+      </dl>
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-3">
+        <span className="text-muted-foreground text-xs">From Jobber · change it there</span>
+        <Button asChild size="sm" variant="outline">
+          <Link href={`/schedule?mode=compare&view=day&date=${date}`}>See it against Jobber</Link>
+        </Button>
+      </div>
+    </>
   );
 }

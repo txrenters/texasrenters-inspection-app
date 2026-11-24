@@ -257,6 +257,25 @@ describe('a day against Jobber', () => {
     });
   });
 
+  it("carries what Jobber's visit popup shows: the job number, the Details and the whole address (2026-11-25)", () => {
+    const jobberSide = {
+      title: '74 San Simeon Dr - 74 San Simeon - Zone 3 - General Maintenance - #44524',
+      instructions: 'Hose bib on the left side of house needs to be replaced.',
+      job: { id: 'job-1', jobNumber: 20907 },
+      property: { id: 'jp-7', address: { street1: '74 San Simeon Dr', street2: null, city: 'Manvel', province: 'TX', postalCode: '77578-3287' } },
+    };
+    const result = day({
+      visits: [
+        visit({ payload: jobberSide }),
+        visit({ jobberVisitId: 'v-7', inspectionId: null, status: 'SKIPPED_NOT_SYNCED', payload: jobberSide }),
+      ],
+    });
+
+    const extras = { jobNumber: '20907', details: 'Hose bib on the left side of house needs to be replaced.', address: '74 San Simeon Dr, Manvel, TX 77578-3287' };
+    expect(result.rows[0].jobber).toMatchObject(extras);
+    expect(result.otherWork[0]).toMatchObject(extras);
+  });
+
   it('reads a Jobber visit of the day whose inspection is on another day here', () => {
     const result = day({
       inspections: [],
