@@ -1,6 +1,6 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { haversineMeters, normaliseMotion } from '@texasrenters/shared';
+import { haversineMeters, isWithinOfficeHours, normaliseMotion } from '@texasrenters/shared';
 import { AppState, Platform } from 'react-native';
 
 import { readPowerState } from '../lib/power-state';
@@ -17,13 +17,20 @@ import {
 } from './tracking-profile';
 
 /**
- * Recording where a technician is, the whole time they are signed in.
+ * Recording where a technician is, during office hours while they are signed in.
  *
  * On the road as well as at the property: the office plans routes and times
  * visits from this trail, and a trail with every drive missing measures
  * nothing. So recording carries on with the app minimised, with the screen
  * locked, and -- on Android -- after the app is swiped away. Signing out stops
  * it, and so does the pause in Settings.
+ *
+ * **Office hours only** (`isWithinOfficeHours`: Monday to Friday, 7 AM to 6 PM
+ * Texas time, never on a weekend or a federal holiday -- the office,
+ * 2026-11-24). It is never started outside them, the task stops itself on the
+ * first fix after they end, and a fix taken outside them is dropped before it
+ * is queued. It starts again the next time the app is opened inside them:
+ * neither platform lets an app start recording from the background.
  *
  * Never hidden. Android shows its foreground-service notification for as long
  * as recording runs, and iOS its blue location indicator whenever the app is
@@ -153,7 +160,8 @@ export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   showsBackgroundLocationIndicator: true,
   foregroundService: {
     notificationTitle: 'Recording your location',
-    notificationBody: 'TexasRenters Inspect records your location while you are signed in.',
+    notificationBody:
+      'TexasRenters Inspect records your location during office hours, Monday to Friday, 7 AM to 6 PM.',
     /**
      * Kept running when the app is swiped away.
      *
@@ -291,6 +299,22 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
   if (!locations?.length) return;
 
+  await recordDelivered(locations);
+
+  // Office hours have ended: the recording stops here rather than waiting for
+  // the app to be opened. Stopping is allowed from the background on both
+  // platforms; starting is not, which is why it starts again only when the app
+  // is next opened inside office hours.
+  if (!isWithinOfficeHours(Date.now())) await stopShiftTracking().catch(() => undefined);
+});
+
+/** What the task does with a delivered batch: keep, queue and send the office-hours part. */
+async function recordDelivered(batch: readonly Location.LocationObject[]) {
+  // Only fixes taken inside office hours. A batch can straddle the start or
+  // the end of them, or carry a fix the OS cached from before they began.
+  const locations = batch.filter((location) => isWithinOfficeHours(location.timestamp));
+  if (!locations.length) return;
+
   // At most once a minute, not once per batch: batches come once a second on
   // an iPhone in a car, and the charge cannot have moved between two of them.
   // Null when the phone will not say, which is a different fact from "nearly
@@ -318,7 +342,7 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   // discards a repeat by `deviceFixId`, and with no usable session the send
   // simply leaves them for the app.
   await sendRecordedFixes();
-});
+}
 
 /**
  * How the shift is being recorded.
@@ -331,9 +355,13 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
  */
 export type ShiftMode = 'BACKGROUND' | 'FOREGROUND_ONLY';
 
+/**
+ * `OFF_HOURS` is not a failure: outside office hours recording is not started
+ * at all (see the module note).
+ */
 export type ShiftStartResult =
   | { started: true; mode: ShiftMode }
-  | { started: false; reason: 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' };
+  | { started: false; reason: 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'OFF_HOURS' };
 
 /**
  * The foreground watcher, when the background task is not available.
@@ -407,6 +435,13 @@ export async function startShiftTracking(): Promise<ShiftStartResult> {
 }
 
 async function beginShiftTracking(): Promise<ShiftStartResult> {
+  // First, before any permission is asked: outside office hours there is
+  // nothing to ask for. Anything left running from earlier is stopped.
+  if (!isWithinOfficeHours(Date.now())) {
+    await stopShiftTracking();
+    return { started: false, reason: 'OFF_HOURS' };
+  }
+
   if (!(await Location.hasServicesEnabledAsync().catch(() => false)))
     return { started: false, reason: 'UNAVAILABLE' };
 
@@ -470,6 +505,9 @@ async function watchInForeground() {
       distanceInterval: FIX_DISTANCE_M,
     },
     (location) => {
+      // Office hours ended with the app on screen: nothing more is recorded,
+      // and the two-minute check in `ShiftAutoStart` stops this watch.
+      if (!isWithinOfficeHours(location.timestamp)) return;
       // Queued, then sent: the same path the background task uses, so a fix
       // recorded in either mode reaches the office the same way -- including
       // the charge, which is read per fix here because a foreground watch
@@ -631,6 +669,8 @@ export async function isShiftTrackingActive() {
  * options are out of date.
  */
 export async function ensureShiftTracking(): Promise<ShiftStartResult | null> {
+  // Office hours have ended (or not begun): stopped, and said why.
+  if (!isWithinOfficeHours(Date.now())) return startShiftTracking();
   // `startShiftTracking` re-checks permissions itself and reports the reason,
   // so this stays a thin wrapper rather than a second copy of that logic.
   if (!(await isShiftTrackingActive())) return startShiftTracking();
