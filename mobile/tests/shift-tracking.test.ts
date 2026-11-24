@@ -1,5 +1,5 @@
 /**
- * Recording where a technician is, the whole time they are signed in.
+ * Recording where a technician is, during office hours while they are signed in.
  *
  * Three field reports shaped this file:
  *
@@ -25,6 +25,9 @@ import {
   startShiftTracking,
   stopShiftTracking,
 } from '../src/location/shift-tracking';
+import { runClockInOfficeHours, setClock, WEEKEND_NOW } from './office-hours-clock';
+
+runClockInOfficeHours();
 
 const mockHasServices = jest.fn();
 const mockRequestForeground = jest.fn();
@@ -624,5 +627,80 @@ describe('the rate, following the technician (2026-10-06)', () => {
   it('is not settled by a backlog delivered after an outage', async () => {
     await recordLocationsTask({ data: { locations: [located(60), located(40)] } });
     expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Office hours only (the office, 2026-11-24): Monday to Friday, 7 AM to 6 PM
+ * Texas time, never on a weekend or a holiday. Nothing is recorded or sent
+ * outside them, and the recording stops itself when they end.
+ */
+describe('outside office hours', () => {
+  const at = (iso: string) => ({
+    coords: { latitude: 29.5516, longitude: -95.1449, accuracy: 6, heading: null, speed: null },
+    timestamp: Date.parse(iso),
+  });
+
+  it('starts nothing at the weekend, and asks for no permission', async () => {
+    setClock(WEEKEND_NOW);
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: false, reason: 'OFF_HOURS' });
+    expect(mockRequestForeground).not.toHaveBeenCalled();
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(mockWatchPosition).not.toHaveBeenCalled();
+  });
+
+  it('stops a recording still running when the check finds the day is over', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+    setClock(WEEKEND_NOW);
+
+    await expect(ensureShiftTracking()).resolves.toEqual({ started: false, reason: 'OFF_HOURS' });
+    expect(mockStopUpdates).toHaveBeenCalledWith(TASK);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('records nothing the task is handed after 6 PM, and stops itself', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+    setClock(Date.parse('2026-11-25T00:05:00.000Z')); // Tuesday 6:05 PM in Texas
+
+    await recordLocationsTask({ data: { locations: [at('2026-11-25T00:04:00.000Z')] } });
+
+    expect(mockAppendFixes).not.toHaveBeenCalled();
+    expect(mockSendRecorded).not.toHaveBeenCalled();
+    expect(mockStopUpdates).toHaveBeenCalledWith(TASK);
+  });
+
+  it('keeps the part of a batch from before 6 PM, then stops', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+    setClock(Date.parse('2026-11-25T00:00:30.000Z')); // Tuesday 6:00:30 PM
+
+    await recordLocationsTask({
+      data: { locations: [at('2026-11-24T23:59:50.000Z'), at('2026-11-25T00:00:10.000Z')] },
+    });
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([
+      expect.objectContaining({ recordedAt: '2026-11-24T23:59:50.000Z' }),
+    ]);
+    expect(mockStopUpdates).toHaveBeenCalledWith(TASK);
+  });
+
+  it('keeps recording through office hours', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+
+    await recordLocationsTask({ data: { locations: [at('2026-11-24T15:59:00.000Z')] } });
+
+    expect(mockAppendFixes).toHaveBeenCalled();
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('does not record from the foreground watcher once the day is over', async () => {
+    mockStartUpdates.mockRejectedValue(new Error('no background mode'));
+    await startShiftTracking();
+    const onFix = mockWatchPosition.mock.calls[0][1] as (location: unknown) => void;
+
+    onFix(at('2026-11-25T00:30:00.000Z')); // Tuesday 6:30 PM
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockAppendFixes).not.toHaveBeenCalled();
   });
 });

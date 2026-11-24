@@ -46,7 +46,10 @@ import {
   readLocationQueue,
   writeLocationQueue,
 } from '../src/location/location-storage';
+import { runClockInOfficeHours, setClock, WEEKEND_NOW } from './office-hours-clock';
 /* eslint-enable import/first */
+
+runClockInOfficeHours();
 
 const fix = (id: string, secondsAgo = 30): QueuedFix => ({
   id,
@@ -241,5 +244,35 @@ describe('the session, from a pocket', () => {
     expect(mockRequestJson).not.toHaveBeenCalled();
     const [kept] = await readLocationQueue();
     expect(kept?.nextAttemptAt).toBeUndefined();
+  });
+});
+
+/**
+ * Office hours only (the office, 2026-11-24): Monday to Friday, 7 AM to 6 PM
+ * Texas time, never on a weekend or a holiday.
+ */
+describe('outside office hours', () => {
+  it('never sends a fix taken at the weekend, and drops it from the queue', async () => {
+    // Left by a build that recorded all weekend, before this one arrived.
+    const friday = { ...fix('friday'), recordedAt: '2026-11-20T22:00:00.000Z' }; // Fri 4 PM
+    const saturday = { ...fix('saturday'), recordedAt: '2026-11-21T18:00:00.000Z' }; // Sat noon
+    const evening = { ...fix('evening'), recordedAt: '2026-11-24T01:30:00.000Z' }; // Mon 7:30 PM
+    await writeLocationQueue([saturday, friday, evening]);
+
+    await drainLocationQueue();
+
+    const body = JSON.parse((mockRequestJson.mock.calls[0][1] as { body: string }).body);
+    expect(body.fixes.map((each: { deviceFixId: string }) => each.deviceFixId)).toEqual(['friday']);
+    expect(await readLocationQueue()).toEqual([]);
+  });
+
+  it('sends nothing at all when every queued fix is from outside them', async () => {
+    setClock(WEEKEND_NOW);
+    await writeLocationQueue([{ ...fix('saturday'), recordedAt: '2026-11-21T18:00:00.000Z' }]);
+
+    await drainLocationQueue();
+
+    expect(mockRequestJson).not.toHaveBeenCalled();
+    expect(await readLocationQueue()).toEqual([]);
   });
 });

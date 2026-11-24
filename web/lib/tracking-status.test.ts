@@ -43,6 +43,12 @@ describe('what is worth telling the office', () => {
     expect(problem?.message).toMatch(message);
   });
 
+  it('reads a phone stopped for office hours as the rule, not a fault', () => {
+    const problem = trackingProblem({ ...healthy, recording: 'OFF', stoppedBecause: 'OFF_HOURS' });
+    expect(problem?.tone).toBe('advice');
+    expect(problem?.message).toMatch(/only during office hours \(Monday to Friday, 7 AM to 6 PM\)/);
+  });
+
   it('warns that drives are lost when the phone records only on screen', () => {
     expect(trackingProblem({ ...healthy, recording: 'FOREGROUND_ONLY' })).toMatchObject({
       tone: 'warning',

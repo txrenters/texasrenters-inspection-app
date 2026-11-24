@@ -19,6 +19,12 @@ import { ensureShiftTracking, startShiftTracking, stopShiftTracking } from './sh
  * at every visit, with the app minimised or the screen locked. Signing out
  * stops it.
  *
+ * **During office hours only** (Monday to Friday, 7 AM to 6 PM Texas time; not
+ * on weekends or holidays). Outside them `startShiftTracking` and
+ * `ensureShiftTracking` start nothing and stop what is running, so the
+ * two-minute check below is also what ends a recording at 6 PM with the app on
+ * screen, and opening the app is what starts it again in the morning.
+ *
  * Being signed in is the whole condition: the repository refuses any account
  * that is not a technician and signs it out again, so an administrator never
  * reaches this at all.

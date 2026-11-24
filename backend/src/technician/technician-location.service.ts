@@ -62,16 +62,21 @@ export class TechnicianLocationService {
     const usable = usableLocationFixes(batch.fixes);
     const rejected = batch.fixes.length - usable.length;
 
-    if (rejected)
+    // Fixes taken outside office hours are refused by rule, not by fault: a
+    // phone on an older build sends them all weekend, every few seconds, and a
+    // warning for each would bury the ones that mean something is broken.
+    const faulty = batch.fixes.find((fix) => {
+      const reason = rejectLocationFix(fix);
+      return reason !== null && reason !== 'OUTSIDE_OFFICE_HOURS';
+    });
+    if (faulty)
       this.logger.warn({
         event: 'location_fixes_rejected',
         technicianId: user.id,
         rejected,
         // First reason only: a batch usually fails for one cause, and logging
         // two hundred identical strings buries the rest of the log.
-        reason: rejectLocationFix(
-          batch.fixes.find((fix) => rejectLocationFix(fix) !== null) ?? batch.fixes[0],
-        ),
+        reason: rejectLocationFix(faulty),
       });
 
     if (usable.length)

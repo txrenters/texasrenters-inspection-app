@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
+import { OFFICE_HOURS_TEXT } from '@texasrenters/shared';
 import { useColorScheme } from 'nativewind';
 import {
   BellIcon,
@@ -243,6 +244,15 @@ export default function SettingsScreen() {
           );
         return;
       }
+      // Not a failure: nothing is recorded outside office hours, and the switch
+      // stays on so it starts by itself when the app is opened inside them.
+      if (result.reason === 'OFF_HOURS') {
+        Alert.alert(
+          'Outside office hours',
+          `Your location is shared only during office hours: ${OFFICE_HOURS_TEXT}, Texas time. Never on weekends or holidays. It starts again by itself when you open the app during office hours.`,
+        );
+        return;
+      }
       // Named, not generic. "Location unavailable" sends somebody to the wrong
       // settings screen; each of these is fixed in a different place.
       Alert.alert(
@@ -294,7 +304,7 @@ export default function SettingsScreen() {
             iconClassName="text-chart-2"
             iconBackground="bg-chart-2/15"
             title="Share my location"
-            description="Records your location for dispatch the whole time you are signed in — on the road and at every visit, with the app minimised too."
+            description={`Records your location for dispatch during office hours only (${OFFICE_HOURS_TEXT}) — on the road and at every visit, with the app minimised too. Never on weekends or holidays.`}
             value={recording}
             onValueChange={(next) => void toggleShift(next)}
           />

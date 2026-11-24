@@ -7,11 +7,11 @@ import {
   usableLocationFixes,
 } from '../src/contracts/technician-location.js';
 
-const NOW = Date.parse('2026-08-26T12:00:00.000Z');
+const NOW = Date.parse('2026-08-26T17:00:00.000Z');
 const fix = (over: Partial<Parameters<typeof rejectLocationFix>[0]> = {}) => ({
   latitude: 30.2672,
   longitude: -97.7431,
-  recordedAt: '2026-08-26T11:59:00.000Z',
+  recordedAt: '2026-08-26T16:59:00.000Z',
   ...over,
 });
 
@@ -69,8 +69,8 @@ describe('preparing a batch', () => {
   it('keeps the usable fixes and orders them by when they were taken', () => {
     // A queue drained after an outage arrives in whatever order it was stored;
     // ordering by arrival would draw the route backwards.
-    const later = fix({ recordedAt: '2026-08-26T11:59:00.000Z' });
-    const earlier = fix({ recordedAt: '2026-08-26T11:50:00.000Z' });
+    const later = fix({ recordedAt: '2026-08-26T16:59:00.000Z' });
+    const earlier = fix({ recordedAt: '2026-08-26T16:50:00.000Z' });
     const bad = fix({ latitude: 999 });
 
     expect(usableLocationFixes([later, bad, earlier], NOW).map((item) => item.recordedAt)).toEqual([

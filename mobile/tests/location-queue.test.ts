@@ -8,7 +8,9 @@ import {
   type QueuedFix,
 } from '../src/location/location-queue';
 
-const NOW = Date.parse('2026-08-26T12:00:00.000Z');
+// 5:30 PM on a Wednesday in Texas, so a backlog reaching back 500 minutes is
+// still inside office hours: fixes are sent only from those.
+const NOW = Date.parse('2026-08-26T22:30:00.000Z');
 const at = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
 const fix = (over: Partial<QueuedFix> & { id: string }): QueuedFix => ({
   latitude: 30.2672,
