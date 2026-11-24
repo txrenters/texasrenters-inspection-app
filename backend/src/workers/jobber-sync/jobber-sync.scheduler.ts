@@ -5,6 +5,8 @@ import { withTenant } from '../../database/tenant-context';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberInvoiceFileWorker } from './jobber-invoice-files.worker';
 import { JobberInvoiceWorker } from './jobber-invoice.worker';
+import { JobberMirrorFileWorker } from './jobber-mirror-files.worker';
+import { JobberMirrorWorker } from './jobber-mirror.worker';
 import { JobberOutboundWorker } from './jobber-outbound.worker';
 import { JobberSyncWorker } from './jobber-sync.worker';
 
@@ -37,6 +39,8 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     @Inject(JobberOutboundWorker) private readonly outbound: JobberOutboundWorker,
     @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
     @Inject(JobberInvoiceFileWorker) private readonly invoiceFiles: JobberInvoiceFileWorker,
+    @Inject(JobberMirrorWorker) private readonly mirror: JobberMirrorWorker,
+    @Inject(JobberMirrorFileWorker) private readonly mirrorFiles: JobberMirrorFileWorker,
   ) {}
 
   onModuleInit() {
@@ -85,86 +89,112 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
     this.running = true;
-    // Two independent try blocks, not one. The pull and the push fail for
-    // different reasons, and a pull that dies on an unexpected visit shape must
-    // not also strand completed inspections that Jobber is still owed.
-    //
-    // Both swallow: an unhandled rejection out of a cron callback takes the
-    // process down, and each failure is already recorded — the pull's on the
-    // connection, the push's on the task it belongs to.
-    /**
-     * Every tick runs inside a tenant context, and without one this whole
-     * scheduler is inert.
-     *
-     * Row-level security is on for `Inspection`, `OrganizationMember` and
-     * `InspectionAssignment`. A request gets its context from the interceptor;
-     * a cron has no request, so an unwrapped background run reads an empty
-     * database and reports a clean, busy-looking result — 215 seen, nothing
-     * done. It cost a while to find precisely because nothing errors: the reads
-     * simply return nothing and every branch takes the "no change" path.
-     *
-     * The Propertyware coordinator has always done this. This one did not.
-     */
+    // Reset however the tick ends, so one unexpected throw can never leave
+    // every later tick skipped as "still running".
     try {
-      const result = await withTenant(organizationId, () => this.worker.run(organizationId));
-      this.logger.log(
-        `Jobber sync ${result.correlationId}: ${result.visitsSeen} seen, ${result.imported} imported, ` +
-          `${result.rescheduled} rescheduled, ${result.unmatched} unmatched, ${result.rejected} rejected, ` +
-          `${result.alreadyComplete} already complete, ${result.notSynced} not synced, ` +
-          `${result.assigned} assigned, ${result.completedFromJobber} completed from Jobber, ` +
-          `${result.withdrawn} off Jobber's calendar.`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Jobber sync failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
-    try {
-      // Drained on the same tick rather than its own schedule: the outbox is
-      // small, and one cadence means one place to look when Jobber is quiet.
-      const pushed = await withTenant(organizationId, () => this.outbound.run(organizationId));
-      if (pushed.processed)
+      // Two independent try blocks, not one. The pull and the push fail for
+      // different reasons, and a pull that dies on an unexpected visit shape must
+      // not also strand completed inspections that Jobber is still owed.
+      //
+      // Both swallow: an unhandled rejection out of a cron callback takes the
+      // process down, and each failure is already recorded — the pull's on the
+      // connection, the push's on the task it belongs to.
+      /**
+       * Every tick runs inside a tenant context, and without one this whole
+       * scheduler is inert.
+       *
+       * Row-level security is on for `Inspection`, `OrganizationMember` and
+       * `InspectionAssignment`. A request gets its context from the interceptor;
+       * a cron has no request, so an unwrapped background run reads an empty
+       * database and reports a clean, busy-looking result — 215 seen, nothing
+       * done. It cost a while to find precisely because nothing errors: the reads
+       * simply return nothing and every branch takes the "no change" path.
+       *
+       * The Propertyware coordinator has always done this. This one did not.
+       */
+      try {
+        const result = await withTenant(organizationId, () => this.worker.run(organizationId));
         this.logger.log(
-          `Jobber push: ${pushed.sent} sent, ${pushed.failed} retrying, ${pushed.abandoned} abandoned.`,
+          `Jobber sync ${result.correlationId}: ${result.visitsSeen} seen, ${result.imported} imported, ` +
+            `${result.rescheduled} rescheduled, ${result.unmatched} unmatched, ${result.rejected} rejected, ` +
+            `${result.alreadyComplete} already complete, ${result.notSynced} not synced, ` +
+            `${result.assigned} assigned, ${result.completedFromJobber} completed from Jobber, ` +
+            `${result.withdrawn} off Jobber's calendar.`,
         );
-    } catch (error) {
-      this.logger.error(
-        `Jobber push failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
-    try {
-      // Last, and bounded: the visits are what technicians drive to, so they
-      // never wait behind the invoices' first read (JobberInvoiceWorker).
-      const invoices = await withTenant(organizationId, () => this.invoices.run(organizationId));
-      if (invoices.pages || (invoices.problem && !invoices.skipped))
-        this.logger.log(
-          `Jobber invoices (${invoices.mode}): ${invoices.pages} pages, ${invoices.created} new, ` +
-            `${invoices.updated} updated, ${invoices.readAlone} read alone` +
-            `${invoices.caughtUp ? ', caught up' : ''}${invoices.problem ? `, stopped: ${invoices.problem}` : ''}` +
-            (invoices.paymentPages
-              ? `; payments: ${invoices.paymentPages} pages, ${invoices.paired} paired, ${invoices.unpaired} unpaired` +
-                `${invoices.paymentsCaughtUp ? ', caught up' : ''}`
-              : '') +
-            '.',
+      } catch (error) {
+        this.logger.error(
+          `Jobber sync failed: ${error instanceof Error ? error.message : 'unknown error'}`,
         );
-      // Their files, copied into the console's own storage (2026-11-06, phase 7):
-      // only once the first read is done and Jobber answered, a couple of dozen a
-      // run, so the copying never holds up the invoices.
-      if (invoices.mode === 'changed' && !invoices.problem && !invoices.skipped) {
-        try {
-          const files = await withTenant(organizationId, () => this.invoiceFiles.run(organizationId));
-          if (files.copied || files.failed)
-            this.logger.log(`Jobber invoice files: ${files.copied} copied, ${files.failed} not copied.`);
-        } catch (error) {
-          this.logger.error(
-            `Jobber invoice file copy failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      }
+      try {
+        // Drained on the same tick rather than its own schedule: the outbox is
+        // small, and one cadence means one place to look when Jobber is quiet.
+        const pushed = await withTenant(organizationId, () => this.outbound.run(organizationId));
+        if (pushed.processed)
+          this.logger.log(
+            `Jobber push: ${pushed.sent} sent, ${pushed.failed} retrying, ${pushed.abandoned} abandoned.`,
           );
+      } catch (error) {
+        this.logger.error(
+          `Jobber push failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+      try {
+        // Last, and bounded: the visits are what technicians drive to, so they
+        // never wait behind the invoices' first read (JobberInvoiceWorker).
+        const invoices = await withTenant(organizationId, () => this.invoices.run(organizationId));
+        if (invoices.pages || (invoices.problem && !invoices.skipped))
+          this.logger.log(
+            `Jobber invoices (${invoices.mode}): ${invoices.pages} pages, ${invoices.created} new, ` +
+              `${invoices.updated} updated, ${invoices.readAlone} read alone` +
+              `${invoices.caughtUp ? ', caught up' : ''}${invoices.problem ? `, stopped: ${invoices.problem}` : ''}` +
+              (invoices.paymentPages
+                ? `; payments: ${invoices.paymentPages} pages, ${invoices.paired} paired, ${invoices.unpaired} unpaired` +
+                  `${invoices.paymentsCaughtUp ? ', caught up' : ''}`
+                : '') +
+              '.',
+          );
+        // Their files, copied into the console's own storage (2026-11-06, phase 7):
+        // only once the first read is done and Jobber answered, a couple of dozen a
+        // run, so the copying never holds up the invoices.
+        if (invoices.mode === 'changed' && !invoices.problem && !invoices.skipped) {
+          try {
+            const files = await withTenant(organizationId, () => this.invoiceFiles.run(organizationId));
+            if (files.copied || files.failed)
+              this.logger.log(`Jobber invoice files: ${files.copied} copied, ${files.failed} not copied.`);
+          } catch (error) {
+            this.logger.error(
+              `Jobber invoice file copy failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+          }
+        }
+      } catch (error) {
+        this.logger.error(
+          `Jobber invoice read failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+      // The read-only copy of every Jobber record (2026-11-24): last on the tick,
+      // so visits, the outbox and invoices always have the bucket first.
+      if (this.config.mirrorEnabled) {
+        try {
+          const mirrored = await withTenant(organizationId, () => this.mirror.run(organizationId));
+          if (mirrored.pages || mirrored.kinds.some((k) => k.problem))
+            this.logger.log(
+              `Jobber mirror: ${mirrored.pages} pages; ` +
+                mirrored.kinds
+                  .map((k) => `${k.kind} ${k.mode} ${k.saved} saved${k.caughtUp ? ', caught up' : ''}${k.problem ? `, ${k.problem}` : ''}`)
+                  .join('; ') +
+                '.',
+            );
+          if (!mirrored.skipped && !mirrored.kinds.some((k) => k.problem === 'THROTTLED')) {
+            const files = await withTenant(organizationId, () => this.mirrorFiles.run(organizationId));
+            if (files.copied || files.failed)
+              this.logger.log(`Jobber mirror files: ${files.copied} copied, ${files.failed} not copied.`);
+          }
+        } catch (error) {
+          this.logger.error(`Jobber mirror failed: ${error instanceof Error ? error.message : 'unknown error'}`);
         }
       }
-    } catch (error) {
-      this.logger.error(
-        `Jobber invoice read failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
     } finally {
       this.running = false;
     }

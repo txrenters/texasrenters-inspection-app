@@ -44,6 +44,8 @@ export function getJobberConfig(env: NodeJS.ProcessEnv = process.env): JobberCon
     // Fail closed. Anything that is not exactly "true" leaves the sync off, so
     // a typo cannot start writing Jobber visits into inspections.
     syncEnabled: env.JOBBER_SYNC_ENABLED === 'true',
+    // Fail closed, like the sync: a typo leaves the mirror off.
+    mirrorEnabled: env.JOBBER_MIRROR_ENABLED === 'true',
     schedulerOrganizationId: env.JOBBER_LOCAL_ORGANIZATION_ID?.trim() || undefined,
     incrementalSyncCron: env.JOBBER_INCREMENTAL_SYNC_CRON?.trim() || undefined,
     // Seven days back covers a visit that was completed late or moved

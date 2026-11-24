@@ -472,6 +472,9 @@ model Organization {
   jobberConnection     JobberConnection?
   jobberPropertyLinks  JobberPropertyLink[]
   jobberVisitImports   JobberVisitImport[]
+  jobberRecords        JobberRecord[]
+  jobberRecordFiles    JobberRecordFile[]
+  jobberMirrorCursors  JobberMirrorCursor[]
   jobberOutboundTasks  JobberOutboundTask[]
   workOrderImports     WorkOrderImport[]
   workOrderTriages     WorkOrderTriage[]
@@ -3045,6 +3048,124 @@ model JobberVisitImport {
   @@unique([organizationId, jobberVisitId])
   @@index([organizationId, status])
   @@index([linkId, status])
+}
+
+/// What a mirrored Jobber record is (2026-11-24).
+enum JobberRecordKind {
+  CLIENT
+  PROPERTY
+  JOB
+  VISIT
+  QUOTE
+  REQUEST
+}
+
+/// One Jobber record, kept as Jobber sent it, so nothing is lost when the
+/// office closes the Jobber account (2026-11-24).
+///
+/// Read-only: nothing here is ever sent back. The columns beside `payload` are
+/// only for finding a record; `payload` is the record. Notes travel inside
+/// their parent's payload, a visit's Details are its `instructions`.
+model JobberRecord {
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @db.Uuid
+  kind              JobberRecordKind
+  jobberId          String
+  payload           Json
+  number            String?
+  title             String?
+  clientJobberId    String?
+  propertyJobberId  String?
+  jobJobberId       String?
+  address           String?
+  occursAt          DateTime?
+  status            String?
+  jobberCreatedAt   DateTime?
+  /// Null for kinds Jobber gives no update time (visits, properties).
+  jobberUpdatedAt   DateTime?
+  /// The payload saved, but the columns above could not be read from it.
+  extractFailed     Boolean          @default(false)
+  /// A nested list (notes, quote lines) still holds fewer than Jobber has,
+  /// even read by itself: the copy of this record is incomplete.
+  truncated         Boolean          @default(false)
+  /// Note attachments Jobber reports on the record, and when they were last listed.
+  fileCount         Int              @default(0)
+  filesListedAt     DateTime?
+  /// More attachments than one listing carries: some were not copied.
+  filesTruncated    Boolean          @default(false)
+  /// Stamped every time a read returns the record; a full walk that ends marks
+  /// rows it did not see as deleted.
+  lastSeenAt        DateTime
+  /// Gone from Jobber. Never erased; cleared if the record comes back.
+  deletedInJobberAt DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  files             JobberRecordFile[]
+
+  @@unique([organizationId, kind, jobberId])
+  @@index([organizationId, kind, occursAt])
+  @@index([organizationId, kind, number])
+  @@index([organizationId, clientJobberId])
+  @@index([organizationId, jobJobberId])
+  @@index([organizationId, kind, lastSeenAt])
+}
+
+/// A note attachment on a mirrored record, copied into our storage because
+/// Jobber's links stop working with the account (2026-11-24). Jobber's URL is
+/// never stored: it is asked for again when the file is copied.
+model JobberRecordFile {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @db.Uuid
+  recordId        String       @db.Uuid
+  jobberFileId    String
+  fileName        String?
+  contentType     String?
+  sizeBytes       Int?
+  storageKey      String?
+  copyAttempts    Int          @default(0)
+  copyAttemptedAt DateTime?
+  copyProblem     String?
+  copiedAt        DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  record          JobberRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, jobberFileId])
+  @@index([recordId])
+  @@index([organizationId, storageKey])
+}
+
+/// Where the mirror is in each kind, so a run can stop anywhere and the next
+/// carries on (2026-11-24). A "walk" reads every record; "changes" reads what
+/// changed since (`updatedAt`), or, for visits, a window of dates.
+model JobberMirrorCursor {
+  id                 String           @id @default(uuid()) @db.Uuid
+  organizationId     String           @db.Uuid
+  kind               JobberRecordKind
+  walkCursor         String?
+  walkStartedAt      DateTime?
+  walkCompletedAt    DateTime?
+  walkSeen           Int              @default(0)
+  /// When the walk before this one began. A record unseen since then was
+  /// missed by two walks in a row, which is what marks it deleted.
+  previousWalkStartedAt DateTime?
+  /// The last walk saw too few records to mark any deleted. Cleared only by a
+  /// walk that ends whole, so the hourly passes cannot hide it.
+  walkShortAt        DateTime?
+  changesCursor      String?
+  changesStartedAt   DateTime?
+  changesCompletedAt DateTime?
+  changesSince       DateTime?
+  lastCheckedAt      DateTime?
+  lastError          String?
+  lastErrorAt        DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, kind])
 }
 
 /// What became of a work order the maintenance app handed over.

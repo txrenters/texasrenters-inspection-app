@@ -24,6 +24,7 @@ import {
 import { JobberClient } from './jobber.client';
 import { JobberDayActionsService } from './jobber-day-actions.service';
 import { JobberDayService } from './jobber-day.service';
+import { JobberMirrorService } from './jobber-mirror.service';
 import {
   JobberDayInspectionActionDto,
   JobberDayPushDto,
@@ -56,6 +57,7 @@ export class JobberIntegrationController {
     private readonly outbound: JobberOutboundWorker,
     private readonly days: JobberDayService,
     private readonly dayActions: JobberDayActionsService,
+    private readonly mirror: JobberMirrorService,
   ) {}
 
   /**
@@ -222,6 +224,13 @@ export class JobberIntegrationController {
       status: query.status as never,
       limit: query.limit,
     });
+  }
+
+  /** How complete the read-only copy of Jobber is, per kind (2026-11-24). */
+  @Get('mirror')
+  @RequirePermissions('integrations:read')
+  mirrorStatus(@Req() request: AuthenticatedRequest) {
+    return this.mirror.status(request.user);
   }
 
   @Post('property-links/:linkId/link')
