@@ -7,7 +7,7 @@ import { ApiConnectionError, ApiRefusalError } from '../src/storage/offline-reco
 import { dismissStockRefusal, readStockRefusals } from '../src/storage/stock-refusals';
 import { useNetworkStore } from '../src/stores/network.store';
 import { SAME_LABEL_PAUSE_MS, acceptScan, scanOntoSlip } from '../src/utils/item-scan';
-import { materialsLine, newSlipKey, showsMaterials, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '../src/utils/job-stock';
+import { materialsLine, newSlipKey, showsMaterials, slipLines, slipSummary, stepped, takenForJob, takenFromTruck, truckStock, type PendingSlip } from '../src/utils/job-stock';
 
 /**
  * A job's materials on the phone (2026-11-19, phase 7). Every item, truck and
@@ -112,7 +112,7 @@ describe('scanning a label (2026-11-19)', () => {
     const known = { catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }, { itemId: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }], placeName: 'Truck 1' };
     expect(scanOntoSlip(OFFERED, {}, 'SMK-0010', 'WITHDRAWAL', known).said).toEqual({ words: 'SMK-0010 is not in Truck 1.', bad: true });
     expect(scanOntoSlip(OFFERED, {}, 'XYZ-999', 'WITHDRAWAL', known).said).toEqual({ words: 'XYZ-999 is not an item code. Check the label, or type it.', bad: true });
-    expect(scanOntoSlip(OFFERED, {}, 'SMK-0010', 'RETURN', known).said.words).toBe('SMK-0010 was not taken for this job.');
+    expect(scanOntoSlip(OFFERED, {}, 'SMK-0010', 'RETURN', known).said.words).toBe('SMK-0010 was not taken from Truck 1 for this job.');
   });
 
   it('is one more of that item, exactly as a tap on + is', () => {
@@ -136,15 +136,31 @@ describe('scanning a label (2026-11-19)', () => {
     expect(scanOntoSlip(OFFERED, {}, 'https://example.com/a-very-long-address-on-a-box', 'WITHDRAWAL').said.words).toBe('HTTPS://EXAMPLE.COM/A-VE is not in this truck.');
   });
 
-  it('counts a label held in view once, and again only after a pause', () => {
-    const last = { code: 'FLT-0003', at: 1_000 };
-    expect(acceptScan(null, 'FLT-0003', 1_000)).toBe(true);
-    expect(acceptScan(last, 'FLT-0003', 1_000 + SAME_LABEL_PAUSE_MS - 1)).toBe(false);
-    expect(acceptScan(last, 'flt-0003', 1_200)).toBe(false);
-    expect(acceptScan(last, 'FLT-0003', 1_000 + SAME_LABEL_PAUSE_MS)).toBe(true);
-    // Another label straight after is its own scan.
-    expect(acceptScan(last, 'PRT-0001', 1_001)).toBe(true);
-    expect(acceptScan(last, '  ', 9_999)).toBe(false);
+  /** The camera's reads of whatever is in view, ten a second from `from` for `ms`: what it hands the scanner. */
+  const reads = (codes: string[], from: number, ms: number) =>
+    Array.from({ length: ms / 100 }, (_, index) => ({ code: codes[index % codes.length]!, at: from + index * 100 }));
+  const counted = (seen: Map<string, number>, frames: { code: string; at: number }[]) => frames.filter((frame) => acceptScan(seen, frame.code, frame.at)).map((frame) => frame.code);
+
+  it('counts a label held in view once, however long it is held', () => {
+    // Five seconds on one filter label used to record four filters: it counted again every pause.
+    expect(counted(new Map(), reads(['FLT-0003'], 1_000, 5_000))).toEqual(['FLT-0003']);
+  });
+
+  it('counts two labels in view at once once each, not on every read', () => {
+    // Read in turn, each read was "another label" and both counted ten times a second.
+    expect(counted(new Map(), reads(['FLT-0003', 'PRT-0001'], 1_000, 3_000))).toEqual(['FLT-0003', 'PRT-0001']);
+  });
+
+  it('counts the same label again once it has been out of view for the pause', () => {
+    const seen = new Map<string, number>();
+    expect(acceptScan(seen, 'FLT-0003', 1_000)).toBe(true);
+    // Taken away and shown again too soon: the same scan.
+    expect(acceptScan(seen, 'flt-0003', 1_000 + SAME_LABEL_PAUSE_MS - 1)).toBe(false);
+    // Out of view for the whole pause since it was last seen: one more.
+    expect(acceptScan(seen, 'FLT-0003', 1_000 + 2 * SAME_LABEL_PAUSE_MS)).toBe(true);
+    // Another label straight after is its own scan; a blank read is nothing.
+    expect(acceptScan(seen, 'PRT-0001', 1_000 + 2 * SAME_LABEL_PAUSE_MS + 1)).toBe(true);
+    expect(acceptScan(seen, '  ', 9_999)).toBe(false);
   });
 });
 
@@ -167,7 +183,7 @@ describe('what the server answers', () => {
   const reply: JobStock = {
     places: [{ id: 'truck-1', name: 'Truck 1' }],
     stock: STOCK,
-    slips: [{ id: 'slip-1', number: 'WD-0031', kind: 'WITHDRAWAL', at: '2026-11-19T15:00:00.000Z', place: 'Truck 1', reversed: false, lines: [filter(2)] }],
+    slips: [{ id: 'slip-1', number: 'WD-0031', kind: 'WITHDRAWAL', at: '2026-11-19T15:00:00.000Z', place: 'Truck 1', placeId: 'truck-1', reversed: false, lines: [filter(2)] }],
     taken: [filter(2)],
     catalog: [{ itemId: 'item-alarm', code: 'SMK-0010', name: 'Smoke alarm', unit: 'each' }],
   };
@@ -276,5 +292,32 @@ describe('a copy kept before every item in use came with it (2026-11-24)', () =>
   it('still reads, with no items to search', () => {
     const old = { places: [], stock: [], slips: [], taken: [] };
     expect(jobStockSchema.parse(old)).toEqual({ ...old, catalog: [] });
+  });
+
+  it('still reads a slip that does not name its truck, from a server older than that', () => {
+    const slipWithoutTruck = { id: 'slip-1', number: 'WD-0031', kind: 'WITHDRAWAL', at: '2026-11-19T15:00:00.000Z', place: 'Truck 1', reversed: false, lines: [filter(2)] };
+    expect(jobStockSchema.parse({ places: [], stock: [], slips: [slipWithoutTruck], taken: [], catalog: [] }).slips).toEqual([{ ...slipWithoutTruck, placeId: null }]);
+  });
+});
+
+/**
+ * 2026-11-24, found in review: what was taken was capped across every truck,
+ * so five taken from the shared truck could be "put back" into the
+ * technician's own -- a move between trucks from the phone.
+ */
+describe('what can go back into a truck', () => {
+  const recorded = (placeId: string | null, kind: 'WITHDRAWAL' | 'RETURN', lines: JobStockItem[]) => ({ id: `slip-${placeId}-${kind}`, number: 'WD-0001', kind, at: '2026-11-19T15:00:00.000Z', place: 'Truck', placeId, reversed: false, lines });
+
+  it('is only what was taken from that truck for the job', () => {
+    const slips = [recorded('truck-2', 'WITHDRAWAL', [battery(2)]), recorded('truck-1', 'WITHDRAWAL', [filter(3)])];
+    expect(takenFromTruck(slips, [], 'truck-1')).toEqual([filter(3)]);
+    expect(takenFromTruck(slips, [], 'truck-2')).toEqual([battery(2)]);
+  });
+
+  it('counts what this phone is holding for that truck only', () => {
+    const slips = [recorded('truck-1', 'WITHDRAWAL', [filter(3)])];
+    const held = [slip({ kind: 'RETURN', named: [filter(1)] }), slip({ placeId: 'truck-2', named: [battery(1)], clientRequestId: 'slip-key-0002' })];
+    expect(takenFromTruck(slips, held, 'truck-1')).toEqual([filter(2)]);
+    expect(takenFromTruck(slips, held, 'truck-2')).toEqual([battery(1)]);
   });
 });

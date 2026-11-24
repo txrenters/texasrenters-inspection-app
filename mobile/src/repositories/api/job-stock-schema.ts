@@ -22,6 +22,8 @@ export const jobStockSchema = z.object({
       kind: z.enum(['WITHDRAWAL', 'RETURN']),
       at: z.string(),
       place: z.string(),
+      // 2026-11-24: the truck, so what was taken from one goes back only into it. A server older than this sends none.
+      placeId: z.string().nullable().default(null),
       reversed: z.boolean(),
       lines: z.array(itemSchema),
     }),

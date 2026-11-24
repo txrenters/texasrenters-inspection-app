@@ -749,7 +749,7 @@ export class MockStockRepository implements StockRepository {
       const held = this.truck.find((item) => item.itemId === line.itemId);
       if (held) held.quantity += slip.kind === 'RETURN' ? line.quantity : -line.quantity;
     }
-    const made = { id: slip.clientRequestId, number: `${slip.kind === 'RETURN' ? 'RT' : 'WD'}-DEMO`, kind: slip.kind, at: new Date().toISOString(), place: 'Truck 1', reversed: false, lines: slip.named };
+    const made = { id: slip.clientRequestId, number: `${slip.kind === 'RETURN' ? 'RT' : 'WD'}-DEMO`, kind: slip.kind, at: new Date().toISOString(), place: 'Truck 1', placeId: slip.placeId, reversed: false, lines: slip.named };
     this.slips.set(slip.inspectionId, [made, ...now.slips]);
     return this.forJob(slip.inspectionId);
   }

@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/src/components/ui';
 import { registerIcons } from '@/src/lib/icons';
-import { acceptScan, type LastScan } from '@/src/utils/item-scan';
+import { acceptScan, type SeenLabels } from '@/src/utils/item-scan';
 
 registerIcons(FlashlightIcon, FlashlightOffIcon);
 
@@ -19,8 +19,9 @@ registerIcons(FlashlightIcon, FlashlightOffIcon);
  * that will not read: the code is printed under the square.
  *
  * Open only while somebody is scanning, so the camera is not running behind a
- * list. A label held in view is read many times a second: the same code is
- * handed back once, and again only after a pause, so one label is one scan.
+ * list. A label held in view is read many times a second: each code is handed
+ * back once while it stays in view, and again only after it has been out of
+ * view for a pause, so one label is one scan (`acceptScan`).
  *
  * The camera's surface is the one place colours are fixed rather than themed:
  * it is a picture of a truck, not a themed page (like GuidedCaptureOverlay).
@@ -46,7 +47,7 @@ export function ItemScanner({
   tray?: ReactNode;
 }) {
   const [permission, request] = useCameraPermissions();
-  const last = useRef<LastScan | null>(null);
+  const seen = useRef<SeenLabels>(new Map());
   const [light, setLight] = useState(false);
   const [typing, setTyping] = useState(false);
   const [typed, setTyped] = useState('');
@@ -87,10 +88,7 @@ export function ItemScanner({
                 enableTorch={light}
                 facing="back"
                 onBarcodeScanned={({ data }) => {
-                  const now = Date.now();
-                  if (!acceptScan(last.current, data, now)) return;
-                  last.current = { code: data, at: now };
-                  onCode(data);
+                  if (acceptScan(seen.current, data, Date.now())) onCode(data);
                 }}
                 style={{ flex: 1 }}
               />
