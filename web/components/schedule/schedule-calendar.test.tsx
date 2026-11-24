@@ -212,8 +212,10 @@ describe('Jobber work that is not an inspection (2026-11-25)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
 
     const popover = await screen.findByRole('dialog');
-    expect(within(popover).getByText('Jobber work · To do')).toBeTruthy();
-    expect(within(popover).getByText('Not named as an inspection')).toBeTruthy();
+    // Laid out as Jobber's own popup: Visit, its Completed box, Start.
+    expect(within(popover).getByText('Visit')).toBeTruthy();
+    expect(within(popover).getByText('Not completed')).toBeTruthy();
+    expect(within(popover).getByText('Start')).toBeTruthy();
     expect(within(popover).queryByRole('link', { name: 'Open inspection' })).toBeNull();
     expect(within(popover).queryByRole('checkbox')).toBeNull();
   });
