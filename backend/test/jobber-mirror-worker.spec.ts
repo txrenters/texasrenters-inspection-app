@@ -1,4 +1,4 @@
-import { JobberConnectionStatus, JobberRecordKind } from '@prisma/client';
+import { JobberConnectionStatus, type JobberRecordKind } from '@prisma/client';
 
 import { MIRROR_KINDS } from '../src/integrations/jobber/jobber-mirror.kinds';
 import { markUnseenDeleted, saveMirrorPage } from '../src/integrations/jobber/jobber-mirror.store';
