@@ -611,10 +611,16 @@ export class PurchasingService {
    * New pressed again with nothing written on today's (production, 2026-11-24:
    * every press spent a number and left an empty draft) opens that one: a
    * blank draft is made once a person and day.
+   *
+   * Refused while the office has no item code in use (the office, 2026-11-24:
+   * "it should always have item codes first before it can proceed").
    */
   async create(user: AuthenticatedUser, input: SaveRequisitionInput): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
     const today = businessDate();
+    // Codes come first (the office, 2026-11-24): a requisition is made from item codes, so with none there is nothing to ask for.
+    if (!(await this.prisma.stockItem.count({ where: { organizationId, active: true, deletedAt: null } })))
+      throw new ApplicationError(409, 'REQUISITION_NEEDS_ITEM_CODES', 'There are no item codes yet. A purchase requisition is made from item codes: whoever keeps them adds the items first, on Inventory, Item codes.');
     if (blank(input)) {
       const untouched = await this.prisma.purchaseRequisition.findFirst({
         where: {

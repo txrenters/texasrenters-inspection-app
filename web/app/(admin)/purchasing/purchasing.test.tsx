@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RequisitionForm } from '@/components/purchasing/requisition-form';
+import { ApiError } from '@/lib/api';
 import { businessToday } from '@/lib/clock';
 
 import PurchaseOrderPage from './orders/[orderId]/page';
@@ -225,6 +226,20 @@ describe('a new requisition', () => {
     expect(edits.create!.mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ xeroTenantId: 'tenant-pest', deliverToPlaceId: null, documentDate: null, lines: [{ itemId: 'item-glue', quantity: 12, estimatedUnitCostCents: 910, vendorId: null }] }),
     );
+  });
+
+  // The office, 2026-11-24: item codes come first.
+  it('says there are no item codes yet, and where they are made, when the office has none', async () => {
+    const refused = new ApiError(409, 'REQUISITION_NEEDS_ITEM_CODES', 'There are no item codes yet.');
+    edits.create!.mutateAsync.mockRejectedValue(refused);
+    const { rerender } = render(<NewRequisitionPage />);
+    await waitFor(() => expect(edits.create!.mutateAsync).toHaveBeenCalledTimes(1));
+    hooks.usePurchasingEdits.mockReturnValue({ ...edits, create: { ...edits.create!, error: refused } });
+    rerender(<NewRequisitionPage />);
+    expect(screen.getByText('There are no item codes yet')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open Item codes' }).getAttribute('href')).toBe('/inventory?tab=codes');
+    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+    expect(router.replace).not.toHaveBeenCalled();
   });
 
   it('says why it could not be made, and tries again', async () => {
