@@ -179,6 +179,19 @@ describe('labelling what arrived', () => {
     ]);
   });
 
+  it('makes no label for an item code that was deleted: the code may be another item by now', () => {
+    const lines = receiptLabelLines(
+      {
+        lines: [
+          { itemCode: 'OFF-0002', itemName: 'Asus Vivobook (deleted)', placeName: 'Stockroom', quantity: 1, deleted: true },
+          { itemCode: 'PRT-0001', itemName: 'Battery, 9 V', placeName: 'Stockroom', quantity: 24 },
+        ],
+      },
+      new Map(),
+    );
+    expect(lines.map((line) => line.code)).toEqual(['PRT-0001']);
+  });
+
   it('opens by itself once a receipt is posted, and prints what is ticked', async () => {
     render(<ReceivingSection data={order({ can: { ...NOTHING, receive: true } })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Receive goods' }));

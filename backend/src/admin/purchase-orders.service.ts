@@ -502,7 +502,7 @@ export class PurchaseOrdersService {
         by: receipt.createdByName,
         at: receipt.createdAt.toISOString(),
         reversed: receipt.reversedAt ? { by: receipt.reversedByName ?? 'Somebody', at: receipt.reversedAt.toISOString(), reason: receipt.reverseReason ?? '' } : null,
-        lines: receipt.lines.map((line) => ({ itemCode: line.item.code, itemName: shownItem(line.item).name, placeName: line.place.name, quantity: line.quantity })),
+        lines: receipt.lines.map((line) => ({ itemCode: line.item.code, itemName: shownItem(line.item).name, placeName: line.place.name, quantity: line.quantity, deleted: Boolean(line.item.deletedAt) })),
       })),
       bill,
       shortCloseReason: order.shortCloseReason,
@@ -547,7 +547,7 @@ export class PurchaseOrdersService {
           estimatedUnitCostCents: true,
           expectedOn: true,
           notes: true,
-          item: { select: { id: true, code: true, name: true, unit: true } },
+          item: { select: { id: true, code: true, name: true, unit: true, deletedAt: true } },
           place: { select: { id: true, name: true, code: true } },
           vendor: vendorSelect,
           department: { select: { code: true } },
@@ -581,7 +581,8 @@ export class PurchaseOrdersService {
             requisitionLineId: line.id,
             requisition: { id: line.requisition.id, number: line.requisition.number, createdAt: line.requisition.createdAt.toISOString(), requestedBy: line.requisition.requestedBy.displayName },
             company: line.requisition.xeroTenantId ? { tenantId: line.requisition.xeroTenantId, name: company?.name ?? 'A company', purchaserCode: company?.purchaserCode ?? null } : null,
-            item: line.item!,
+            // A deleted item code stays listed, marked, and is not ordered: its requisition is cancelled or reopened instead.
+            item: shownItem(line.item!),
             place: line.place ?? line.requisition.deliverTo,
             quantity: line.quantity,
             estimatedUnitCostCents: line.estimatedUnitCostCents,
@@ -654,6 +655,7 @@ export class PurchaseOrdersService {
             id: true,
             position: true,
             itemId: true,
+            item: { select: { code: true, deletedAt: true } },
             quantity: true,
             estimatedUnitCostCents: true,
             placeId: true,
@@ -667,6 +669,8 @@ export class PurchaseOrdersService {
           if (line.requisition.status !== PurchaseRequisitionStatus.APPROVED && line.requisition.status !== PurchaseRequisitionStatus.ORDERED)
             throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', `${named} is not approved, so nothing of it is ordered.`);
           if (!line.itemId) throw new ApplicationError(409, 'REQUISITION_NOT_ORDERABLE', `A line of ${named} has no item code, so it is not ordered.`);
+          if (line.item?.deletedAt)
+            throw new ApplicationError(409, 'STOCK_ITEM_DELETED', `${line.item.code} on ${named} was deleted, so it is not ordered. Reopen ${named} and give the line an item code in use, or cancel it.`);
           if (line.orderSources.length) throw new ApplicationError(409, 'REQUISITION_LINE_ORDERED', `A line of ${named} is on an order already. Open Pending Processing again.`);
         }
         for (const company of new Set(lines.map((line) => line.requisition.xeroTenantId))) await this.assertActs(tx, user, company);

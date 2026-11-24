@@ -108,9 +108,9 @@ export class PurchasingCodesService {
         select: { xeroTenantId: true, name: true, purchaserCode: true, trackingCategories: true },
         orderBy: { name: 'asc' },
       }),
-      this.prisma.stockItem.groupBy({ by: ['lineTypeId'], where: { organizationId, lineTypeId: { not: null } }, _count: { _all: true } }),
+      this.prisma.stockItem.groupBy({ by: ['lineTypeId'], where: { organizationId, deletedAt: null, lineTypeId: { not: null } }, _count: { _all: true } }),
       // Units are named by items (Purchasing Setup, 2026-11-21): counted by name, whatever its case.
-      this.prisma.stockItem.groupBy({ by: ['unit'], where: { organizationId }, _count: { _all: true } }),
+      this.prisma.stockItem.groupBy({ by: ['unit'], where: { organizationId, deletedAt: null }, _count: { _all: true } }),
       readPurchasingSetup(this.prisma, organizationId),
     ]);
     const used = new Map(typed.map((row) => [row.lineTypeId, row._count._all]));

@@ -65,6 +65,18 @@ describe('Pending Processing', () => {
     expect((screen.getByRole('button', { name: 'Make Purchase Orders' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('shows a line whose item code was deleted, marked, and never ticks it', () => {
+    mount({ ...DATA, lines: [line('line-1', 'PR-00012'), line('line-9', 'PR-00001', { item: { ...FILTER, id: 'item-gone', code: 'FLT-0001', name: 'Filter 25x16x1 (deleted)', deleted: true } })] });
+    const gone = screen.getByRole('checkbox', { name: 'Order FLT-0001 of PR-00001' }) as HTMLButtonElement;
+    expect(gone.disabled).toBe(true);
+    expect(screen.getByRole('row', { name: /PR-00001/ }).textContent).toContain('Deleted');
+
+    // The whole vendor ticks only what can be ordered.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Order every line for Hill Country Supply, THMP' }));
+    expect(screen.getByRole('checkbox', { name: 'Order FLT-20251 of PR-00012' }).getAttribute('aria-checked')).toBe('true');
+    expect(gone.getAttribute('aria-checked')).toBe('false');
+  });
+
   it('ticks a whole vendor, says the same item to the same place becomes one line, and makes the orders', async () => {
     mount();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Order every line for Hill Country Supply, THMP' }));

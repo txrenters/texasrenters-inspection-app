@@ -201,7 +201,8 @@ export interface PendingOrderLine {
   requisitionLineId: string;
   requisition: { id: string; number: string | null; createdAt: string; requestedBy: string };
   company: { tenantId: string; name: string; purchaserCode: string | null } | null;
-  item: { id: string; code: string; name: string; unit: string };
+  /** `deleted` once its item code was deleted: the line stays listed, and cannot be ordered. */
+  item: { id: string; code: string; name: string; unit: string; deleted?: boolean };
   /** Where it goes: the line's own place, else its requisition's. */
   place: { id: string; name: string; code: string | null } | null;
   quantity: number;

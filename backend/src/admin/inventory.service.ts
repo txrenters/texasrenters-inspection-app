@@ -181,7 +181,7 @@ export class InventoryService {
       this.prisma.vendor.findMany({ where: { organizationId, active: true }, select: { id: true, name: true }, orderBy: { nameKey: 'asc' } }),
       this.prisma.stockCategory.findMany({
         where: { organizationId },
-        select: { id: true, name: true, prefix: true, nextNumber: true, active: true, _count: { select: { items: true } } },
+        select: { id: true, name: true, prefix: true, nextNumber: true, active: true, _count: { select: { items: { where: { deletedAt: null } } } } },
         orderBy: [{ active: 'desc' }, { nameKey: 'asc' }],
       }),
       this.prisma.purchasingCode.findMany({ where: { organizationId, kind: 'LINE_TYPE' }, select: { id: true, code: true, name: true, keepsStock: true, active: true }, orderBy: [{ active: 'desc' }, { code: 'asc' }] }),
@@ -757,7 +757,7 @@ export class InventoryService {
       db.stockLevel.findMany({ where: { ...where, quantity: { gt: 0 } }, select: { quantity: true, place: { select: { name: true, kind: true, nameKey: true } } } }),
       db.stockMovement.count({ where }),
       db.stockSlipLine.count({ where }),
-      db.purchaseRequisitionLine.findMany({ where, select: { requisition: { select: { id: true, number: true, status: true } }, orderSources: { select: { id: true }, take: 1 } } }),
+      db.purchaseRequisitionLine.findMany({ where, select: { requisition: { select: { id: true, number: true, status: true } }, orderSources: { where: { releasedAt: null }, select: { id: true }, take: 1 } } }),
       db.purchaseOrderLine.findMany({ where, select: { quantity: true, receivedQuantity: true, order: { select: { id: true, number: true, status: true } } } }),
       db.goodsReceiptLine.findMany({ where, select: { receipt: { select: { id: true, number: true } } } }),
       db.stockCountLine.findMany({ where, select: { count: { select: { id: true, number: true, status: true } } } }),
@@ -768,7 +768,8 @@ export class InventoryService {
     const add = (into: Map<string, StockItemDocument>, document: StockItemDocument) => into.set(`${document.kind}:${document.id}`, document);
     for (const line of requisitionLines) {
       const document: StockItemDocument = { kind: 'REQUISITION', id: line.requisition.id, number: line.requisition.number ?? 'A draft requisition' };
-      // A requisition still being written or approved, whose line is on no order yet, would ask for an item that is gone.
+      // A requisition still being written or approved, whose line is on no live order, would ask for an item that is gone.
+      // An order that was cancelled gave the line back (2026-11-24): it waits for an order again.
       if (OPEN_REQUISITION.has(line.requisition.status) && !line.orderSources.length) add(open, document);
       else add(used, document);
     }

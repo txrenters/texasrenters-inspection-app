@@ -58,7 +58,7 @@ export class PurchasingSetupService {
   /** How many of each list are in use, for the Codes section. */
   private async inUse(organizationId: string): Promise<Record<CodeListKey, number>> {
     const [items, categories, codes, places, vendors, purchasers] = await Promise.all([
-      this.prisma.stockItem.count({ where: { organizationId, active: true } }),
+      this.prisma.stockItem.count({ where: { organizationId, active: true, deletedAt: null } }),
       this.prisma.stockCategory.count({ where: { organizationId, active: true } }),
       this.prisma.purchasingCode.groupBy({ by: ['kind'], where: { organizationId, active: true }, _count: { _all: true } }),
       this.prisma.stockPlace.count({ where: { organizationId, active: true } }),

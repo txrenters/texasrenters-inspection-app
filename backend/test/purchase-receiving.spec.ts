@@ -242,7 +242,7 @@ function database() {
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
   const ordersService = new PurchaseOrdersService(db as never, {} as never, {} as never);
-  return { sources, db, orders, orderLines, receipts, movements, bills, requisitions, audits, service: new PurchaseReceivingService(db as never, ordersService) };
+  return { items, sources, db, orders, orderLines, receipts, movements, bills, requisitions, audits, service: new PurchaseReceivingService(db as never, ordersService) };
 }
 
 const arrival = (lines: ReceiveGoodsInput['lines'], over: Partial<ReceiveGoodsInput> = {}): ReceiveGoodsInput => ({ receivedOn: '2026-11-19', packingSlip: 'PS-44817', note: null, requestKey: key(1), lines, ...over });
@@ -338,6 +338,15 @@ describe('reversing a receipt', () => {
     expect(orderLines[0]).toMatchObject({ receivedQuantity: 0 });
     expect(order).toMatchObject({ status: 'SENT', receipts: [{ number: 'RCV-0001', reversed: { by: 'Sample Stock Keeper', reason: 'Wrong order.' } }] });
     expect(order.history[0]).toMatchObject({ what: 'reversed a receipt: RCV-0001: Wrong order.' });
+  });
+
+  it('stays as it is once its item code was deleted, and says so on the order', async () => {
+    const { service, receipts, movements, items } = database();
+    await service.receive(keeper, ORDER, arrival([filters(36)]));
+    items.find((one) => one.id === FILTER)!.deletedAt = new Date('2026-11-24T16:00:00Z');
+
+    await expect(service.reverseReceipt(keeper, receipts[0]!.id as string, { reason: 'Wrong order' })).rejects.toMatchObject({ code: 'STOCK_ITEM_DELETED', message: 'FLT-0003 was deleted, so RCV-0001 stays as it is.' });
+    expect(movements).toHaveLength(1);
   });
 
   it('needs a reason, happens once, and only while the stock is still there', async () => {

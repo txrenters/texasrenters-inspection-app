@@ -250,7 +250,7 @@ export class PurchaseReceivingService {
             orderId: true,
             reversedAt: true,
             order: { select: { status: true, bill: { select: { status: true } } } },
-            lines: { select: { orderLineId: true, itemId: true, placeId: true, quantity: true, movementId: true, item: { select: { code: true } }, place: { select: { name: true } }, movement: { select: { unitCostCents: true } } } },
+            lines: { select: { orderLineId: true, itemId: true, placeId: true, quantity: true, movementId: true, item: { select: { code: true, deletedAt: true } }, place: { select: { name: true } }, movement: { select: { unitCostCents: true } } } },
           },
         });
         if (!receipt) throw new ApplicationError(404, 'RECEIPT_NOT_FOUND', 'That receipt is not on the list.');
@@ -262,6 +262,8 @@ export class PurchaseReceivingService {
 
         const who = { createdById: user.principalType === 'API_KEY' ? null : user.id, createdByName: user.displayName };
         for (const line of receipt.lines) {
+          // Its stock was removed when the code was deleted, and the code may be another item's by now.
+          if (line.item.deletedAt) throw new ApplicationError(409, 'STOCK_ITEM_DELETED', `${line.item.code} was deleted, so ${receipt.number} stays as it is.`);
           const level = await tx.stockLevel.findUnique({ where: { itemId_placeId: { itemId: line.itemId, placeId: line.placeId } }, select: { quantity: true } });
           const there = level?.quantity ?? 0;
           if (there < line.quantity)
