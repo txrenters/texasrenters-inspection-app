@@ -5842,6 +5842,26 @@ enum StockMovementKind {
   TRANSFER
   /// What a count found different from the ledger (phase 6).
   COUNT_ADJUSTMENT
+  /// Taken off the books with a reason: tested with, damaged, lost (2026-11-24).
+  REMOVAL
+}
+
+/// Why stock was removed (2026-11-24). Other is said in the movement's note.
+enum StockRemovalReason {
+  TESTING
+  DAMAGED
+  LOST
+  USED_NOT_RECORDED
+  ENTERED_BY_MISTAKE
+  OTHER
+}
+
+/// Why an item code was deleted (2026-11-24). Other is said in its note.
+enum StockItemDeleteReason {
+  TESTING
+  MADE_BY_MISTAKE
+  DUPLICATE
+  OTHER
 }
 
 /// Something the office stocks, counted in whole units. Never deleted once it has moved: switched off instead.
@@ -5870,6 +5890,13 @@ model StockItem {
   /// What one usually costs, when the stock keeper says: what a purchase request line starts from.
   priceCents      Int?
   active          Boolean  @default(true)
+  /// Deleted (2026-11-24): switched off for good, gone from every list, and its codeKey given up so the
+  /// code can be a new item's. Documents that named it keep their lines. A trigger keeps it deleted.
+  deletedAt       DateTime?
+  deletedById     String?  @db.Uuid
+  deletedByName   String?
+  deleteReason    StockItemDeleteReason?
+  deleteNote      String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -5976,6 +6003,8 @@ model StockMovement {
   /// The Texas day it happened.
   day            DateTime          @db.Date
   note           String?
+  /// Why a REMOVAL took it out; set on a removal and nothing else (checked).
+  removalReason  StockRemovalReason?
   /// The movement this one reverses. Unique: a movement is reversed at most once.
   reversesId     String?           @unique @db.Uuid
   /// Made by the page for one entry: a second click or a retry writes nothing twice.

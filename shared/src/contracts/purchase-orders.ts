@@ -144,7 +144,8 @@ export interface PurchaseOrdersMade {
 
 export interface PurchaseOrderLine {
   id: string;
-  item: { id: string; code: string; name: string; unit: string };
+  /** `deleted` once its item code was deleted (2026-11-24): the line stays, and says so. */
+  item: { id: string; code: string; name: string; unit: string; deleted?: boolean };
   /** Where it goes (2026-11-23); null for the order's own place. */
   place: { id: string; name: string; code: string | null } | null;
   quantity: number;

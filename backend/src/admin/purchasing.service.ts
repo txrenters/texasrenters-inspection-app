@@ -32,6 +32,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { shownItem } from './deleted-items';
 import { nextDocumentCode, readPurchasingSettings, readPurchasingSetup, readStanding } from './purchasing-settings';
 import { RequisitionApproversService } from './requisition-approvers';
 import { ATTACHABLE, requisitionFiles } from './requisition-files';
@@ -120,7 +121,7 @@ const ROW = {
       estimatedUnitCostCents: true,
       expectedOn: true,
       notes: true,
-      item: { select: { id: true, code: true, name: true, unit: true, reorderLevel: true, lineType: { select: { code: true, name: true, keepsStock: true } } } },
+      item: { select: { id: true, code: true, name: true, unit: true, reorderLevel: true, deletedAt: true, lineType: { select: { code: true, name: true, keepsStock: true } } } },
       place: { select: { id: true, code: true, name: true } },
       vendor: { select: { id: true, number: true, name: true } },
       department: { select: { id: true, code: true, name: true } },
@@ -379,7 +380,7 @@ export class PurchasingService {
       documentDate: dayOf(requisition.documentDate) ?? businessDate(requisition.createdAt),
       lines: requisition.lines.map((line) => ({
         id: line.id,
-        item: line.item ? { id: line.item.id, code: line.item.code, name: line.item.name, unit: line.item.unit } : null,
+        item: line.item ? shownItem({ id: line.item.id, code: line.item.code, name: line.item.name, unit: line.item.unit, deletedAt: line.item.deletedAt }) : null,
         description: line.description ?? line.item?.name ?? null,
         quantity: line.quantity,
         estimatedUnitCostCents: line.estimatedUnitCostCents,

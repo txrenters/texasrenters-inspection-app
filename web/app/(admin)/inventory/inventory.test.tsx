@@ -85,6 +85,7 @@ const movement = (over: Partial<StockMovementRow> = {}): StockMovementRow => ({
   createdAt: '2026-11-18T15:00:00.000Z',
   reversesId: null,
   reversedById: null,
+  removalReason: null,
   ...over,
 });
 
@@ -100,7 +101,10 @@ beforeEach(() => {
   url.set.mockReset();
   account.permissions = new Set(['inventory:read', 'inventory:manage']);
   edits = Object.fromEntries(
-    ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'].map((name) => [name, mutation()]),
+    ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'enterOpeningBalance', 'reverseMovement', 'removeStock', 'deleteItem', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'].map((name) => [
+      name,
+      mutation(),
+    ]),
   );
   hooks.useInventoryEdits.mockReturnValue(edits);
   hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: list(ITEMS) });
@@ -159,6 +163,37 @@ describe('the item codes tab', () => {
     account.permissions = new Set(['inventory:read']);
     render(<InventoryPage />);
     expect(screen.queryByRole('form', { name: 'New item code' })).toBeNull();
+  });
+});
+
+describe('removing stock and deleting an item code (2026-11-24)', () => {
+  it('offers Remove stock on each item with stock in it, to whoever manages stock', () => {
+    hooks.useStockItem.mockReturnValue({ isLoading: false, isError: false, data: { item: ITEMS[0], levels: [{ placeId: 'place-stockroom', placeName: 'Stockroom', kind: 'STOCKROOM', quantity: 18 }], averageCostCents: 342, movements: [], movementsTotal: 1 } });
+    const { unmount } = render(<InventoryPage />);
+    const table = screen.getByRole('table', { name: 'Stock on hand' });
+    expect(within(table).getByRole('button', { name: 'Remove stock of BAT-9V' })).toBeTruthy();
+    fireEvent.click(within(table).getByRole('button', { name: 'Remove stock of FLT-16251' }));
+    expect(screen.getByRole('dialog', { name: 'Remove stock of FLT-16251' })).toBeTruthy();
+    unmount();
+
+    account.permissions = new Set(['inventory:read']);
+    render(<InventoryPage />);
+    expect(screen.queryByRole('button', { name: /^Remove stock/ })).toBeNull();
+  });
+
+  it('offers Delete on the item codes to whoever keeps them and manages stock, and to nobody else', () => {
+    url.state = { ...url.state, tab: 'codes' };
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.getByRole('button', { name: 'Delete FLT-16251' })).toBeTruthy();
+    expect(screen.getByText(/Deleted: gone from every list, picker, label sheet and the phone/)).toBeTruthy();
+    unmount();
+
+    // The code admin keeps the codes but moves no stock: Edit, and no Delete.
+    account.permissions = new Set(['inventory:read', 'purchasing:codes']);
+    hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: { ...list(ITEMS), keeps: { items: true, categories: false, places: false, vendors: false } } });
+    render(<InventoryPage />);
+    expect(screen.getByRole('button', { name: 'Edit FLT-16251' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
   });
 });
 
@@ -406,9 +441,26 @@ describe('one item', () => {
     }
   });
 
+  it('shows stock removed with its reason, reverses it, and offers Remove stock to the stock keeper (2026-11-24)', async () => {
+    mount(
+      detail({
+        movements: [movement({ id: 'movement-2', kind: 'REMOVAL', quantity: -5, onHandAfter: 13, removalReason: 'DAMAGED', note: 'Fell off the shelf' }), movement()],
+        movementsTotal: 2,
+      }),
+    );
+    const line = within(screen.getByRole('table', { name: 'Movements of Filter 16x25x1' })).getByRole('row', { name: /Removed · Damaged/ });
+    expect(line.textContent).toContain('Fell off the shelf');
+    expect(screen.getByRole('button', { name: 'Remove stock' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reverse the removal of/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Reverse this movement?' });
+    expect(dialog.textContent).toContain('This puts 5 of FLT-16251 back into Stockroom');
+  });
+
   it('shows the ledger and nothing to press to somebody who may only look', () => {
     account.permissions = new Set(['inventory:read']);
     mount();
+    expect(screen.queryByRole('button', { name: 'Remove stock' })).toBeNull();
 
     expect(screen.getByRole('table', { name: 'Movements of Filter 16x25x1' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Edit item' })).toBeNull();

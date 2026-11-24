@@ -43,6 +43,7 @@ import { businessDayBounds } from '../common/business-day';
 import { ceilingFrom } from '../common/daily-allowance';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { shownItem } from './deleted-items';
 import { PurchasingFileStorageService } from '../common/purchasing-file-storage.service';
 import { MailService } from '../mail/mail.service';
 import { nextDocumentCode, readPurchasingSetup, readStanding } from './purchasing-settings';
@@ -155,7 +156,7 @@ const ROW = {
   requisition: { select: { id: true, number: true, requestedById: true } },
   lines: {
     orderBy: { position: 'asc' },
-    select: { id: true, quantity: true, unitPriceCents: true, receivedQuantity: true, placeId: true, place: { select: { id: true, name: true, code: true } }, item: { select: { id: true, code: true, name: true, unit: true } } },
+    select: { id: true, quantity: true, unitPriceCents: true, receivedQuantity: true, placeId: true, place: { select: { id: true, name: true, code: true } }, item: { select: { id: true, code: true, name: true, unit: true, deletedAt: true } } },
   },
   // The requisition lines it carries (2026-11-23), oldest requisition first: what arrives goes to them in that order.
   sources: {
@@ -360,7 +361,7 @@ export class PurchaseOrdersService {
           reversedAt: true,
           reversedByName: true,
           reverseReason: true,
-          lines: { select: { quantity: true, item: { select: { code: true, name: true } }, place: { select: { name: true } } } },
+          lines: { select: { quantity: true, item: { select: { code: true, name: true, deletedAt: true } }, place: { select: { name: true } } } },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -449,7 +450,7 @@ export class PurchaseOrdersService {
         }));
         return {
           id: line.id,
-          item: line.item,
+          item: shownItem(line.item),
           place: line.place,
           quantity: line.quantity,
           unitPriceCents: line.unitPriceCents,
@@ -501,7 +502,7 @@ export class PurchaseOrdersService {
         by: receipt.createdByName,
         at: receipt.createdAt.toISOString(),
         reversed: receipt.reversedAt ? { by: receipt.reversedByName ?? 'Somebody', at: receipt.reversedAt.toISOString(), reason: receipt.reverseReason ?? '' } : null,
-        lines: receipt.lines.map((line) => ({ itemCode: line.item.code, itemName: line.item.name, placeName: line.place.name, quantity: line.quantity })),
+        lines: receipt.lines.map((line) => ({ itemCode: line.item.code, itemName: shownItem(line.item).name, placeName: line.place.name, quantity: line.quantity })),
       })),
       bill,
       shortCloseReason: order.shortCloseReason,

@@ -17,7 +17,7 @@
 export const STOCK_PLACE_KINDS = ['STOCKROOM', 'VAN'] as const;
 export type StockPlaceKind = (typeof STOCK_PLACE_KINDS)[number];
 
-export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL', 'RECEIPT', 'WITHDRAWAL', 'RETURN', 'TRANSFER', 'COUNT_ADJUSTMENT'] as const;
+export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL', 'RECEIPT', 'WITHDRAWAL', 'RETURN', 'TRANSFER', 'COUNT_ADJUSTMENT', 'REMOVAL'] as const;
 export type StockMovementKind = (typeof STOCK_MOVEMENT_KINDS)[number];
 
 /** A typo of extra zeros stops here; no shelf in the office holds this many of anything. */
@@ -184,6 +184,8 @@ export interface StockMovementRow {
   reversesId: string | null;
   /** Set once it has been reversed: it cannot be reversed twice. */
   reversedById: string | null;
+  /** Why a removal took it out (2026-11-24); null for every other kind. */
+  removalReason: StockRemovalReason | null;
 }
 
 export interface StockItemDetail {
@@ -233,6 +235,92 @@ export interface ReverseMovementInput {
   /** Why: kept on the reversal and in the audit log. */
   reason: string;
 }
+
+// ── Removing stock and deleting an item code (2026-11-24) ────────────────────
+
+/** Why stock is taken off the books. Other is said in the note. */
+export const STOCK_REMOVAL_REASONS = ['TESTING', 'DAMAGED', 'LOST', 'USED_NOT_RECORDED', 'ENTERED_BY_MISTAKE', 'OTHER'] as const;
+export type StockRemovalReason = (typeof STOCK_REMOVAL_REASONS)[number];
+export const STOCK_REMOVAL_REASON_LABEL: Record<StockRemovalReason, string> = {
+  TESTING: 'Testing',
+  DAMAGED: 'Damaged',
+  LOST: 'Lost or stolen',
+  USED_NOT_RECORDED: 'Used, not recorded on a job',
+  ENTERED_BY_MISTAKE: 'Entered by mistake',
+  OTHER: 'Other',
+};
+
+/**
+ * Stock taken off the books from one place, or from every place at once
+ * (placeId null), when it was tested with, damaged, lost or never there. It is
+ * a movement like any other: it shows in the item's history, and Reverse puts
+ * it back.
+ */
+export interface RemoveStockInput {
+  /** The place it comes out of; null for every place, all of it. */
+  placeId: string | null;
+  /** How many, no more than the place holds; from every place, all of it. */
+  quantity: number;
+  reason: StockRemovalReason;
+  /** Required for Other. */
+  note?: string | null;
+  /** Made once by the page for this removal, so a second click or a retry takes nothing twice. */
+  requestKey: string;
+}
+
+/** Why an item code is deleted. Other is said in the note. */
+export const STOCK_ITEM_DELETE_REASONS = ['TESTING', 'MADE_BY_MISTAKE', 'DUPLICATE', 'OTHER'] as const;
+export type StockItemDeleteReason = (typeof STOCK_ITEM_DELETE_REASONS)[number];
+export const STOCK_ITEM_DELETE_REASON_LABEL: Record<StockItemDeleteReason, string> = {
+  TESTING: 'Testing',
+  MADE_BY_MISTAKE: 'Made by mistake',
+  DUPLICATE: 'A duplicate of another code',
+  OTHER: 'Other',
+};
+/** The removal an item's own deletion makes of the stock it still has. */
+export const REMOVAL_FOR_DELETE: Record<StockItemDeleteReason, StockRemovalReason> = {
+  TESTING: 'TESTING',
+  MADE_BY_MISTAKE: 'ENTERED_BY_MISTAKE',
+  DUPLICATE: 'ENTERED_BY_MISTAKE',
+  OTHER: 'OTHER',
+};
+
+/** A document that names an item: one still open stops its deletion. */
+export interface StockItemDocument {
+  kind: 'REQUISITION' | 'ORDER' | 'RECEIPT' | 'COUNT' | 'TRUCK_ASK';
+  id: string;
+  /** PR-00014, PO-00009, RCV-0003, CNT-0004; a truck ask is named by its truck. */
+  number: string;
+}
+
+/** The documents named under "still shown, marked deleted": the rest are counted. */
+export const DELETION_DOCUMENTS_SHOWN = 10;
+
+/** What deleting an item would do, read before the office confirms it. */
+export interface StockItemDeletion {
+  item: { id: string; code: string; name: string; unit: string };
+  /** Nothing names it: it is removed outright. */
+  neverUsed: boolean;
+  /** Where it still has stock: removed first, with the reason given. */
+  onHand: { placeName: string; quantity: number }[];
+  /** Still open, so it cannot be deleted yet: finish or cancel these first. */
+  open: StockItemDocument[];
+  /** Closed documents that keep showing it, marked deleted (the first DELETION_DOCUMENTS_SHOWN). */
+  usedOn: StockItemDocument[];
+  /** How many more closed documents name it than are listed. */
+  usedOnMore: number;
+}
+
+export interface DeleteStockItemInput {
+  reason: StockItemDeleteReason;
+  /** Required for Other. */
+  note?: string | null;
+  /** The item's code, typed to confirm. */
+  confirmCode: string;
+}
+
+/** A deleted item's name where a document still shows it. */
+export const deletedItemName = (name: string) => `${name} (deleted)`;
 
 export interface StockPlaces {
   places: StockPlaceRow[];
