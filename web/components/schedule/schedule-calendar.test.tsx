@@ -192,6 +192,21 @@ describe('Jobber work that is not an inspection (2026-11-25)', () => {
     expect(screen.getByText('2 visits')).toBeTruthy();
   });
 
+  it("shows what Jobber's popup does: the job, its Details, the whole address and the team (2026-11-25)", async () => {
+    asked.days['2026-11-04'] = {
+      ...day('2026-11-04', []),
+      otherWork: [{ ...omega, jobNumber: '20907', details: 'Hose bib on the left side of house needs to be replaced.', address: '74 San Simeon Dr, Manvel, TX 77578-3287' }],
+    };
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
+
+    const popover = await screen.findByRole('dialog');
+    expect(within(popover).getByText('Job #20907')).toBeTruthy();
+    expect(within(popover).getByText('Hose bib on the left side of house needs to be replaced.')).toBeTruthy();
+    expect(within(popover).getByText('74 San Simeon Dr, Manvel, TX 77578-3287')).toBeTruthy();
+    expect(within(popover).getByText('Ada Lane')).toBeTruthy();
+  });
+
   it('opens as Jobber work, with nothing to open here and nothing that changes it', async () => {
     mount();
     fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));

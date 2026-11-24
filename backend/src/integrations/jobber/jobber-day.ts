@@ -5,6 +5,7 @@ import type {
   JobberDayRow,
   JobberDayState,
   JobberDayTechnician,
+  JobberVisitExtras,
 } from '@texasrenters/shared';
 
 import { BUSINESS_TIME_ZONE, businessDate } from '../../common/business-day';
@@ -112,6 +113,19 @@ function assignees(payload: JobberVisit | null) {
 function timedStart(payload: JobberVisit | null): Date | null {
   if (!payload?.startAt || payload.allDay) return null;
   return new Date(payload.startAt);
+}
+
+/** The job number, the visit's Details and the whole address, as Jobber's popup shows them. */
+function extrasOf(payload: JobberVisit | null): JobberVisitExtras {
+  const address = payload?.property?.address;
+  const street = [address?.street1, address?.street2].map((part) => part?.trim()).filter(Boolean).join(' ');
+  const region = [address?.province, address?.postalCode].map((part) => part?.trim()).filter(Boolean).join(' ');
+  const jobNumber = payload?.job?.jobNumber;
+  return {
+    jobNumber: jobNumber === null || jobNumber === undefined || jobNumber === '' ? null : String(jobNumber),
+    details: payload?.instructions?.trim() || null,
+    address: [street, address?.city?.trim(), region].filter(Boolean).join(', ') || null,
+  };
 }
 
 function streetOf(payload: JobberVisit | null) {
@@ -239,6 +253,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
             technician: jobberName(payload),
             title: payload.title ?? null,
             completed: Boolean(payload.completedAt),
+            ...extrasOf(payload),
           }
         : null,
       state: states[0]?.[0] ?? 'MATCHES',
@@ -266,6 +281,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
         technicianIds: peopleHere(payload),
         startAt: timedStart(payload)?.toISOString() ?? null,
         completed: Boolean(payload.completedAt),
+        ...extrasOf(payload),
         reason:
           visit.status === 'IGNORED'
             ? 'Ignored by the office'
@@ -296,6 +312,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
         technician: jobberName(payload),
         title: payload.title ?? null,
         completed: Boolean(payload.completedAt),
+        ...extrasOf(payload),
       },
       state,
       differences: [

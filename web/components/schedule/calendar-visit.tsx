@@ -97,6 +97,8 @@ export function CalendarVisit({
   const start = visitStart(row);
   const time = businessTimeOfDay(start);
   const person = named !== undefined ? named : personOf(row);
+  // Everyone Jobber has on its own work, as its popup lists them; one person otherwise.
+  const team: (string | null)[] = work && row.jobber?.technician?.includes(', ') ? row.jobber.technician.split(', ') : [person];
   const differs = row.state !== 'MATCHES';
   const warning = jobberDayTone(row.state);
   // The other kinds of work in its job, drawn on this one card (2026-11-20).
@@ -157,6 +159,16 @@ export function CalendarVisit({
           {work && label !== row.property ? <p className="text-muted-foreground mt-0.5 text-xs">{row.property}</p> : null}
           {row.job ? <p className="text-muted-foreground mt-0.5 text-xs">{row.job.title}</p> : null}
         </div>
+        {/* What Jobber's popup shows under Details (2026-11-25): the job, and what to do there. */}
+        {row.jobber?.jobNumber || row.jobber?.details ? (
+          <div className="border-t px-4 py-3 text-sm">
+            <p className="text-muted-foreground text-xs font-medium">Details</p>
+            {row.jobber.jobNumber && !row.job ? <p className="mt-0.5 font-medium">Job #{row.jobber.jobNumber}</p> : null}
+            {row.jobber.details ? (
+              <p className="text-muted-foreground mt-1 line-clamp-4 text-xs whitespace-pre-line">{row.jobber.details}</p>
+            ) : null}
+          </div>
+        ) : null}
         <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 border-t px-4 py-3 text-sm">
           {row.job ? (
             <>
@@ -165,10 +177,20 @@ export function CalendarVisit({
             </>
           ) : null}
           <dt className="text-muted-foreground">Team</dt>
-          <dd className="flex min-w-0 items-center gap-2">
-            <PersonDisc name={person} />
-            <span className="truncate">{person ?? 'Unassigned'}</span>
+          <dd className="flex min-w-0 flex-col gap-1">
+            {team.map((name, index) => (
+              <span className="flex min-w-0 items-center gap-2" key={name ?? index}>
+                <PersonDisc name={name} />
+                <span className="truncate">{name ?? 'Unassigned'}</span>
+              </span>
+            ))}
           </dd>
+          {row.jobber?.address ? (
+            <>
+              <dt className="text-muted-foreground">Location</dt>
+              <dd>{row.jobber.address}</dd>
+            </>
+          ) : null}
           <dt className="text-muted-foreground">When</dt>
           <dd>
             {weekdayOf(date)}, {formatScheduledDate(date)} · {time ?? 'Anytime'}

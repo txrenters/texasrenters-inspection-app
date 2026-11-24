@@ -59,7 +59,7 @@ export interface JobberDayRow {
    */
   technicianIds?: string[];
   here: JobberDaySide | null;
-  jobber: (JobberDaySide & { title: string | null; completed: boolean }) | null;
+  jobber: (JobberDaySide & { title: string | null; completed: boolean } & JobberVisitExtras) | null;
   state: JobberDayState;
   /** Every difference that applies, in words. Empty when they match. */
   differences: string[];
@@ -107,7 +107,18 @@ export interface JobberDayTechnician {
   differences: number;
 }
 
-export interface JobberDayOtherWork {
+/**
+ * What Jobber's visit popup shows beside the title (2026-11-25): the job's
+ * number, the visit's Details, and the whole address. Optional on a day read
+ * before they were carried.
+ */
+export interface JobberVisitExtras {
+  jobNumber?: string | null;
+  details?: string | null;
+  address?: string | null;
+}
+
+export interface JobberDayOtherWork extends JobberVisitExtras {
   jobberVisitId: string;
   title: string | null;
   property: string;
