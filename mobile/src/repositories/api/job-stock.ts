@@ -1,14 +1,14 @@
 import type { JobStock, MyTrucks, PhoneCatalogItem } from '@texasrenters/shared';
 
 import { cachedApiRecord, storeApiRecord } from '../../storage/offline-record-cache';
-import { dismissStockRefusal, readStockRefusals } from '../../storage/stock-refusals';
+import { dismissStockRefusal, noteStockRefusal, readStockRefusals } from '../../storage/stock-refusals';
 import { dismissAskRefusal, readAskRefusals } from '../../storage/truck-ask-refusals';
 import type { PendingSlip, RefusedSlip } from '../../utils/job-stock';
 import type { PendingAsk, RefusedAsk } from '../../utils/truck-stock';
 import type { StockRepository } from '../contracts';
 import { jobStockSchema } from './job-stock-schema';
 import { myTrucksSchema } from './my-truck-schema';
-import { JOB_STOCK_KIND, TRUCK_ASK_KIND, jobStockEntryId, savedJobStockSlips, savedTruckAsks, sendSavedFirst, truckAskEntryId } from './offline-writes';
+import { JOB_STOCK_KIND, QueuedOfflineError, TRUCK_ASK_KIND, jobStockEntryId, savedJobStockSlips, savedTruckAsks, sendSavedFirst, truckAskEntryId } from './offline-writes';
 import { requestJson } from './repositories';
 
 const MY_TRUCKS = '/api/v1/technician/truck';
@@ -34,10 +34,32 @@ export class ApiStockRepository implements StockRepository {
   }
 
   async record(slip: PendingSlip): Promise<JobStock> {
-    const { inspectionId, kind, placeId, lines, clientRequestId } = slip;
-    const reply = await sendSavedFirst({ id: jobStockEntryId(clientRequestId), kind: JOB_STOCK_KIND, payload: { ...slip } }, () =>
-      requestJson(path(inspectionId), { method: 'POST', body: JSON.stringify({ kind, placeId, lines, clientRequestId }) }),
-    );
+    const { inspectionId, kind, placeId, lines, clientRequestId, named } = slip;
+    let reply: unknown;
+    try {
+      reply = await sendSavedFirst({ id: jobStockEntryId(clientRequestId), kind: JOB_STOCK_KIND, payload: { ...slip } }, () =>
+        requestJson(path(inspectionId), { method: 'POST', body: JSON.stringify({ kind, placeId, lines, clientRequestId }) }),
+      );
+    } catch (error) {
+      /**
+       * Refused while the technician was watching (2026-11-24). The phone has
+       * let the slip go, and it was said only in a line under the button, with
+       * the amounts already cleared -- gone once they left the screen. Written
+       * down like a refusal that comes back later, so the job's list says "Not
+       * recorded" and what, until they have read it. Kept for sending later is
+       * not a refusal.
+       */
+      if (!(error instanceof QueuedOfflineError))
+        await noteStockRefusal({
+          clientRequestId,
+          inspectionId,
+          kind,
+          named,
+          reason: error instanceof Error && error.message ? error.message : 'The office could not record it.',
+          at: new Date().toISOString(),
+        });
+      throw error;
+    }
     return storeApiRecord(recordKey(inspectionId), jobStockSchema, reply);
   }
 

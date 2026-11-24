@@ -14,7 +14,7 @@ import { registerIcons } from '@/src/lib/icons';
 import { BelowHeader } from '@/src/lib/native-header';
 import { QueuedOfflineError } from '@/src/repositories/api/offline-writes';
 import { scanOntoSlip } from '@/src/utils/item-scan';
-import { newSlipKey, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '@/src/utils/job-stock';
+import { newSlipKey, slipLines, slipSummary, stepped, takenFromTruck, truckStock, type PendingSlip } from '@/src/utils/job-stock';
 import { findOnTruck } from '@/src/utils/truck-stock';
 
 registerIcons(MinusIcon, PlusIcon);
@@ -31,7 +31,8 @@ registerIcons(MinusIcon, PlusIcon);
  * the list says it was not recorded and why -- it is never dropped quietly.
  *
  * The phone only ever takes from a truck and puts back what was taken for this
- * job. An item the office's stock shows none of in the truck cannot be taken
+ * job, into the truck it came from (2026-11-24: into another truck would be a
+ * move between trucks). An item the office's stock shows none of in the truck cannot be taken
  * here: the technician tells the office from My truck. Moving stock into the
  * truck, and undoing a slip, are the office's.
  */
@@ -90,9 +91,9 @@ export default function JobStockScreen() {
   // What the phone is holding, and what this tap has just recorded: each once.
   const waiting = [...held, ...sending.filter((slip) => !held.some((kept) => kept.clientRequestId === slip.clientRequestId))];
   const refused = local.data?.refused ?? [];
-  const offered: JobStockItem[] = mode === 'RETURN' ? takenForJob(data.taken, waiting) : placeId ? truckStock(data.stock, placeId, waiting) : [];
+  const offered: JobStockItem[] = !placeId ? [] : mode === 'RETURN' ? takenFromTruck(data.slips, waiting, placeId) : truckStock(data.stock, placeId, waiting);
   const { lines, named } = slipLines(offered, quantities);
-  const problem = lines.length ? jobStockProblem(mode, lines, new Map(offered.map((item) => [item.itemId, item.quantity])), (itemId) => offered.find((item) => item.itemId === itemId)?.name ?? 'that item') : null;
+  const problem = lines.length ? jobStockProblem(mode, lines, new Map(offered.map((item) => [item.itemId, item.quantity])), (itemId) => offered.find((item) => item.itemId === itemId)?.name ?? 'that item', placeName) : null;
   const shown = findOnTruck(offered, search);
   // Found by name and none in the truck, by the office's stock: shown greyed, not offered (taking out, only).
   const noneHere = mode === 'WITHDRAWAL' && search.trim() ? findOnTruck(data.catalog, search).filter((item) => !offered.some((one) => one.itemId === item.itemId)).slice(0, 5) : [];
@@ -192,7 +193,7 @@ export default function JobStockScreen() {
               <View className="gap-1">
                 <Text className="text-base font-semibold text-foreground">{mode === 'RETURN' ? 'What is going back' : `In ${placeName}`}</Text>
                 <Text className="text-xs text-muted-foreground">
-                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job, or tap the number to type it.'}
+                  {mode === 'RETURN' ? `Only what you took from ${placeName} for this job can go back into it.` : 'Tap + for each one you used on this job, or tap the number to type it.'}
                 </Text>
               </View>
               {offered.length ? (
@@ -245,7 +246,7 @@ export default function JobStockScreen() {
                 })
               ) : (
                 <Text className="text-sm text-muted-foreground">
-                  {mode === 'RETURN' ? 'Nothing has been taken for this job, so there is nothing to put back.' : 'This truck is empty. The office fills it from the storeroom.'}
+                  {mode === 'RETURN' ? `Nothing was taken from ${placeName} for this job, so nothing can go back into it.` : 'This truck is empty. The office fills it from the storeroom.'}
                 </Text>
               )}
               {offered.length && !shown.length && !noneHere.length ? <Text className="text-sm text-muted-foreground">Nothing in the list has those words.</Text> : null}

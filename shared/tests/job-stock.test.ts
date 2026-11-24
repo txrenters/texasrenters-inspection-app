@@ -31,12 +31,27 @@ describe('what the phone may record', () => {
     expect(jobStockProblem('RETURN', [{ itemId: 'filter', quantity: 2 }], taken, name)).toBeNull();
     expect(jobStockProblem('RETURN', [{ itemId: 'filter', quantity: 3 }], taken, name)).toBe('You took 2 of FLT-0003 for this job, so 3 cannot go back.');
     expect(jobStockProblem('RETURN', [{ itemId: 'battery', quantity: 1 }], taken, name)).toBe('You took 0 of PRT-0001 for this job, so 1 cannot go back.');
+    // Named for the truck it would go back into (2026-11-24).
+    expect(jobStockProblem('RETURN', [{ itemId: 'filter', quantity: 3 }], taken, name, 'Truck 1')).toBe('You took 2 of FLT-0003 from Truck 1 for this job, so 3 cannot go back into it.');
   });
 });
 
 describe('what was taken for a job', () => {
   it('is what left less what came back, by item, without what the office reversed', () => {
     expect(jobStockTaken([slip('WITHDRAWAL', [line('filter', 3), line('battery', 1)]), slip('RETURN', [line('filter', 1)]), slip('WITHDRAWAL', [line('filter', 5)], true)])).toEqual([line('filter', 2), line('battery', 1)]);
+  });
+
+  /** 2026-11-24: what can go back into a truck is what was taken from that truck, never another's. */
+  it('is from one truck when a truck is named, counting a slip from a server that named none', () => {
+    const fromShared = { ...slip('WITHDRAWAL', [line('battery', 2)]), placeId: 'shared-truck' };
+    const fromMine = { ...slip('WITHDRAWAL', [line('filter', 3)]), placeId: 'my-truck' };
+    const backIntoMine = { ...slip('RETURN', [line('filter', 1)]), placeId: 'my-truck' };
+    const older = { ...slip('WITHDRAWAL', [line('filter', 1)]), placeId: null };
+    expect(jobStockTaken([fromShared, fromMine, backIntoMine], 'my-truck')).toEqual([line('filter', 2)]);
+    expect(jobStockTaken([fromShared, fromMine, backIntoMine], 'shared-truck')).toEqual([line('battery', 2)]);
+    expect(jobStockTaken([fromShared, older], 'my-truck')).toEqual([line('filter', 1)]);
+    // Without a truck, the whole job: what it has used.
+    expect(jobStockTaken([fromShared, fromMine, backIntoMine])).toEqual([line('filter', 2), line('battery', 2)]);
   });
 
   it('leaves out what all went back', () => {
