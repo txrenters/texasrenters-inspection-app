@@ -198,7 +198,13 @@ function database() {
     // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
     stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     // The papers that name an item: once any does, its code stays.
-    purchaseRequisitionLine: { count: jest.fn(async ({ where }: { where: Row }) => requested.filter((itemId) => itemId === where.itemId).length), findMany: naming(papers.requisitionLines) },
+    purchaseRequisitionLine: { count: jest.fn(async ({ where }: { where: Row }) => requested.filter((itemId) => itemId === where.itemId).length), findMany: jest.fn(async ({ where, select }: { where: Row; select?: { orderSources?: { where?: { releasedAt?: null } } } }) =>
+        papers.requisitionLines
+          .filter((row) => row.itemId === where.itemId)
+          // Only the shares still live, when that is what is asked for: a cancelled order's are released.
+          .map((row) => (select?.orderSources?.where && 'releasedAt' in select.orderSources.where ? { ...row, orderSources: (row.orderSources as Row[]).filter((source) => !source.releasedAt) } : row)),
+      ),
+    },
     purchaseOrderLine: { count: jest.fn(async () => 0), findMany: naming(papers.orderLines) },
     goodsReceiptLine: { findMany: naming(papers.receiptLines) },
     stockSlipLine: { count: jest.fn(async ({ where }: { where: Row }) => papers.slipLines.filter((row) => row.itemId === where.itemId).length) },
@@ -673,6 +679,18 @@ describe('deleting an item code (2026-11-24)', () => {
     expect(items.find((item) => item.id === FILTER)).toMatchObject({ active: true });
     expect(items.find((item) => item.id === FILTER)!.deletedAt).toBeUndefined();
     expect(movements).toHaveLength(0);
+  });
+
+  // Production, 2026-11-24: FLT-0001 was deleted while PR-00001 waited for an order, because its first order had been cancelled.
+  it('is refused while an approved requisition waits for an order again, its first order having been cancelled', async () => {
+    const { service, papers } = database();
+    papers.requisitionLines.push({ itemId: FILTER, requisition: { id: id(41), number: 'PR-00001', status: 'APPROVED' }, orderSources: [{ id: id(42), releasedAt: new Date('2026-11-24T16:45:00Z') }] });
+    papers.orderLines.push({ itemId: FILTER, quantity: 5, receivedQuantity: 0, order: { id: id(43), number: 'PO-0002', status: 'CANCELLED' } });
+
+    const check = await service.deletion(office, FILTER);
+    expect(check.open.map((document) => document.number)).toEqual(['PR-00001']);
+    expect(check.usedOn.map((document) => document.number)).toEqual(['PO-0002']);
+    await expect(service.deleteItem(office, FILTER, deleting())).rejects.toMatchObject({ code: 'STOCK_ITEM_STILL_OPEN', message: 'FLT-16251 is still on PR-00001. Finish or cancel that first.' });
   });
 
   it('says why for Other, and is for whoever keeps item codes', async () => {

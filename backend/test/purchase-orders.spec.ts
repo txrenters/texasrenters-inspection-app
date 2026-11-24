@@ -456,6 +456,23 @@ describe('Pending Processing: one order from several requisitions (2026-11-23)',
     expect(pending.vendors.map((one) => one.name)).toEqual(['Hill Country Supply', 'Alamo Trade Parts']);
   });
 
+  // An item code deleted while its line waited (data from before 2026-11-24's fix): shown, marked, and not ordered.
+  it('keeps a line whose item code was deleted on the list, marked, and refuses to order it', async () => {
+    const { service, items, orders } = database();
+    const before = orders.length;
+    items.find((item) => item.id === BATTERY)!.deletedAt = new Date('2026-11-24T16:00:00Z');
+
+    const pending = await service.pendingLines(buyer);
+    expect(pending.lines.find((one) => one.item.code === 'PRT-0001')!.item).toEqual({ id: BATTERY, code: 'PRT-0001', name: 'Battery, 9 V (deleted)', unit: 'each', deleted: true });
+    expect(pending.lines.find((one) => one.item.code === 'FLT-0003')!.item).toMatchObject({ name: 'Filter 20x25x1', deleted: false });
+
+    await expect(service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(42))] })).rejects.toMatchObject({
+      code: 'STOCK_ITEM_DELETED',
+      message: 'PRT-0001 on PR-0012 was deleted, so it is not ordered. Reopen PR-0012 and give the line an item code in use, or cancel it.',
+    });
+    expect(orders).toHaveLength(before);
+  });
+
   it('makes one order a vendor and company: the same item to the same place one line, quantities added, each line where it goes', async () => {
     const { service, requisitions, audits } = database();
     const made = await service.makeOrders(buyer, { lines: [pick(id(41)), pick(id(42)), pick(id(44)), pick(id(45))] });

@@ -160,12 +160,13 @@ export function ReceivingSection({ data }: { data: PurchaseOrderDetail }) {
                 <span className="text-muted-foreground">{formatDay(receipt.receivedOn)}</span>
                 {receipt.reversed ? <Badge variant="outline">Reversed</Badge> : null}
                 {/* Whoever receives or reverses here is the stock keeper; somebody who only looks prints labels from Item codes. */}
-                {!receipt.reversed && (data.can.receive || data.can.reverseReceipt) ? (
+                {!receipt.reversed && (data.can.receive || data.can.reverseReceipt) && receipt.lines.some((line) => !line.deleted) ? (
                   <Button aria-label={`Label what arrived on ${receipt.number}`} className="ml-auto" onClick={() => setLabelling(receipt)} size="sm" variant="outline">
                     Labels
                   </Button>
                 ) : null}
-                {!receipt.reversed && data.can.reverseReceipt ? (
+                {/* A deleted item's stock was removed with its code, so its receipt stays. */}
+                {!receipt.reversed && data.can.reverseReceipt && !receipt.lines.some((line) => line.deleted) ? (
                   <Button aria-label={`Reverse ${receipt.number}`} onClick={() => setReversing(receipt)} size="sm" variant="outline">
                     Reverse
                   </Button>

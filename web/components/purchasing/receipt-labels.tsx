@@ -36,6 +36,8 @@ export interface ReceiptLabelLine {
 export function receiptLabelLines(receipt: Pick<GoodsReceiptRow, 'lines'>, units: ReadonlyMap<string, string>): ReceiptLabelLine[] {
   const lines = new Map<string, ReceiptLabelLine>();
   for (const line of receipt.lines) {
+    // A deleted code gets no label: the code may be given to another item.
+    if (line.deleted) continue;
     const one = lines.get(line.itemCode);
     if (one) one.received += line.quantity;
     else lines.set(line.itemCode, { code: line.itemCode, name: line.itemName, unit: units.get(line.itemCode) ?? '', received: line.quantity });

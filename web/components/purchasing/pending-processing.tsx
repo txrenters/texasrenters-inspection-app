@@ -253,7 +253,8 @@ function GroupRows({
   vendors: readonly PendingVendor[];
   merging: ReadonlySet<string>;
 }) {
-  const ids = group.lines.map((line) => line.requisitionLineId);
+  // A line whose item code was deleted is shown, and never ordered.
+  const ids = group.lines.filter((line) => !line.item.deleted).map((line) => line.requisitionLineId);
   const on = ids.filter((lineId) => ticked.has(lineId)).length;
   const where = `${group.vendor?.name ?? 'no vendor yet'}, ${companyCode(group.company)}`;
   return (
@@ -263,7 +264,7 @@ function GroupRows({
           <Checkbox
             aria-label={group.vendor ? `Order every line for ${where}` : 'Choose a vendor first'}
             checked={on === 0 ? false : on === ids.length ? true : 'indeterminate'}
-            disabled={!group.vendor}
+            disabled={!group.vendor || !ids.length}
             onCheckedChange={() => tick(ids, on !== ids.length)}
           />
         </TableCell>
@@ -295,14 +296,21 @@ function GroupRows({
           <Fragment key={line.requisitionLineId}>
             <TableRow className={cn(ticked.has(line.requisitionLineId) && 'bg-accent/60')}>
               <TableCell className="border px-2 py-1.5">
-                <Checkbox aria-label={label} checked={ticked.has(line.requisitionLineId)} disabled={!vendor} onCheckedChange={(next) => tick([line.requisitionLineId], next === true)} />
+                <Checkbox aria-label={label} checked={ticked.has(line.requisitionLineId)} disabled={!vendor || Boolean(line.item.deleted)} onCheckedChange={(next) => tick([line.requisitionLineId], next === true)} />
               </TableCell>
               <TableCell className="border px-2 py-1.5 whitespace-nowrap">
                 <Link className="font-medium underline-offset-4 hover:underline" href={`/purchasing/requisitions/${line.requisition.id}`}>
                   {line.requisition.number ?? 'Draft'}
                 </Link>
               </TableCell>
-              <TableCell className="text-heading border px-2 py-1.5 font-semibold whitespace-nowrap tabular-nums">{line.item.code}</TableCell>
+              <TableCell className="text-heading border px-2 py-1.5 font-semibold whitespace-nowrap tabular-nums">
+                {line.item.code}
+                {line.item.deleted ? (
+                  <Badge className="ml-2" variant="outline">
+                    Deleted
+                  </Badge>
+                ) : null}
+              </TableCell>
               <TableCell className="border px-2 py-1.5">
                 <span className={cn(merging.has(line.requisitionLineId) && 'border-info border-l-[3px] pl-2')}>{line.item.name}</span>
               </TableCell>

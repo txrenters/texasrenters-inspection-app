@@ -129,7 +129,8 @@ export interface GoodsReceiptRow {
   at: string;
   /** Set once it has been reversed: its stock was taken back out. */
   reversed: { by: string; at: string; reason: string } | null;
-  lines: { itemCode: string; itemName: string; placeName: string; quantity: number }[];
+  /** `deleted` once the line's item code was deleted: no label is printed for it, and the receipt is not reversed. */
+  lines: { itemCode: string; itemName: string; placeName: string; quantity: number; deleted?: boolean }[];
 }
 
 export interface VendorBillView {
