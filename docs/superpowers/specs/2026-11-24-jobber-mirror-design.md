@@ -37,6 +37,25 @@ What the office said (2026-11-24):
 | Properties | Only `JobberPropertyLink` (id ↔ our property) |
 | Jobs, clients, quotes, requests, job/visit notes, older visits | Not stored |
 
+## Revisions after reading the code (2026-11-24)
+
+- **No own cron.** The mirror runs at the end of the existing
+  `JobberSyncScheduler` tick, after the invoice read, so it can never run at
+  the same time as another Jobber reader and compete for the same API
+  allowance. `JOBBER_MIRROR_CRON` is dropped.
+- **Notes stay inside their parent's payload** (job, client, quote, request),
+  read in full: a parent with more notes than a page carries is read again by
+  itself, as the invoice worker does. There is no separate `NOTE` kind.
+- **Attachments hang off the parent record** through Jobber's
+  `noteAttachments`, the field the invoice file copy already uses against the
+  live API.
+- **Deletions use `lastSeenAt`.** Every full walk stamps what it saw; when a
+  walk finishes, rows of that kind not seen since it started are marked
+  `deletedInJobberAt`. A full walk is repeated weekly, and daily for a kind
+  Jobber cannot filter by `updatedAt`. No separate reconcile cron.
+
+Where this section and the text below disagree, this section wins.
+
 ## Data model
 
 Three new tables, all scoped by `organizationId` (cascade on organization
