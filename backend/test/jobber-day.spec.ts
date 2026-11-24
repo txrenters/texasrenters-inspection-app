@@ -200,6 +200,26 @@ describe('a day against Jobber', () => {
     ]);
   });
 
+  it("files work that is not an inspection under its technician here, with Jobber's tick, so the calendar can draw it (2026-11-25)", () => {
+    const result = day({
+      inspections: [],
+      visits: [
+        visit({ jobberVisitId: 'v-7', inspectionId: null, status: 'SKIPPED_NOT_SYNCED', payload: { title: 'General Maintenance - WO#44805' } }),
+        visit({
+          jobberVisitId: 'v-8',
+          inspectionId: null,
+          status: 'SKIPPED_COMPLETE',
+          payload: { title: 'Key information', completedAt: ONE_PM, assignedUsers: { nodes: [] } },
+        }),
+      ],
+    });
+
+    expect(result.otherWork).toEqual([
+      expect.objectContaining({ jobberVisitId: 'v-7', technicianId: 't-moses', completed: false }),
+      expect.objectContaining({ jobberVisitId: 'v-8', technicianId: null, completed: true }),
+    ]);
+  });
+
   it('reads a Jobber visit of the day whose inspection is on another day here', () => {
     const result = day({
       inspections: [],

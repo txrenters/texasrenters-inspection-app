@@ -70,6 +70,12 @@ export interface JobberDayRow {
    * Jobber has.
    */
   job?: JobberDayJob | null;
+  /**
+   * Jobber work that is not an inspection -- a work order, a key pickup --
+   * drawn on the calendar so it holds what Jobber's does (2026-11-25).
+   * Read-only: nothing here sends it anywhere.
+   */
+  jobberWork?: boolean;
 }
 
 /** A row's job: its number, its title, and every kind of work in it, the lead first. */
@@ -100,7 +106,11 @@ export interface JobberDayOtherWork {
   title: string | null;
   property: string;
   technician: string | null;
+  /** The technician here it is filed under, by Jobber's assignee email; null for nobody (2026-11-25). */
+  technicianId: string | null;
   startAt: string | null;
+  /** Jobber has it completed. */
+  completed: boolean;
   /** Why the sync left it alone: not an inspection, a filter delivery, ignored by the office. */
   reason: string;
 }

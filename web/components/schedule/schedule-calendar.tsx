@@ -29,6 +29,7 @@ import { typeTitle } from '@/lib/inspection-type-tone';
 import { jobberDayQuery } from '@/lib/queries';
 import {
   CALENDAR_VIEWS,
+  calendarRows,
   counts,
   dayColumns,
   dayOfMonth,
@@ -133,14 +134,18 @@ export function ScheduleCalendar({
    * may leave empty: a visit under somebody must never show the "nobody" disc.
    */
   const names = new Map<string, string>();
-  for (const data of byDate.values())
+  for (const data of byDate.values()) {
     for (const person of data.technicians) if (person.technicianId) names.set(person.technicianId, person.name);
+    // Somebody whose only visit that day is Jobber work (2026-11-25).
+    for (const work of data.otherWork ?? [])
+      if (work.technicianId && work.technician && !names.has(work.technicianId)) names.set(work.technicianId, work.technician);
+  }
   const nameOf: NameOf = (row) => (row.technicianId ? (names.get(row.technicianId) ?? personOf(row)) : null);
 
   const options = filterOptions(byDate, nameOf);
   // One card a job: its inspections on the day are one visit (2026-11-20).
   const shownOn = (date: string) =>
-    oneCardPerJob((byDate.get(date)?.rows ?? []).filter((row) => isShown(row, hidden)));
+    oneCardPerJob(calendarRows(byDate.get(date)).filter((row) => isShown(row, hidden)));
   /**
    * A day picked in the Week or Month view. With the map on, it is the map's
    * day and the calendar stays where it is (the office, 2026-11-05: "if we
@@ -297,7 +302,7 @@ function filterOptions(byDate: ReadonlyMap<string, JobberDayComparison>, nameOf:
   const types = new Map<string, FilterOption>();
   const people = new Map<string, FilterOption>([[NOBODY, { value: NOBODY, label: 'Unassigned' }]]);
   for (const day of byDate.values())
-    for (const row of day.rows) {
+    for (const row of calendarRows(day)) {
       const type = row.inspectionType ?? UNKNOWN_TYPE;
       if (!types.has(type))
         types.set(type, { value: type, label: row.inspectionType ? typeTitle(type) : 'Type not known yet' });

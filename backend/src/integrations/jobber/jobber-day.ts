@@ -251,7 +251,12 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
         title: payload.title ?? null,
         property: streetOf(payload),
         technician: jobberName(payload),
+        technicianId:
+          assignees(payload)
+            .map((entry) => (entry.email ? byEmail.get(entry.email) : undefined))
+            .find(Boolean)?.id ?? null,
         startAt: timedStart(payload)?.toISOString() ?? null,
+        completed: Boolean(payload.completedAt),
         reason:
           visit.status === 'IGNORED'
             ? 'Ignored by the office'
