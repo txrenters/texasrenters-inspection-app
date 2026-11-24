@@ -370,6 +370,18 @@ describe('a requisition', () => {
     await expect(service.detail(outsider, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
   });
 
+  // The office, 2026-11-24: item codes come first. Production had none, and New still made a numbered draft.
+  it('is not made while the office has no item code in use: the codes come first', async () => {
+    const { db, service, requisitions } = database();
+    db.stockItem.count.mockResolvedValueOnce(0);
+    await expect(service.create(asker, small({ xeroTenantId: null, neededBy: null, deliverToPlaceId: null, reason: '', lines: [] }))).rejects.toMatchObject({
+      code: 'REQUISITION_NEEDS_ITEM_CODES',
+      message: 'There are no item codes yet. A purchase requisition is made from item codes: whoever keeps them adds the items first, on Inventory, Item codes.',
+    });
+    expect(requisitions).toHaveLength(0);
+    expect(db.stockItem.count).toHaveBeenCalledWith({ where: { organizationId: asker.organizationId, active: true, deletedAt: null } });
+  });
+
   // Production, 2026-11-24: every press of New spent a number and left an empty draft behind.
   it('opens the blank draft a person already has from today when New is pressed again, and makes another once something is written on it', async () => {
     const { service, requisitions } = database();

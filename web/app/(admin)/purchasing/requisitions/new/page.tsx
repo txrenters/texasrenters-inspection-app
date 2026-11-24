@@ -1,11 +1,15 @@
 'use client';
 
 import type { RequisitionChoices, SaveRequisitionInput } from '@texasrenters/shared';
+import { BoxesIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { PurchasingTabs } from '@/components/purchasing/purchasing-tabs';
-import { ErrorState, PageSkeleton } from '@/components/states';
+import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
+import { Button } from '@/components/ui/button';
+import { ApiError } from '@/lib/api';
 import { usePurchasingEdits, useRequisitionChoices } from '@/lib/purchasing-queries';
 
 /**
@@ -39,6 +43,18 @@ export default function NewRequisitionPage() {
   }, [attempt, asked, choices.data]);
 
   const failed = create.error ?? (asked ? choices.error : null);
+  // Codes come first (the office, 2026-11-24): said as what to do next, not as something that broke.
+  if (failed instanceof ApiError && failed.code === 'REQUISITION_NEEDS_ITEM_CODES')
+    return (
+      <>
+        <PurchasingTabs current="requisitions" />
+        <EmptyState description="A purchase requisition is made from item codes. Whoever keeps them adds the items first; then a requisition can be started." icon={BoxesIcon} title="There are no item codes yet">
+          <Button asChild>
+            <Link href="/inventory?tab=codes">Open Item codes</Link>
+          </Button>
+        </EmptyState>
+      </>
+    );
   if (failed)
     return (
       <>
