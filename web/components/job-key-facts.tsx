@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 import type { JobFact } from '@/lib/job-facts';
 import { cn } from '@/lib/utils';
@@ -9,8 +10,19 @@ import { cn } from '@/lib/utils';
  * One bordered surface cut by hairlines, whatever the number of facts: each
  * cell draws its own right and bottom edge and the strip clips the outer ones,
  * so a last row that is not full leaves card, not a block of border colour.
+ *
+ * `actions` puts a control beside a fact's label, by its key -- "Change" on
+ * the technician of a finished job -- where the eye already is.
  */
-export function JobKeyFacts({ facts, className }: { facts: JobFact[]; className?: string }) {
+export function JobKeyFacts({
+  facts,
+  className,
+  actions,
+}: {
+  facts: JobFact[];
+  className?: string;
+  actions?: Partial<Record<string, ReactNode>>;
+}) {
   if (!facts.length) return null;
   return (
     <section aria-label="Key information" className={cn('bg-card overflow-hidden rounded-xl border', className)}>
@@ -22,6 +34,7 @@ export function JobKeyFacts({ facts, className }: { facts: JobFact[]; className?
                 <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" />
               ) : null}
               {fact.label}
+              {actions?.[fact.key] ? <span className="ml-auto">{actions[fact.key]}</span> : null}
             </dt>
             <dd className="mt-0.5 min-w-0">
               {/* Wrapped, never cut short: an access note or an alert is read whole or not at all. */}

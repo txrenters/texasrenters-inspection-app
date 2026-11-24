@@ -136,6 +136,7 @@ import type {
   AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
+  DoneTechnicianDto,
   CreateAdminInspectionDto,
   AddJobWorkDto,
   CreateAdminJobDto,
@@ -4513,6 +4514,116 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
+    return outcome.assignment;
+  }
+
+  /**
+   * Corrects who did a finished visit (the office, 2026-11-25: "it says Kevin
+   * but we should have an option to replace it, like Moses").
+   *
+   * `reassign` refuses a done visit, and rightly for what it is: it routes
+   * work, so it emails the technician and puts the job on their phone. This
+   * routes nothing. The visit is over; the record of who did it was wrong --
+   * most often a visit Jobber completed, carrying whoever it was booked for.
+   * Who did it is what the timesheet, Actual vs Budget and a new invoice's
+   * technician read, so it has to be right.
+   *
+   * So: no email, no realtime event. The previous assignment stays in the
+   * history, a reason is required, and the audit row names both people.
+   * Recordings and photos keep the name of whoever took them.
+   *
+   * One Jobber visit has one technician: the inspection holding the visit and
+   * any booked on it with it (`jobberCompanionOfId`) change together, the done
+   * ones -- an open one follows the visit through the sync, as it always has.
+   * Jobber is sent the new technician when the inspection holding the visit
+   * changed; nothing else here would ever correct Jobber's copy, since the sync
+   * never moves a finished visit that already names someone.
+   *
+   * Asking again for the technician already on it changes nothing, so a
+   * double-submitted form is harmless.
+   */
+  async changeDoneTechnician(user: AuthenticatedUser, inspectionId: string, input: DoneTechnicianDto) {
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const inspection = await tx.inspection.findFirst({
+        where: { id: inspectionId, organizationId: user.organizationId },
+        select: { status: true, jobberCompanionOfId: true },
+      });
+      if (!inspection)
+        throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
+      if (!isDoneInspectionStatus(inspection.status))
+        throw new ApplicationError(
+          409,
+          'INSPECTION_NOT_DONE',
+          'This visit is not done yet. Use Reassign to send someone else.',
+        );
+      await this.requireTechnician(user.organizationId, input.technicianId, tx);
+
+      const holderId = inspection.jobberCompanionOfId ?? inspectionId;
+      const visit = await tx.inspection.findMany({
+        where: {
+          organizationId: user.organizationId,
+          OR: [{ id: holderId }, { jobberCompanionOfId: holderId }],
+          status: { in: DONE_INSPECTION_STATUSES },
+        },
+        select: {
+          id: true,
+          assignments: { where: { isCurrent: true }, select: { id: true, technicianId: true } },
+        },
+      });
+      const changed: string[] = [];
+      let result: { id: string } | null = null;
+      for (const member of visit) {
+        const current = member.assignments[0] ?? null;
+        if (current?.technicianId === input.technicianId) continue;
+        if (current)
+          await tx.inspectionAssignment.update({
+            where: { id: current.id },
+            data: {
+              isCurrent: false,
+              status: 'REASSIGNED',
+              endedAt: new Date(),
+              endedById: user.id,
+              reason: input.reason,
+            },
+          });
+        const next = await tx.inspectionAssignment.create({
+          data: {
+            inspectionId: member.id,
+            technicianId: input.technicianId,
+            assignedById: user.id,
+            supersedesId: current?.id ?? null,
+            reason: input.reason,
+          },
+          include: { technician: { select: { id: true, displayName: true, email: true } } },
+        });
+        await this.audit(tx, user, 'INSPECTION_TECHNICIAN_CHANGED_AFTER_VISIT', member.id, {
+          previousAssignmentId: current?.id ?? null,
+          previousTechnicianId: current?.technicianId ?? null,
+          assignmentId: next.id,
+          technicianId: input.technicianId,
+          reason: input.reason,
+          ...(member.id === inspectionId ? {} : { changedWith: inspectionId }),
+        });
+        changed.push(member.id);
+        if (member.id === inspectionId) result = next;
+      }
+      if (changed.includes(holderId))
+        await this.pushVisitEdit(tx, user, holderId, JobberOutboundKind.VISIT_ASSIGN);
+      return {
+        changed,
+        assignment:
+          result ??
+          (await tx.inspectionAssignment.findFirst({
+            where: { inspectionId, isCurrent: true },
+            include: { technician: { select: { id: true, displayName: true, email: true } } },
+          })),
+      };
+    }, ADMIN_TRANSACTION_OPTIONS);
+    if (outcome.changed.length)
+      await this.cacheInvalidation?.publish({
+        type: 'inspection.changed',
+        organizationId: user.organizationId,
+      });
     return outcome.assignment;
   }
 

@@ -102,6 +102,7 @@ function InspectionDetail() {
   });
   const audit = useInspectionAudit(id, state.auditPage);
   const [assigning, setAssigning] = useState(false);
+  const [changingTechnician, setChangingTechnician] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
@@ -206,6 +207,14 @@ function InspectionDetail() {
     permissions.has('inspections:finalize');
   const canUseMenu = canDelete || canEditOrAssign || canMarkComplete;
   const canEditJob = !visitOver && permissions.has('inspections:manage');
+  /**
+   * Who did a finished visit, corrected (the office, 2026-11-25). Reassigning
+   * stops when the visit is over, but the record of who did it can be wrong --
+   * a visit Jobber completed still names whoever it was booked for.
+   */
+  const canChangeDoneTechnician = isFinishedStatus(item.status) && permissions.has('inspections:assign');
+  /** The other inspection on the same Jobber visit, which changes with this one. */
+  const bookedWith = item.jobberCompanionOf ?? item.jobberCompanions?.[0] ?? null;
 
   /** Nothing to review until it has been walked; see `reviewComesFirst`. */
   const reviewing = reviewComesFirst(item);
@@ -366,7 +375,26 @@ function InspectionDetail() {
         jobber={jobber}
         notes={<JobNotes className="" inspection={item} />}
       >
-        <JobKeyFacts className="mt-3" facts={facts} />
+        <JobKeyFacts
+          actions={
+            canChangeDoneTechnician
+              ? {
+                  technician: (
+                    <Button
+                      aria-label="Change technician"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => setChangingTechnician(true)}
+                      variant="link"
+                    >
+                      Change
+                    </Button>
+                  ),
+                }
+              : undefined
+          }
+          className="mt-3"
+          facts={facts}
+        />
 
         {/* A service still owed is said in the Visit card just below, with the
             technician's reason; this is for the other inspection on the visit. */}
@@ -533,6 +561,15 @@ function InspectionDetail() {
 
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
+      ) : null}
+      {changingTechnician ? (
+        <AssignmentDialog
+          afterVisit
+          bookedWith={bookedWith ? typeTitle(bookedWith.inspectionType) : null}
+          current={current}
+          inspectionId={id}
+          onClose={() => setChangingTechnician(false)}
+        />
       ) : null}
       {editing ? (
         <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} />
