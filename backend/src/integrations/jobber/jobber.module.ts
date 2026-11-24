@@ -5,6 +5,8 @@ import { InvoiceFileStorageService } from '../../common/invoice-file-storage.ser
 import { RealtimeModule } from '../../realtime/realtime.module';
 import { JobberInvoiceFileWorker } from '../../workers/jobber-sync/jobber-invoice-files.worker';
 import { JobberInvoiceWorker } from '../../workers/jobber-sync/jobber-invoice.worker';
+import { JobberMirrorFileWorker } from '../../workers/jobber-sync/jobber-mirror-files.worker';
+import { JobberMirrorWorker } from '../../workers/jobber-sync/jobber-mirror.worker';
 import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
@@ -13,6 +15,7 @@ import { InvoiceTakeoverService } from './invoice-takeover.service';
 import { JobberClient } from './jobber.client';
 import { JobberDayActionsService } from './jobber-day-actions.service';
 import { JobberDayService } from './jobber-day.service';
+import { JobberMirrorService } from './jobber-mirror.service';
 import { JOBBER_CONFIG, getJobberConfig } from './jobber.config';
 import { JobberIntegrationController, JobberOAuthCallbackController } from './jobber.controller';
 import { JobberWebhookController } from './jobber.webhook.controller';
@@ -40,6 +43,9 @@ import { JobberTokenService } from './jobber.tokens.service';
     JobberOutboundWorker,
     JobberInvoiceWorker,
     JobberInvoiceFileWorker,
+    JobberMirrorWorker,
+    JobberMirrorFileWorker,
+    JobberMirrorService,
     InvoiceFileStorageService,
     InvoiceTakeoverService,
     JobberWebhookService,

@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { withTenant } from '../../database/tenant-context';
 import { JobberInvoiceWorker } from '../../workers/jobber-sync/jobber-invoice.worker';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
+import { JobberMirrorService } from './jobber-mirror.service';
 import { JobberTokenService } from './jobber.tokens.service';
 import { JOBBER_SOURCE_SYSTEM } from './jobber.constants';
 import type { JobberWebhookEvent } from './jobber.schemas';
@@ -36,6 +37,7 @@ export class JobberWebhookService {
     @Inject(JobberSyncWorker) private readonly sync: JobberSyncWorker,
     @Inject(JobberTokenService) private readonly tokens: JobberTokenService,
     @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
+    @Inject(JobberMirrorService) private readonly mirror: JobberMirrorService,
   ) {}
 
   /**
@@ -112,6 +114,7 @@ export class JobberWebhookService {
       await withTenant(connection.organizationId, async () => {
       if (event.topic === 'VISIT_DESTROY') {
         await this.sync.withdrawDeletedVisit(connection.organizationId, event.itemId);
+        await this.mirror.markVisitDeleted(connection.organizationId, event.itemId);
       } else if (event.topic === 'APP_DISCONNECT') {
         // Jobber has already invalidated the tokens; keeping them would leave a
         // connection that looks healthy and fails at the next refresh.

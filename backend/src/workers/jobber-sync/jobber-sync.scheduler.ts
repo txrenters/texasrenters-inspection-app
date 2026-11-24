@@ -5,6 +5,8 @@ import { withTenant } from '../../database/tenant-context';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberInvoiceFileWorker } from './jobber-invoice-files.worker';
 import { JobberInvoiceWorker } from './jobber-invoice.worker';
+import { JobberMirrorFileWorker } from './jobber-mirror-files.worker';
+import { JobberMirrorWorker } from './jobber-mirror.worker';
 import { JobberOutboundWorker } from './jobber-outbound.worker';
 import { JobberSyncWorker } from './jobber-sync.worker';
 
@@ -37,6 +39,8 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     @Inject(JobberOutboundWorker) private readonly outbound: JobberOutboundWorker,
     @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
     @Inject(JobberInvoiceFileWorker) private readonly invoiceFiles: JobberInvoiceFileWorker,
+    @Inject(JobberMirrorWorker) private readonly mirror: JobberMirrorWorker,
+    @Inject(JobberMirrorFileWorker) private readonly mirrorFiles: JobberMirrorFileWorker,
   ) {}
 
   onModuleInit() {
@@ -165,8 +169,29 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `Jobber invoice read failed: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
-    } finally {
-      this.running = false;
     }
+    // The read-only copy of every Jobber record (2026-11-24): last on the tick,
+    // so visits, the outbox and invoices always have the bucket first.
+    if (this.config.mirrorEnabled) {
+      try {
+        const mirrored = await withTenant(organizationId, () => this.mirror.run(organizationId));
+        if (mirrored.pages || mirrored.kinds.some((k) => k.problem))
+          this.logger.log(
+            `Jobber mirror: ${mirrored.pages} pages; ` +
+              mirrored.kinds
+                .map((k) => `${k.kind} ${k.mode} ${k.saved} saved${k.caughtUp ? ', caught up' : ''}${k.problem ? `, ${k.problem}` : ''}`)
+                .join('; ') +
+              '.',
+          );
+        if (!mirrored.skipped && !mirrored.kinds.some((k) => k.problem === 'THROTTLED')) {
+          const files = await withTenant(organizationId, () => this.mirrorFiles.run(organizationId));
+          if (files.copied || files.failed)
+            this.logger.log(`Jobber mirror files: ${files.copied} copied, ${files.failed} not copied.`);
+        }
+      } catch (error) {
+        this.logger.error(`Jobber mirror failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+    }
+    this.running = false;
   }
 }
