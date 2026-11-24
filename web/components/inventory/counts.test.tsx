@@ -336,6 +336,21 @@ describe('reviewing', () => {
     expect(screen.queryByRole('button', { name: 'Approve and post' })).toBeNull();
   });
 
+  // Production, 2026-11-24: CNT-0001, cancelled with nothing counted, said its two items were waiting for a second count.
+  it('says a cancelled count was not counted, never that it waits for a second count', () => {
+    show(review({ status: 'CANCELLED', counted: 0, matched: null, different: null, cancelled: { by: 'Sample Manager', at: '2026-11-20T21:49:00.000Z', reason: 'just testing' }, rows: [line(), battery()], lines: 2, can: NOBODY }));
+    const { unmount } = render(<StockCountPage />);
+    expect(screen.getByText('Nothing had been counted when it was cancelled.')).toBeTruthy();
+    expect(screen.getAllByText('Not counted')).toHaveLength(2);
+    expect(screen.queryByText(/second count\. It comes back/)).toBeNull();
+    expect(screen.queryByText('Waiting for the second count')).toBeNull();
+    unmount();
+
+    show(review({ status: 'CANCELLED', counted: 1, cancelled: { by: 'Sample Manager', at: '2026-11-20T21:49:00.000Z', reason: 'just testing' }, rows: [line(), battery({ counted: 6, waiting: false, expected: 6, difference: 0, valueCents: 0 })], lines: 2, can: NOBODY }));
+    render(<StockCountPage />);
+    expect(screen.getByText('1 of 2 had been counted when it was cancelled.')).toBeTruthy();
+  });
+
   it('shows a posted count with its reasons and who approved, and nothing left to press', () => {
     show(review({ status: 'POSTED', approvedBy: 'Sample Manager', postedAt: '2026-11-19T17:00:00.000Z', netValueCents: 110, rows: [line({ counted: 38, waiting: false, expected: 40, difference: -2, valueCents: -800, reason: 'DAMAGED' })], lines: 1, matched: 0, different: 1, can: NOBODY }));
     render(<StockCountPage />);

@@ -51,6 +51,7 @@ function matches(row: Row, where: Where): boolean {
     if (value === undefined) return true;
     if (key === 'AND') return (value as Where[]).every((part) => matches(row, part));
     if (key === 'OR') return (value as Where[]).some((part) => matches(row, part));
+    if (value instanceof Date) return row[key] instanceof Date && (row[key] as Date).getTime() === value.getTime();
     if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
       const rule = value as { in?: unknown[]; notIn?: unknown[]; not?: unknown };
       if (rule.in) return rule.in.includes(row[key]);
@@ -147,7 +148,12 @@ function database() {
     purchaseRequisition: {
       findMany: jest.fn(async ({ where }: { where: Where }) => requisitions.filter((row) => matches(row, where)).map(whole).reverse()),
       findFirst: jest.fn(async ({ where }: { where: Where }) => {
-        const found = requisitions.find((row) => matches(row, where));
+        // "With none of": a blank draft has no lines, quotes, files, notes or links.
+        const { lines: noLines, quotes: noQuotes, files: noFiles, notes: noNotes, links: noLinks, ...plain } = where as Where & Record<string, unknown>;
+        const none = (rule: unknown, rows: Row[], row: Row) => !rule || !rows.some((one) => one.requisitionId === row.id);
+        const found = requisitions.find(
+          (row) => matches(row, plain) && none(noLines, lines, row) && none(noQuotes, quotes, row) && none(noFiles, files, row) && none(noNotes, notes, row) && none(noLinks, links, row),
+        );
         return found ? whole(found) : null;
       }),
       create: jest.fn(async ({ data }: { data: Row }) => {
@@ -362,6 +368,24 @@ describe('a requisition', () => {
     expect(await service.list(colleague)).toMatchObject({ seesAll: false, requisitions: [] });
     await expect(service.detail(colleague, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
     await expect(service.detail(outsider, draft.id)).rejects.toMatchObject({ code: 'REQUISITION_NOT_FOUND' });
+  });
+
+  // Production, 2026-11-24: every press of New spent a number and left an empty draft behind.
+  it('opens the blank draft a person already has from today when New is pressed again, and makes another once something is written on it', async () => {
+    const { service, requisitions } = database();
+    const nothing = small({ xeroTenantId: null, neededBy: null, deliverToPlaceId: null, reason: '', lines: [] });
+    const first = await service.create(asker, nothing);
+    const again = await service.create(asker, nothing);
+    expect([first.number, again.id]).toEqual(['PR-00001', first.id]);
+    expect(requisitions).toHaveLength(1);
+
+    // Somebody else's New is their own, and one with items on it (from the Reorder list) is always new.
+    expect((await service.create(colleague, nothing)).number).toBe('PR-00002');
+    expect((await service.create(asker, small())).number).toBe('PR-00003');
+
+    // Written on, it is no longer blank: New makes the next.
+    await service.update(asker, first.id, small());
+    expect((await service.create(asker, nothing)).number).toBe('PR-00004');
   });
 
   it('takes the office\'s next number when first saved, and keeps it through submitting and coming back (2026-11-20)', async () => {

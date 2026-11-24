@@ -69,6 +69,16 @@ export default function InventoryPage() {
     ) : // Every other tab has its own form beside its list.
     undefined;
 
+  // Opened by its address with no inventory permission (production, 2026-11-24): said plainly, as Purchasing says it,
+  // rather than eight tabs over a refusal.
+  if (!permissions.has('inventory:read'))
+    return (
+      <>
+        <PageHeader description="What the office stocks, where it is, and who it is bought from." title="Inventory" />
+        <EmptyState description="Ask an administrator for “View inventory” on the Roles page if you need it." icon={BoxesIcon} title="You do not have access to inventory" />
+      </>
+    );
+
   return (
     <>
       <PageHeader

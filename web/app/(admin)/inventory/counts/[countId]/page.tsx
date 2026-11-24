@@ -320,6 +320,8 @@ function Review({ count, everywhere }: { count: StockCountDetail; everywhere: bo
   const net = differing.reduce((sum, row) => sum + (row.valueCents ?? 0), 0);
   const unexplained = differing.filter((row) => !reasons[row.id]).length;
   const posted = count.status === 'POSTED';
+  // Cancelled before everything was counted (production, 2026-11-24): nothing is waiting for anybody.
+  const cancelled = count.status === 'CANCELLED';
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -335,7 +337,11 @@ function Review({ count, everywhere }: { count: StockCountDetail; everywhere: bo
     <form aria-label="Review the differences" className="grid gap-4" onSubmit={(event) => void submit(event)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm">
-          {waiting.length
+          {cancelled
+            ? waiting.length === count.rows.length
+              ? 'Nothing had been counted when it was cancelled.'
+              : `${formatCount(count.rows.length - waiting.length)} of ${formatCount(count.rows.length)} had been counted when it was cancelled.`
+            : waiting.length
             ? `${formatCount(waiting.length)} ${waiting.length === 1 ? 'item is' : 'items are'} waiting for a second count. It comes back here once handed in.`
             : differing.length
               ? `${formatCount(count.matched ?? 0)} of ${formatCount(count.lines)} matched. ${differing.length === 1 ? 'The one that did not is' : `The ${formatCount(differing.length)} that did not are`} below.`
@@ -377,7 +383,7 @@ function Review({ count, everywhere }: { count: StockCountDetail; everywhere: bo
                     <TableCell className="text-right font-mono tabular-nums">{row.valueCents === null ? EMPTY : formatMoney(row.valueCents)}</TableCell>
                     <TableCell>
                       {row.counted === null ? (
-                        <span className="text-muted-foreground text-sm">Waiting for the second count</span>
+                        <span className="text-muted-foreground text-sm">{cancelled ? 'Not counted' : 'Waiting for the second count'}</span>
                       ) : !row.difference ? (
                         EMPTY
                       ) : count.can.post ? (

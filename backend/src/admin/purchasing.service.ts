@@ -71,6 +71,9 @@ type Db = Prisma.TransactionClient;
 type Rules = { settings: PurchasingSettings; ownCompaniesOnly: boolean; standing: PurchasingStanding };
 const may = (user: AuthenticatedUser, permission: string) => (user.permissions as readonly string[]).includes(permission);
 const text = (value: string | null | undefined) => value?.trim().replace(/\s+/g, ' ') || null;
+/** Nothing written on it: what New sends before anything is typed. */
+const blank = (input: SaveRequisitionInput) =>
+  !input.lines.length && !input.quotes.length && !input.xeroTenantId && !input.neededBy && !input.deliverToPlaceId && !input.requestCodeId && !input.costCenterId && !input.departmentId && !input.documentDate && !input.reason.trim();
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dayOf = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
 
@@ -604,13 +607,44 @@ export class PurchasingService {
    * A draft, the caller's own. It takes its number now, as in NAV (2026-11-20),
    * so a draft can be found and talked about by it; a draft that is deleted
    * leaves a gap in the numbers.
+   *
+   * New pressed again with nothing written on today's (production, 2026-11-24:
+   * every press spent a number and left an empty draft) opens that one: a
+   * blank draft is made once a person and day.
    */
   async create(user: AuthenticatedUser, input: SaveRequisitionInput): Promise<RequisitionDetail> {
     const organizationId = user.organizationId;
+    const today = businessDate();
+    if (blank(input)) {
+      const untouched = await this.prisma.purchaseRequisition.findFirst({
+        where: {
+          organizationId,
+          requestedById: user.id,
+          status: Status.DRAFT,
+          submittedAt: null,
+          xeroTenantId: null,
+          neededBy: null,
+          deliverToPlaceId: null,
+          requestCodeId: null,
+          costCenterId: null,
+          departmentId: null,
+          reason: '',
+          documentDate: dateOf(today),
+          lines: { none: {} },
+          quotes: { none: {} },
+          files: { none: {} },
+          notes: { none: {} },
+          links: { none: {} },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (untouched) return this.detail(user, untouched.id);
+    }
     const created = await this.prisma.$transaction(async (tx) => {
       await this.checked(tx, user, input);
       const number = await nextDocumentCode(tx, organizationId, 'PR');
-      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input, businessDate()) }, select: { id: true } });
+      const requisition = await tx.purchaseRequisition.create({ data: { organizationId, requestedById: user.id, number, ...this.fields(input, today) }, select: { id: true } });
       await this.writeLinesAndQuotes(tx, organizationId, requisition.id, input);
       await this.audit(tx, user, 'PURCHASE_REQUISITION_CREATED', requisition.id, { number, lines: input.lines.length, totalCents: requisitionTotalCents(input.lines) });
       return requisition;
