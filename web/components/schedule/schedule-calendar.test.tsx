@@ -204,6 +204,17 @@ describe('Jobber work that is not an inspection (2026-11-25)', () => {
   });
 });
 
+describe('a visit with two people on it (2026-11-25)', () => {
+  it("is in both their columns on the Day view, as on Jobber's calendar", async () => {
+    asked.days['2026-11-04'] = day('2026-11-04', [
+      row({ inspectionId: 'insp-pair', property: '5826 Wilkins Ln', technicianId: 'tech-a', technicianIds: ['tech-a', 'tech-z'] }),
+    ]);
+    mount();
+
+    expect(await screen.findAllByRole('button', { name: /5826 Wilkins Ln/ })).toHaveLength(2);
+  });
+});
+
 describe('the Week view', () => {
   it('runs Sunday to Saturday, and a day’s head opens its Day view', async () => {
     mount({ view: 'week' });

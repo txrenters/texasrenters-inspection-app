@@ -11,6 +11,7 @@ import {
   monthTitle,
   NO_FILTERS,
   oneCardPerJob,
+  peopleOf,
   sortVisits,
   STATUS_GROUPS,
   statusGroup,
@@ -222,5 +223,29 @@ describe('Jobber work on the calendar (2026-11-25)', () => {
 
   it("gives a technician who only has Jobber work that day a column on the Day view", () => {
     expect(dayColumns(withWork).map((column) => column.name)).toEqual(['Unassigned', 'Ada', 'Kevin Granados']);
+  });
+});
+
+describe('a visit with two people on it (2026-11-25)', () => {
+  const shared = row({ technicianId: 'tech-a', technicianIds: ['tech-a', 'tech-b'] });
+
+  it("is with everyone on it, and with the row's own person on a day read before that was known", () => {
+    expect(peopleOf(shared)).toEqual(['tech-a', 'tech-b']);
+    expect(peopleOf(row({ technicianId: 'tech-a' }))).toEqual(['tech-a']);
+    expect(peopleOf(row({ technicianId: null, technicianIds: [] }))).toEqual([null]);
+  });
+
+  it('stays on the calendar while anyone on it is shown', () => {
+    expect(isShown(shared, { ...NO_FILTERS, technicians: new Set(['tech-a']) })).toBe(true);
+    expect(isShown(shared, { ...NO_FILTERS, technicians: new Set(['tech-a', 'tech-b']) })).toBe(false);
+  });
+
+  it('carries everyone on Jobber work into its card', () => {
+    const [card] = calendarRows({
+      rows: [],
+      technicians: [],
+      otherWork: [{ jobberVisitId: 'v', title: 'Key information', property: '1 A St', technician: 'A, B', technicianId: 'tech-a', technicianIds: ['tech-a', 'tech-b'], startAt: null, completed: false, reason: 'x' }],
+    } as unknown as JobberDayComparison);
+    expect(peopleOf(card)).toEqual(['tech-a', 'tech-b']);
   });
 });

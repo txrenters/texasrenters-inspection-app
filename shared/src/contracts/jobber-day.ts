@@ -52,6 +52,12 @@ export interface JobberDayRow {
   status: string | null;
   /** Console technician id this row is grouped under; null for nobody. */
   technicianId: string | null;
+  /**
+   * Everyone on it here, `technicianId` first (2026-11-25): a visit Jobber has
+   * two people on is in both their columns, as on Jobber's calendar. Empty for
+   * nobody. Absent on a day read before this existed.
+   */
+  technicianIds?: string[];
   here: JobberDaySide | null;
   jobber: (JobberDaySide & { title: string | null; completed: boolean }) | null;
   state: JobberDayState;
@@ -108,6 +114,8 @@ export interface JobberDayOtherWork {
   technician: string | null;
   /** The technician here it is filed under, by Jobber's assignee email; null for nobody (2026-11-25). */
   technicianId: string | null;
+  /** Everyone on it here, `technicianId` first; empty for nobody. */
+  technicianIds: string[];
   startAt: string | null;
   /** Jobber has it completed. */
   completed: boolean;
