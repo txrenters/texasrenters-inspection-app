@@ -517,7 +517,11 @@ export function ReverseMovementDialog({
   const [reason, setReason] = useState('');
   return (
     <FormDialog
-      description={`This takes ${movement.quantity} of ${item.code} back out of ${movement.placeName} with a second line in the ledger. The first line stays as it was written, and this cannot be undone.`}
+      description={
+        movement.quantity < 0
+          ? `This puts ${-movement.quantity} of ${item.code} back into ${movement.placeName} with a second line in the ledger. The first line stays as it was written, and this cannot be undone.`
+          : `This takes ${movement.quantity} of ${item.code} back out of ${movement.placeName} with a second line in the ledger. The first line stays as it was written, and this cannot be undone.`
+      }
       disabled={!reason.trim()}
       error={error}
       onClose={onClose}

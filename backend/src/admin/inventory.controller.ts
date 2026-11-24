@@ -1,12 +1,18 @@
-import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   MOST_ITEM_PRICE_CENTS,
   MOST_STOCK_QUANTITY,
   MOST_UNIT_COST_CENTS,
+  STOCK_ITEM_DELETE_REASONS,
   STOCK_PLACE_KINDS,
+  STOCK_REMOVAL_REASONS,
+  type DeleteStockItemInput,
   type OpeningBalanceInput,
+  type RemoveStockInput,
   type ReverseMovementInput,
+  type StockItemDeleteReason,
+  type StockRemovalReason,
   type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
@@ -61,6 +67,22 @@ export class OpeningBalanceDto implements Required<OpeningBalanceInput> {
 
 export class ReverseMovementDto implements Required<ReverseMovementInput> {
   @IsString() @MinLength(1) @MaxLength(500) reason!: string;
+}
+
+/** Stock taken off the books with a reason (2026-11-24). No place: every place, all of it. */
+export class RemoveStockDto implements Required<RemoveStockInput> {
+  @ValidateIf(SET) @IsUUID() placeId!: string | null;
+  @IsInt() @Min(1) @Max(MOST_STOCK_QUANTITY) quantity!: number;
+  @IsIn(STOCK_REMOVAL_REASONS) reason!: StockRemovalReason;
+  @ValidateIf(SET) @IsString() @MaxLength(500) note!: string | null;
+  @IsUUID() requestKey!: string;
+}
+
+/** An item code deleted (2026-11-24), its code typed to confirm. */
+export class DeleteStockItemDto implements Required<DeleteStockItemInput> {
+  @IsIn(STOCK_ITEM_DELETE_REASONS) reason!: StockItemDeleteReason;
+  @ValidateIf(SET) @IsString() @MaxLength(500) note!: string | null;
+  @IsString() @MinLength(1) @MaxLength(40) confirmCode!: string;
 }
 
 export class SaveStockPlaceDto implements Required<SaveStockPlaceInput> {
@@ -127,6 +149,27 @@ export class InventoryController {
   @RequirePermissions('inventory:manage')
   enterOpeningBalance(@Req() request: AuthenticatedRequest, @Param('itemId', ParseUUIDPipe) itemId: string, @Body() body: OpeningBalanceDto) {
     return this.inventory.enterOpeningBalance(request.user, itemId, body);
+  }
+
+  /** Stock off the books with a reason: a REMOVAL movement, which Reverse puts back (2026-11-24). */
+  @Post('items/:itemId/remove')
+  @RequirePermissions('inventory:manage')
+  removeStock(@Req() request: AuthenticatedRequest, @Param('itemId', ParseUUIDPipe) itemId: string, @Body() body: RemoveStockDto) {
+    return this.inventory.removeStock(request.user, itemId, body);
+  }
+
+  /** What deleting the item would do, read before the office confirms it. Item codes' keepers only; the service checks. */
+  @Get('items/:itemId/deletion')
+  @RequirePermissions('inventory:manage')
+  deletion(@Req() request: AuthenticatedRequest, @Param('itemId', ParseUUIDPipe) itemId: string) {
+    return this.inventory.deletion(request.user, itemId);
+  }
+
+  /** Deletes the item code, its stock removed first. Item codes' keepers only; the service checks. */
+  @Delete('items/:itemId')
+  @RequirePermissions('inventory:manage')
+  deleteItem(@Req() request: AuthenticatedRequest, @Param('itemId', ParseUUIDPipe) itemId: string, @Body() body: DeleteStockItemDto) {
+    return this.inventory.deleteItem(request.user, itemId, body);
   }
 
   @Post('movements/:movementId/reverse')

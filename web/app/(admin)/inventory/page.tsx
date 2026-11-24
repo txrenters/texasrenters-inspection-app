@@ -11,6 +11,7 @@ import { CategoryDialog, ItemDialog } from '@/components/inventory/inventory-dia
 import { StockImportDialog } from '@/components/inventory/stock-import';
 import { ItemCodesTab } from '@/components/inventory/item-codes-tab';
 import { PlacesTab } from '@/components/inventory/places-tab';
+import { RemoveStockDialog } from '@/components/inventory/remove-and-delete';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
 import { VendorsTab } from '@/components/inventory/vendors-tab';
 import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
@@ -114,7 +115,7 @@ export default function InventoryPage() {
           ) : stock.isError || !stock.data ? (
             <ErrorState error={stock.error} retry={() => void stock.refetch()} />
           ) : (
-            <StockTab canManage={keeps.items} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
+            <StockTab canManage={keeps.items} canRemove={canManage} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
           )}
         </TabsContent>
         <TabsContent value="codes">
@@ -123,7 +124,15 @@ export default function InventoryPage() {
           ) : !stock.data ? (
             <DataTableSkeleton columns={STOCK_COLUMNS} label="Loading item codes" rows={6} />
           ) : (
-            <ItemCodesTab canManage={keeps.items} categories={stock.data.categories} companies={stock.data.companies} items={stock.data.items} lineTypes={stock.data.lineTypes} units={stock.data.units} />
+            <ItemCodesTab
+              canDelete={keeps.items && canManage}
+              canManage={keeps.items}
+              categories={stock.data.categories}
+              companies={stock.data.companies}
+              items={stock.data.items}
+              lineTypes={stock.data.lineTypes}
+              units={stock.data.units}
+            />
           )}
         </TabsContent>
         <TabsContent value="withdrawals">
@@ -233,6 +242,7 @@ function StockTab({
   state,
   setState,
   canManage,
+  canRemove,
   onAdd,
 }: {
   items: StockItemRow[];
@@ -240,8 +250,11 @@ function StockTab({
   state: { company: string; show: string; q: string };
   setState: (next: Partial<{ company: string; show: string; q: string }>) => void;
   canManage: boolean;
+  /** "Manage inventory": stock comes off the books from here as on the item's page (2026-11-24). */
+  canRemove: boolean;
   onAdd: () => void;
 }) {
+  const [removing, setRemoving] = useState<string | null>(null);
   if (!items.length)
     return (
       <EmptyState
@@ -312,13 +325,30 @@ function StockTab({
       </div>
 
       {rows.length ? (
-        <DataTable columns={STOCK_COLUMNS} label="Stock on hand" rowHref={(row) => `/inventory/items/${row.id}`} rowKey={(row) => row.id} rows={rows} />
+        <DataTable
+          actions={
+            canRemove
+              ? (row) =>
+                  row.onHand > 0 ? (
+                    <Button aria-label={`Remove stock of ${row.code}`} onClick={() => setRemoving(row.id)} size="sm" variant="outline">
+                      Remove stock
+                    </Button>
+                  ) : null
+              : undefined
+          }
+          columns={STOCK_COLUMNS}
+          label="Stock on hand"
+          rowHref={(row) => `/inventory/items/${row.id}`}
+          rowKey={(row) => row.id}
+          rows={rows}
+        />
       ) : (
         <EmptyState description="No item matches what is chosen above." icon={BoxesIcon} title="Nothing to show" />
       )}
       <p className="text-muted-foreground text-xs">
-        On hand is added up from the movements and cannot be typed here. Open an item to enter its opening balance or reverse a movement.
+        On hand is added up from the movements and cannot be typed here. Open an item to enter its opening balance or reverse a movement. Remove stock takes it off the books with a reason.
       </p>
+      {removing ? <RemoveStockDialog itemId={removing} onClose={() => setRemoving(null)} /> : null}
     </div>
   );
 }

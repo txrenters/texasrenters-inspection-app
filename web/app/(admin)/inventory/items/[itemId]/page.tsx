@@ -1,6 +1,6 @@
 'use client';
 
-import { formatMoney, type StockMovementRow } from '@texasrenters/shared';
+import { STOCK_REMOVAL_REASON_LABEL, formatMoney, type StockMovementRow } from '@texasrenters/shared';
 import { BoxIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -8,6 +8,7 @@ import { useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { ItemDialog, OpeningBalanceDialog, ReverseMovementDialog } from '@/components/inventory/inventory-dialogs';
+import { RemoveStockDialog } from '@/components/inventory/remove-and-delete';
 import { StockStatusBadge } from '@/components/inventory/stock-status';
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
@@ -25,7 +26,9 @@ import { useInventoryEdits, useStock, useStockItem } from '@/lib/inventory-queri
  * was written.
  */
 
-const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal', RECEIPT: 'Received', WITHDRAWAL: 'Taken out', RETURN: 'Brought back', TRANSFER: 'Moved', COUNT_ADJUSTMENT: 'Count adjustment' };
+const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal', RECEIPT: 'Received', WITHDRAWAL: 'Taken out', RETURN: 'Brought back', TRANSFER: 'Moved', COUNT_ADJUSTMENT: 'Count adjustment', REMOVAL: 'Removed' };
+/** Typed on this page, so put right on this page: an opening balance, and stock removed with a reason (2026-11-24). */
+const REVERSIBLE: ReadonlySet<StockMovementRow['kind']> = new Set(['OPENING_BALANCE', 'REMOVAL']);
 
 const MOVEMENT_COLUMNS: Array<Column<StockMovementRow>> = [
   { key: 'day', header: 'Day', cell: (row) => formatDay(row.day), className: 'whitespace-nowrap' },
@@ -36,7 +39,7 @@ const MOVEMENT_COLUMNS: Array<Column<StockMovementRow>> = [
     cell: (row) => (
       <span className="grid gap-0.5">
         <span className="flex flex-wrap items-center gap-2 font-medium">
-          {KIND_LABEL[row.kind]}
+          {row.removalReason ? `${KIND_LABEL[row.kind]} · ${STOCK_REMOVAL_REASON_LABEL[row.removalReason]}` : KIND_LABEL[row.kind]}
           {row.reversedById ? <Badge variant="outline">Reversed</Badge> : null}
         </span>
         {row.note ? <span className="text-muted-foreground text-xs">{row.note}</span> : null}
@@ -58,6 +61,7 @@ export default function StockItemPage() {
   const [editing, setEditing] = useState(false);
   const [opening, setOpening] = useState(false);
   const [reversing, setReversing] = useState<StockMovementRow | null>(null);
+  const [removing, setRemoving] = useState(false);
   // The companies, vendors and places the forms choose from: the Stock tab's read, usually still in hand.
   const stock = useStock();
   const edits = useInventoryEdits();
@@ -84,6 +88,11 @@ export default function StockItemPage() {
               {canManage ? (
                 <Button disabled={!choices || !item.active} onClick={() => setOpening(true)}>
                   Enter opening balance
+                </Button>
+              ) : null}
+              {canManage && item.onHand > 0 ? (
+                <Button className="border-destructive text-destructive hover:text-destructive" onClick={() => setRemoving(true)} variant="outline">
+                  Remove stock
                 </Button>
               ) : null}
             </>
@@ -147,8 +156,13 @@ export default function StockItemPage() {
               canManage
                 ? (row) =>
                     // Goods received are reversed from their purchase order, with the receipt.
-                    row.kind === 'OPENING_BALANCE' && !row.reversedById ? (
-                      <Button aria-label={`Reverse the ${KIND_LABEL[row.kind].toLowerCase()} of ${formatDay(row.day)} in ${row.placeName}`} onClick={() => setReversing(row)} size="sm" variant="outline">
+                    REVERSIBLE.has(row.kind) && !row.reversedById ? (
+                      <Button
+                        aria-label={`Reverse the ${row.kind === 'REMOVAL' ? 'removal' : KIND_LABEL[row.kind].toLowerCase()} of ${formatDay(row.day)} in ${row.placeName}`}
+                        onClick={() => setReversing(row)}
+                        size="sm"
+                        variant="outline"
+                      >
                         Reverse
                       </Button>
                     ) : null
@@ -198,6 +212,7 @@ export default function StockItemPage() {
           places={choices.places}
         />
       ) : null}
+      {removing ? <RemoveStockDialog itemId={itemId} onClose={() => setRemoving(false)} /> : null}
       {reversing ? (
         <ReverseMovementDialog
           error={edits.reverseMovement.error}

@@ -272,7 +272,8 @@ export interface RequisitionList {
 export interface RequisitionLine {
   id: string;
   /** Null only on a line written in words before every line needed a code; `description` then says what. */
-  item: { id: string; code: string; name: string; unit: string } | null;
+  /** `deleted` once its item code was deleted (2026-11-24): the line stays, and says so. */
+  item: { id: string; code: string; name: string; unit: string; deleted?: boolean } | null;
   /** What the line says it is: the item's name unless it was given another. */
   description: string | null;
   quantity: number;

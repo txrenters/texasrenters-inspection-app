@@ -2,7 +2,9 @@ import { ValidationPipe } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import {
   MACHINE_FORBIDDEN_PERMISSIONS,
+  type DeleteStockItemInput,
   type OpeningBalanceInput,
+  type RemoveStockInput,
   type ReverseMovementInput,
   type SaveStockCategoryInput,
   type SaveStockItemInput,
@@ -10,7 +12,17 @@ import {
   type SaveVendorInput,
 } from '@texasrenters/shared';
 
-import { InventoryController, OpeningBalanceDto, ReverseMovementDto, SaveStockCategoryDto, SaveStockItemDto, SaveStockPlaceDto, SaveVendorDto } from '../src/admin/inventory.controller';
+import {
+  DeleteStockItemDto,
+  InventoryController,
+  OpeningBalanceDto,
+  RemoveStockDto,
+  ReverseMovementDto,
+  SaveStockCategoryDto,
+  SaveStockItemDto,
+  SaveStockPlaceDto,
+  SaveVendorDto,
+} from '../src/admin/inventory.controller';
 import { InventoryService } from '../src/admin/inventory.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -61,9 +73,9 @@ function database() {
     { id: THEIRS, organizationId: OTHER_ORG, code: 'X-1', codeKey: 'x-1', name: 'Another office\'s item', unit: 'each', categoryId: null, category: null, xeroTenantId: null, reorderLevel: 0, reorderQuantity: 0, active: true, usualVendor: null },
   ];
   const places: Row[] = [
-    { id: STOCKROOM, organizationId: ORG, name: 'Stockroom', kind: 'STOCKROOM', technicianId: null, technician: null, active: true },
-    { id: VAN, organizationId: ORG, name: 'Van 1', kind: 'VAN', technicianId: TECH, technician: { displayName: 'Sample Technician' }, active: true },
-    { id: CLOSED, organizationId: ORG, name: 'Old shed', kind: 'STOCKROOM', technicianId: null, technician: null, active: false },
+    { id: STOCKROOM, organizationId: ORG, name: 'Stockroom', nameKey: 'stockroom', kind: 'STOCKROOM', technicianId: null, technician: null, active: true },
+    { id: VAN, organizationId: ORG, name: 'Van 1', nameKey: 'van 1', kind: 'VAN', technicianId: TECH, technician: { displayName: 'Sample Technician' }, active: true },
+    { id: CLOSED, organizationId: ORG, name: 'Old shed', nameKey: 'old shed', kind: 'STOCKROOM', technicianId: null, technician: null, active: false },
   ];
   const categories: Row[] = [
     { id: FILTERS, organizationId: ORG, name: 'Filters', nameKey: 'filters', prefix: 'FLT', nextNumber: 3, active: true },
@@ -85,8 +97,12 @@ function database() {
     Object.entries(where).every(([key, value]) => {
       if (value === undefined || key === 'userProfile') return true;
       if (key === 'reversedBy') return !movements.some((other) => other.reversesId === row.id);
+      // A column never written is null, as the table has it (an item's deletedAt, 2026-11-24).
+      if (value === null) return row[key] === null || row[key] === undefined;
       // `{ not: x }`: any row but that one.
       if (value !== null && typeof value === 'object' && 'not' in value) return row[key] !== (value as { not: unknown }).not;
+      if (value !== null && typeof value === 'object' && 'gt' in value) return (row[key] as number) > (value as { gt: number }).gt;
+      if (value !== null && typeof value === 'object' && 'startsWith' in value) return typeof row[key] === 'string' && (row[key] as string).startsWith((value as { startsWith: string }).startsWith);
       return row[key] === value;
     });
   const levels = (where: Row) => {
@@ -98,7 +114,7 @@ function database() {
       level.valueCents = (level.valueCents as number) + (movement.quantity as number) * (movement.unitCostCents as number);
       byKey.set(key, level);
     }
-    return [...byKey.values()].filter((level) => matches(level, where));
+    return [...byKey.values()].filter((level) => matches(level, where)).map((level): Row => ({ ...level, place: places.find((place) => place.id === level.placeId) }));
   };
   const whole = (movement: Row) => ({
     ...movement,
@@ -108,6 +124,9 @@ function database() {
   });
   /** The items a purchase requisition has asked for. */
   const requested: string[] = [];
+  /** The papers that name an item, as a deletion reads them (2026-11-24). Each row carries its itemId. */
+  const papers = { slipLines: [] as Row[], requisitionLines: [] as Row[], orderLines: [] as Row[], receiptLines: [] as Row[], countLines: [] as Row[], askLines: [] as Row[] };
+  const naming = (rows: Row[]) => jest.fn(async ({ where }: { where: Row }) => rows.filter((row) => row.itemId === where.itemId));
   const table = (rows: Row[], create?: (data: Row) => Row) => ({
     findMany: jest.fn(async ({ where }: { where: Row }) => rows.filter((row) => matches(row, where))),
     findFirst: jest.fn(async ({ where }: { where: Row }) => rows.find((row) => matches(row, where)) ?? null),
@@ -123,10 +142,13 @@ function database() {
     // Purchasing Setup (2026-11-21): nothing saved, so every list is kept as before Setup.
     purchasingSettings: { findUnique: jest.fn(async (): Promise<unknown> => null) },
     purchasingApprovalStep: { findMany: jest.fn(async () => []) },
-    stockItem: table(items, (data) => {
-      const category = categories.find((row) => row.id === data.categoryId);
-      return { id: id(100 + items.length), active: true, usualVendor: null, category: category ? { id: category.id, name: category.name } : null, ...data };
-    }),
+    stockItem: {
+      ...table(items, (data) => {
+        const category = categories.find((row) => row.id === data.categoryId);
+        return { id: id(100 + items.length), active: true, usualVendor: null, category: category ? { id: category.id, name: category.name } : null, ...data };
+      }),
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => items.splice(items.findIndex((row) => row.id === where.id), 1)[0]),
+    },
     stockCategory: {
       ...table(categories, (data) => ({ id: id(200 + categories.length), nextNumber: 1, active: true, ...data })),
       findMany: jest.fn(async ({ where }: { where: Row & { id?: { not: string } } }) =>
@@ -176,8 +198,13 @@ function database() {
     // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
     stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     // The papers that name an item: once any does, its code stays.
-    purchaseRequisitionLine: { count: jest.fn(async ({ where }: { where: Row }) => requested.filter((itemId) => itemId === where.itemId).length) },
-    purchaseOrderLine: { count: jest.fn(async () => 0) },
+    purchaseRequisitionLine: { count: jest.fn(async ({ where }: { where: Row }) => requested.filter((itemId) => itemId === where.itemId).length), findMany: naming(papers.requisitionLines) },
+    purchaseOrderLine: { count: jest.fn(async () => 0), findMany: naming(papers.orderLines) },
+    goodsReceiptLine: { findMany: naming(papers.receiptLines) },
+    stockSlipLine: { count: jest.fn(async ({ where }: { where: Row }) => papers.slipLines.filter((row) => row.itemId === where.itemId).length) },
+    stockCountLine: { findMany: naming(papers.countLines) },
+    truckStockAskLine: { findMany: naming(papers.askLines) },
+    stockKeepLevel: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
     // The advisory lock answers nothing; taking a category's next number answers the number taken.
     $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
@@ -191,7 +218,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, movements, audits, items, places, vendors, categories, lineTypes, service: new InventoryService(db as never) };
+  return { db, movements, audits, items, places, vendors, categories, lineTypes, papers, service: new InventoryService(db as never) };
 }
 
 const opening = (over: Partial<OpeningBalanceInput> = {}): OpeningBalanceInput => ({ placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', requestKey: KEY, ...over });
@@ -520,6 +547,146 @@ describe('places and vendors', () => {
   });
 });
 
+describe('removing stock (2026-11-24)', () => {
+  const removal = (over: Partial<RemoveStockInput> = {}): RemoveStockInput => ({ placeId: STOCKROOM, quantity: 5, reason: 'DAMAGED', requestKey: id(95), ...over });
+
+  it('takes from one place no more than it holds, at its average cost, saying why in the history and the audit log', async () => {
+    const { service, movements, audits } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    const detail = await service.removeStock(office, FILTER, removal({ note: '  fell off the shelf ' }));
+
+    expect(movements[1]).toMatchObject({ kind: 'REMOVAL', placeId: STOCKROOM, quantity: -5, unitCostCents: 342, removalReason: 'DAMAGED', note: 'fell off the shelf', requestKey: `remove:${id(95)}:${STOCKROOM}`, createdByName: 'Office Coordinator' });
+    expect(detail.item.onHand).toBe(13);
+    expect(detail.movements[0]).toMatchObject({ kind: 'REMOVAL', quantity: -5, removalReason: 'DAMAGED', onHandAfter: 13 });
+    expect(detail.movements[1]).toMatchObject({ kind: 'OPENING_BALANCE' });
+    expect(audits.at(-1)).toMatchObject({ action: 'STOCK_REMOVED', entityId: FILTER, metadata: { item: 'FLT-16251', reason: 'DAMAGED', note: 'fell off the shelf', removed: [{ place: 'Stockroom', quantity: 5, unitCostCents: 342 }] } });
+
+    await expect(service.removeStock(office, FILTER, removal({ quantity: 14, requestKey: id(96) }))).rejects.toMatchObject({ code: 'STOCK_NOT_ENOUGH', message: 'Stockroom has 13 of FLT-16251, so 14 cannot be removed.' });
+    await expect(service.removeStock(office, FILTER, removal({ placeId: VAN, requestKey: id(97) }))).rejects.toMatchObject({ code: 'STOCK_NOT_ENOUGH', message: 'Van 1 has none of FLT-16251. Choose a place that has some.' });
+    expect(movements).toHaveLength(2);
+  });
+
+  it('from every place takes all of it, and is refused when stock moved after the page read it', async () => {
+    const { service, movements } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    await service.enterOpeningBalance(office, FILTER, opening({ placeId: VAN, quantity: 5, unitCostCents: 360, requestKey: id(91) }));
+
+    await expect(service.removeStock(office, FILTER, removal({ placeId: null, quantity: 22, reason: 'TESTING' }))).rejects.toMatchObject({ code: 'STOCK_REMOVAL_CHANGED', message: 'FLT-16251 now has 23 in all. Look again before removing it.' });
+    const detail = await service.removeStock(office, FILTER, removal({ placeId: null, quantity: 23, reason: 'TESTING' }));
+
+    expect(movements.slice(2).map((movement) => [movement.placeId, movement.quantity, movement.unitCostCents, movement.removalReason])).toEqual([
+      [STOCKROOM, -18, 342, 'TESTING'],
+      [VAN, -5, 360, 'TESTING'],
+    ]);
+    expect(detail.item).toMatchObject({ onHand: 0, valueCents: 0 });
+    await expect(service.removeStock(office, FILTER, removal({ placeId: null, quantity: 1, requestKey: id(98) }))).rejects.toMatchObject({ code: 'STOCK_NOT_ENOUGH', message: 'There is none of FLT-16251 anywhere to remove.' });
+  });
+
+  it('sent twice takes once, says why for Other, and is put back by Reverse', async () => {
+    const { service, movements } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    await service.removeStock(office, FILTER, removal());
+    const again = await service.removeStock(office, FILTER, removal());
+    expect(movements.filter((movement) => movement.kind === 'REMOVAL')).toHaveLength(1);
+    expect(again.item.onHand).toBe(13);
+    await expect(service.removeStock(office, BATTERY, removal())).rejects.toMatchObject({ code: 'STOCK_REQUEST_REUSED' });
+
+    await expect(service.removeStock(office, FILTER, removal({ reason: 'OTHER', note: '  ', requestKey: id(96) }))).rejects.toMatchObject({ code: 'STOCK_REMOVAL_NEEDS_NOTE' });
+
+    const back = await service.reverseMovement(office, movements[1]!.id as string, { reason: 'It was not damaged' });
+    expect(movements.at(-1)).toMatchObject({ kind: 'REVERSAL', quantity: 5, unitCostCents: 342, reversesId: movements[1]!.id });
+    expect(back.item.onHand).toBe(18);
+  });
+});
+
+describe('deleting an item code (2026-11-24)', () => {
+  const deleting = (over: Partial<DeleteStockItemInput> = {}): DeleteStockItemInput => ({ reason: 'TESTING', confirmCode: 'FLT-16251', ...over });
+
+  it('takes one nothing names out completely, once its code is typed', async () => {
+    const { service, items, audits } = database();
+    expect(await service.deletion(office, BATTERY)).toMatchObject({ neverUsed: true, onHand: [], open: [], usedOn: [], usedOnMore: 0 });
+
+    await expect(service.deleteItem(office, BATTERY, deleting({ confirmCode: 'BAT-9' }))).rejects.toMatchObject({ code: 'STOCK_ITEM_CONFIRM_CODE', message: 'Type BAT-9V to confirm.' });
+    // Typed in any case, as a label reads.
+    const list = await service.deleteItem(office, BATTERY, deleting({ confirmCode: ' bat-9v ' }));
+
+    expect(items.some((item) => item.id === BATTERY)).toBe(false);
+    expect(list.items.map((item) => item.id)).toEqual([FILTER]);
+    expect(audits.at(-1)).toMatchObject({ action: 'STOCK_ITEM_DELETED', entityId: BATTERY, metadata: { code: 'BAT-9V', reason: 'TESTING', outright: true } });
+  });
+
+  it('removes the stock of one that has been used, gives its code up and takes it off the lists, the papers keeping it', async () => {
+    const { service, items, movements, audits, papers } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    papers.requisitionLines.push({ itemId: FILTER, requisition: { id: id(41), number: 'PR-00014', status: 'ORDERED' }, orderSources: [{ id: id(42) }] });
+    papers.orderLines.push({ itemId: FILTER, quantity: 6, receivedQuantity: 6, order: { id: id(43), number: 'PO-00009', status: 'RECEIVED' } });
+    papers.receiptLines.push({ itemId: FILTER, receipt: { id: id(44), number: 'RCV-0003' } });
+
+    // The table below hands back whole rows, whatever is selected: the fields that matter are matched.
+    expect(await service.deletion(office, FILTER)).toMatchObject({
+      item: { id: FILTER, code: 'FLT-16251', name: 'Filter 16x25x1', unit: 'each' },
+      neverUsed: false,
+      onHand: [{ placeName: 'Stockroom', quantity: 18 }],
+      open: [],
+      usedOn: [
+        { kind: 'REQUISITION', id: id(41), number: 'PR-00014' },
+        { kind: 'ORDER', id: id(43), number: 'PO-00009' },
+        { kind: 'RECEIPT', id: id(44), number: 'RCV-0003' },
+      ],
+      usedOnMore: 0,
+    });
+
+    const list = await service.deleteItem(office, FILTER, deleting());
+    expect(movements.at(-1)).toMatchObject({ kind: 'REMOVAL', placeId: STOCKROOM, quantity: -18, unitCostCents: 342, removalReason: 'TESTING', note: 'Removed when FLT-16251 was deleted (Testing).' });
+    expect(items.find((item) => item.id === FILTER)).toMatchObject({ active: false, deletedByName: 'Office Coordinator', deleteReason: 'TESTING', deleteNote: null, codeKey: `deleted:${FILTER}`, code: 'FLT-16251' });
+    expect(items.find((item) => item.id === FILTER)!.deletedAt).toBeInstanceOf(Date);
+    expect(list.items.map((item) => item.id)).toEqual([BATTERY]);
+    await expect(service.item(office, FILTER)).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
+    expect(audits.at(-1)).toMatchObject({ action: 'STOCK_ITEM_DELETED', entityId: FILTER, metadata: { code: 'FLT-16251', outright: false, removed: [{ place: 'Stockroom', quantity: 18 }], usedOn: 3 } });
+
+    // Its stock does not come back, and it is not deleted twice.
+    await expect(service.reverseMovement(office, movements.at(-1)!.id as string, { reason: 'Oops' })).rejects.toMatchObject({ code: 'STOCK_ITEM_DELETED' });
+    await expect(service.deleteItem(office, FILTER, deleting())).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
+    // Its code is free: a new item may have it.
+    await expect(service.createItem(office, { name: 'Filter 16x25x1, new', categoryId: FILTERS, code: 'FLT-16251' })).resolves.toMatchObject({ item: { code: 'FLT-16251' } });
+  });
+
+  it('is refused while it is still on something open, and names what', async () => {
+    const { service, items, movements, papers } = database();
+    papers.requisitionLines.push(
+      { itemId: FILTER, requisition: { id: id(41), number: null, status: 'DRAFT' }, orderSources: [] },
+      // Approved and already on an order: the order is what is still open.
+      { itemId: FILTER, requisition: { id: id(45), number: 'PR-00016', status: 'APPROVED' }, orderSources: [{ id: id(46) }] },
+    );
+    papers.orderLines.push({ itemId: FILTER, quantity: 5, receivedQuantity: 2, order: { id: id(43), number: 'PO-00011', status: 'PARTLY_RECEIVED' } });
+    papers.countLines.push({ itemId: FILTER, count: { id: id(47), number: 'CNT-0004', status: 'COUNTING' } });
+    papers.askLines.push({ itemId: FILTER, ask: { id: id(48), status: 'ASKED', place: { name: 'Van 1' } } }, { itemId: FILTER, ask: { id: id(49), status: 'FILLED', place: { name: 'Van 1' } } });
+
+    const check = await service.deletion(office, FILTER);
+    expect(check.open.map((document) => document.number)).toEqual(['A draft requisition', 'PO-00011', 'CNT-0004', "Van 1's ask"]);
+    expect(check.usedOn.map((document) => document.number)).toEqual(['PR-00016']);
+
+    await expect(service.deleteItem(office, FILTER, deleting())).rejects.toMatchObject({
+      code: 'STOCK_ITEM_STILL_OPEN',
+      message: "FLT-16251 is still on A draft requisition, PO-00011, CNT-0004, Van 1's ask. Finish or cancel those first.",
+    });
+    expect(items.find((item) => item.id === FILTER)).toMatchObject({ active: true });
+    expect(items.find((item) => item.id === FILTER)!.deletedAt).toBeUndefined();
+    expect(movements).toHaveLength(0);
+  });
+
+  it('says why for Other, and is for whoever keeps item codes', async () => {
+    const { db, service } = database();
+    await expect(service.deleteItem(office, BATTERY, deleting({ reason: 'OTHER', note: ' ', confirmCode: 'BAT-9V' }))).rejects.toMatchObject({ code: 'STOCK_ITEM_DELETE_NEEDS_NOTE' });
+    // Purchasing Setup gives item codes to the code admin: the stock keeper no longer deletes them.
+    db.purchasingSettings.findUnique.mockResolvedValue({
+      approvalLimitCents: 50000, quotesAboveLimit: 2, emailApprovers: false, reapproveChangedOrders: false, approverOwnCompaniesOnly: true, fileGroups: ['PDF'], fileMaxBytes: 20_000_000, filesMax: 20, quoteFileAboveCents: null, fileRemoval: 'UNTIL_SENT', codeKeepers: { ITEMS: 'CODE_ADMIN' }, requisitionPage: {},
+    } as never);
+    await expect(service.deletion(office, BATTERY)).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS' });
+    await expect(service.deleteItem(office, BATTERY, deleting({ confirmCode: 'BAT-9V' }))).rejects.toMatchObject({ code: 'CODE_LIST_NOT_YOURS' });
+  });
+});
+
 describe('the codes items, places and vendors carry (2026-11-20)', () => {
   it('make an item an Item unless the stock keeper chose another type, and only a type in use', async () => {
     const { service, items } = database();
@@ -572,6 +739,8 @@ describe('the requests the page sends', () => {
     const place: Required<SaveStockPlaceInput> = { name: 'Van 1', code: 'trk-01', kind: 'VAN', technicianId: TECH, active: true };
     const category: Required<SaveStockCategoryInput> = { name: 'Filters', prefix: 'flt', active: true };
     const vendor: Required<SaveVendorInput> = { name: 'Hill Country Supply', contactName: 'A person', email: 'orders@example.com', phone: '512-555-0100', terms: 'Net 30', notes: 'Delivers Tuesdays', active: true };
+    const removal: Required<RemoveStockInput> = { placeId: STOCKROOM, quantity: 5, reason: 'TESTING', note: 'Test stock', requestKey: KEY };
+    const deletion: Required<DeleteStockItemInput> = { reason: 'OTHER', note: 'Made twice', confirmCode: 'FLT-16251' };
 
     await expect(check(item, SaveStockItemDto)).resolves.toBeDefined();
     await expect(check(balance, OpeningBalanceDto)).resolves.toBeDefined();
@@ -580,6 +749,10 @@ describe('the requests the page sends', () => {
     await expect(check(vendor, SaveVendorDto)).resolves.toBeDefined();
     await expect(check(category, SaveStockCategoryDto)).resolves.toBeDefined();
     await expect(check({ xeroTenantId: null, usualVendorId: null }, SaveStockItemDto)).resolves.toBeDefined();
+    await expect(check(removal, RemoveStockDto)).resolves.toBeDefined();
+    // Every place: no place named.
+    await expect(check({ ...removal, placeId: null }, RemoveStockDto)).resolves.toBeDefined();
+    await expect(check(deletion, DeleteStockItemDto)).resolves.toBeDefined();
   });
 
   it('take a code typed for an item and its price, and refuse a price below nothing or a prefix that could not start a code', async () => {
@@ -603,6 +776,14 @@ describe('the requests the page sends', () => {
     await expect(check({ ...balance, requestKey: undefined }, OpeningBalanceDto)).rejects.toBeDefined();
     await expect(check({ name: 'Filter', onHand: 40 }, SaveStockItemDto)).rejects.toBeDefined();
     await expect(check({ reason: '' }, ReverseMovementDto)).rejects.toBeDefined();
+    // A removal is a whole number taken out, for a reason on the list (2026-11-24).
+    const removal = { placeId: STOCKROOM, quantity: 5, reason: 'TESTING', requestKey: KEY };
+    await expect(check({ ...removal, quantity: 0 }, RemoveStockDto)).rejects.toBeDefined();
+    await expect(check({ ...removal, quantity: -5 }, RemoveStockDto)).rejects.toBeDefined();
+    await expect(check({ ...removal, reason: 'BORED' }, RemoveStockDto)).rejects.toBeDefined();
+    await expect(check({ ...removal, requestKey: undefined }, RemoveStockDto)).rejects.toBeDefined();
+    await expect(check({ reason: 'TESTING' }, DeleteStockItemDto)).rejects.toBeDefined();
+    await expect(check({ reason: 'GONE', confirmCode: 'FLT-16251' }, DeleteStockItemDto)).rejects.toBeDefined();
   });
 });
 
@@ -611,7 +792,8 @@ describe('who may do what', () => {
 
   it('reads with inventory:read, moves stock with inventory:manage, and keeps each list by the role Setup gives it', () => {
     for (const read of ['stock', 'item', 'places', 'vendors']) expect(permissionsOf(read)).toEqual(['inventory:read']);
-    for (const write of ['enterOpeningBalance', 'reverseMovement']) expect(permissionsOf(write)).toEqual(['inventory:manage']);
+    // Stock removed with a reason, and an item code deleted (2026-11-24): stock moves, so inventory:manage; deleting also asks the service whether the caller keeps item codes.
+    for (const write of ['enterOpeningBalance', 'reverseMovement', 'removeStock', 'deletion', 'deleteItem']) expect(permissionsOf(write)).toEqual(['inventory:manage']);
     // The code lists (Purchasing Setup, 2026-11-21): any keeper may reach the route; the service checks which keeps that list.
     const anyOf = (name: string) => Reflect.getMetadata('anyPermissions', (InventoryController.prototype as unknown as Record<string, object>)[name]!) as string[];
     for (const write of ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor']) {
