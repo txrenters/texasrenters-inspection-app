@@ -156,6 +156,12 @@ services:
   # TLS termination — the only service that listens on the public interface
   # ---------------------------------------------------------------------------
   caddy:
+    # Started only with the `proxy` profile: COMPOSE_PROFILES=proxy in
+    # .env.production, as the example has it. The production VPS leaves it out.
+    # There every site shares one proxy, /opt/edge, which holds ports 80 and 443
+    # and carries these routes (docker/proxy/sites.caddy) in its
+    # sites/texasrenters.caddy, so a change to sites.caddy is copied there too.
+    profiles: [proxy]
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
