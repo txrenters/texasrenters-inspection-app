@@ -197,6 +197,8 @@ const environmentSchema = z
     JOBBER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
     JOBBER_MAX_RETRIES: z.coerce.number().int().min(1).max(8).default(4),
     JOBBER_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    JOBBER_MIRROR_ENABLED: z.enum(['true', 'false']).default('false'),
+    JOBBER_MIRROR_FILE_DAILY_CEILING: z.coerce.number().int().min(0).optional(),
     /** Quarterly benefit-package planning. Fail closed: a planner that ran by
      * default would book a quarter of work in any deployment that merely
      * happens to have the code. */

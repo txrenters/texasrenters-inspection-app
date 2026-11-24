@@ -9,6 +9,8 @@ export interface JobberConfig {
   requestTimeoutMs: number;
   maxRetries: number;
   syncEnabled: boolean;
+  /** The read-only copy of every Jobber record (2026-11-24). Off unless "true". */
+  mirrorEnabled: boolean;
   schedulerOrganizationId: string | undefined;
   incrementalSyncCron: string | undefined;
   /** How far either side of today the sync reads. A window, not a cursor: a
