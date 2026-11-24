@@ -144,12 +144,20 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
   const otherWork: JobberDayOtherWork[] = [];
   /** Jobber's own count per technician id ('' = nobody here). */
   const inJobber = new Map<string, number>();
+  /** Everyone Jobber has on a visit who is a technician here, in Jobber's order, once each. */
+  const peopleHere = (payload: JobberVisit | null): string[] => [
+    ...new Set(
+      assignees(payload)
+        .map((entry) => (entry.email ? byEmail.get(entry.email)?.id : undefined))
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  /** Somebody on Jobber work only, so the day still names them (2026-11-25). */
+  const workPeople = new Set<string>();
   const countJobber = (payload: JobberVisit | null) => {
-    const person = assignees(payload)
-      .map((entry) => (entry.email ? byEmail.get(entry.email) : undefined))
-      .find(Boolean);
-    const key = person?.id ?? '';
-    inJobber.set(key, (inJobber.get(key) ?? 0) + 1);
+    // Once for each person on it, as Jobber counts a shared visit in each column.
+    const people = peopleHere(payload);
+    for (const key of people.length ? people : ['']) inJobber.set(key, (inJobber.get(key) ?? 0) + 1);
   };
   const jobberName = (payload: JobberVisit | null) =>
     assignees(payload)
@@ -218,6 +226,9 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       inspectionType: inspection.inspectionType,
       status: inspection.status,
       technicianId: inspection.technician?.id ?? null,
+      technicianIds: [
+        ...new Set([...(inspection.technician ? [inspection.technician.id] : []), ...peopleHere(payload)]),
+      ],
       here: {
         startAt: inspection.scheduledStartAt?.toISOString() ?? null,
         technician: inspection.technician?.displayName ?? null,
@@ -251,10 +262,8 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
         title: payload.title ?? null,
         property: streetOf(payload),
         technician: jobberName(payload),
-        technicianId:
-          assignees(payload)
-            .map((entry) => (entry.email ? byEmail.get(entry.email) : undefined))
-            .find(Boolean)?.id ?? null,
+        technicianId: peopleHere(payload)[0] ?? null,
+        technicianIds: peopleHere(payload),
         startAt: timedStart(payload)?.toISOString() ?? null,
         completed: Boolean(payload.completedAt),
         reason:
@@ -264,14 +273,13 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
               ? 'Already completed in Jobber'
               : (visit.failureMessage ?? 'Not named as an inspection'),
       });
+      for (const id of peopleHere(payload)) workPeople.add(id);
       continue;
     }
     countJobber(payload);
 
     const elsewhere = visit.inspectionId ? input.linkedElsewhere.get(visit.inspectionId) : undefined;
-    const person = assignees(payload)
-      .map((entry) => (entry.email ? byEmail.get(entry.email) : undefined))
-      .find(Boolean);
+    const people = peopleHere(payload);
     const state: JobberDayState = elsewhere ? 'DAY_DIFFERS' : 'ONLY_IN_JOBBER';
     rows.push({
       key: visit.inspectionId ?? `jobber:${visit.jobberVisitId}`,
@@ -280,7 +288,8 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       property: elsewhere?.property ?? streetOf(payload),
       inspectionType: null,
       status: elsewhere?.status ?? null,
-      technicianId: elsewhere?.technicianId ?? person?.id ?? null,
+      technicianId: elsewhere?.technicianId ?? people[0] ?? null,
+      technicianIds: [...new Set([...(elsewhere?.technicianId ? [elsewhere.technicianId] : []), ...people])],
       here: null,
       jobber: {
         startAt: timedStart(payload)?.toISOString() ?? null,
@@ -308,7 +317,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       a.property.localeCompare(b.property),
   );
 
-  const technicians = summarise(rows, input.technicians, inJobber);
+  const technicians = summarise(rows, input.technicians, inJobber, workPeople);
   return {
     date: input.date,
     syncedAt: input.connection?.lastSyncCompletedAt?.toISOString() ?? null,
@@ -338,6 +347,7 @@ function summarise(
   rows: JobberDayRow[],
   people: DayTechnician[],
   inJobber: Map<string, number>,
+  workPeople: ReadonlySet<string> = new Set(),
 ): JobberDayTechnician[] {
   const names = new Map(people.map((person) => [person.id, person.displayName]));
   const groups = new Map<string, JobberDayTechnician>();
@@ -366,6 +376,9 @@ function summarise(
     if (row.state !== 'MATCHES') entry.differences += 1;
   }
   for (const key of inJobber.keys()) group(key || null);
+  // A second person on a visit, and anyone with only Jobber work, still has a column.
+  for (const row of rows) for (const id of row.technicianIds ?? []) group(id);
+  for (const id of workPeople) group(id);
   return [...groups.values()].sort(
     (a, b) =>
       Number(a.technicianId === null) - Number(b.technicianId === null) ||

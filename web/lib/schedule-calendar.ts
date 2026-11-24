@@ -150,10 +150,20 @@ export interface CalendarFilters {
 
 export const NO_FILTERS: CalendarFilters = { types: new Set(), technicians: new Set(), statuses: new Set() };
 
+/**
+ * Everyone on a visit (2026-11-25): a visit Jobber has two people on is in
+ * both their columns, as on Jobber's calendar. A day read before the list
+ * existed, or a visit with nobody, falls back to the row's one person.
+ */
+export function peopleOf(row: JobberDayRow): (string | null)[] {
+  return row.technicianIds?.length ? row.technicianIds : [row.technicianId];
+}
+
 export function isShown(row: JobberDayRow, hidden: CalendarFilters): boolean {
   return (
     !hidden.types.has(row.inspectionType ?? UNKNOWN_TYPE) &&
-    !hidden.technicians.has(technicianKey(row.technicianId)) &&
+    // Shown while anyone on it is shown.
+    peopleOf(row).some((id) => !hidden.technicians.has(technicianKey(id))) &&
     !hidden.statuses.has(statusGroup(row))
   );
 }
@@ -175,7 +185,8 @@ export function dayColumns(day: JobberDayComparison | undefined): DayColumn[] {
   for (const person of day?.technicians ?? []) if (person.technicianId) people.set(person.technicianId, person.name);
   // Somebody with only Jobber work that day still gets their column (2026-11-25).
   for (const work of day?.otherWork ?? [])
-    if (work.technicianId && !people.has(work.technicianId)) people.set(work.technicianId, work.technician ?? 'Technician');
+    for (const id of work.technicianIds ?? (work.technicianId ? [work.technicianId] : []))
+      if (!people.has(id)) people.set(id, work.technician ?? 'Technician');
   const columns = [...people].map(([technicianId, name]) => ({ technicianId, name }));
   return [{ technicianId: null, name: 'Unassigned' }, ...columns.sort((a, b) => a.name.localeCompare(b.name))];
 }
@@ -190,6 +201,7 @@ function workRow(work: JobberDayOtherWork): JobberDayRow {
     inspectionType: null,
     status: null,
     technicianId: work.technicianId ?? null,
+    technicianIds: work.technicianIds ?? [],
     here: null,
     jobber: { startAt: work.startAt, technician: work.technician, title: work.title, completed: Boolean(work.completed) },
     // Nothing to compare: it is Jobber's own work, with no inspection here to differ from.

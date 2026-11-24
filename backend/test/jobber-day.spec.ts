@@ -220,6 +220,43 @@ describe('a day against Jobber', () => {
     ]);
   });
 
+  describe('a visit with two people on it (2026-11-25)', () => {
+    const both = { nodes: [
+      { id: 'j-moses', email: { raw: 'moses@example.test' }, name: { full: 'Moses Rodriguez' } },
+      { id: 'j-amy', email: { raw: 'amy@example.test' }, name: { full: 'Amy Wilson' } },
+    ] };
+
+    it("is with both, as Jobber's calendar has it, and counts for both", () => {
+      const result = day({ visits: [visit({ payload: { assignedUsers: both } })] });
+
+      expect(result.rows[0]).toMatchObject({ state: 'MATCHES', technicianId: 't-moses', technicianIds: ['t-moses', 't-amy'] });
+      expect(result.technicians.find((person) => person.technicianId === 't-amy')).toMatchObject({ here: 0, inJobber: 1 });
+      expect(result.technicians.find((person) => person.technicianId === 't-moses')).toMatchObject({ here: 1, inJobber: 1 });
+    });
+
+    it('keeps the person here first when Jobber also names someone else', () => {
+      const result = day({ inspections: [inspection({ technician: AMY })], visits: [visit({ payload: { assignedUsers: both } })] });
+
+      expect(result.rows[0]).toMatchObject({ technicianId: 't-amy', technicianIds: ['t-amy', 't-moses'] });
+    });
+
+    it('files Jobber work under both, and names both among the day\'s technicians', () => {
+      const result = day({
+        inspections: [],
+        visits: [visit({ jobberVisitId: 'v-7', inspectionId: null, status: 'SKIPPED_NOT_SYNCED', payload: { title: 'Key information', assignedUsers: both } })],
+      });
+
+      expect(result.otherWork[0]).toMatchObject({ technicianId: 't-moses', technicianIds: ['t-moses', 't-amy'] });
+      expect(result.technicians.map((person) => person.name)).toEqual(expect.arrayContaining(['Moses R.', 'Amy W.']));
+    });
+
+    it('is with nobody here when Jobber names nobody this app knows', () => {
+      const result = day({ inspections: [], visits: [visit({ inspectionId: null, status: 'UNMATCHED_PROPERTY', payload: { assignedUsers: { nodes: [] } } })] });
+
+      expect(result.rows[0]).toMatchObject({ technicianId: null, technicianIds: [] });
+    });
+  });
+
   it('reads a Jobber visit of the day whose inspection is on another day here', () => {
     const result = day({
       inspections: [],

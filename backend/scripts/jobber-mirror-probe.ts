@@ -28,7 +28,7 @@ async function main() {
   const ask = <T>(query: string) => withTenant(organizationId, () => client.request<T>(organizationId, query, {}));
 
   const root = await ask<{ __type: { fields: Field[] } }>(
-    `query { __type(name: "Query") { fields { name args { name type { ${TYPE_REF} } } } } }`,
+    `query { __type(name: "Query") { fields { name type { ${TYPE_REF} } args { name type { ${TYPE_REF} } } } } }`,
   );
   const inputs = new Set<string>();
   for (const field of root.__type.fields.filter((f) => ROOTS.includes(f.name))) {
@@ -57,6 +57,23 @@ async function main() {
         console.log(`    ${member.name}: ${m.__type.fields.map((f) => f.name).join(', ')}`);
       }
     }
+  }
+  // Jobber's calendar also shows tasks ("Key information", "Get Materials"),
+  // which are not visits (2026-11-25). Whatever the schema calls them --
+  // tasks, events, assessments -- list it with its arguments and fields, so
+  // the Schedule can read them once the name is known.
+  for (const field of root.__type.fields.filter((f) => /task|event|assessment|calendar/i.test(f.name))) {
+    console.log(`\nQuery.${field.name}(${field.args?.map((a) => `${a.name}:${named(a.type)}`).join(', ')}) -> ${named((field as Field).type)}`);
+    const conn = await ask<{ __type: { fields: Field[] | null } | null }>(
+      `query { __type(name: "${named((field as Field).type)}") { fields { name type { ${TYPE_REF} } } } }`,
+    );
+    const nodes = conn.__type?.fields?.find((f) => f.name === 'nodes');
+    const nodeType = nodes ? named(nodes.type) : named((field as Field).type);
+    const shape = await ask<{ __type: { fields: Field[] | null; possibleTypes: { name: string }[] | null } | null }>(
+      `query { __type(name: "${nodeType}") { possibleTypes { name } fields { name type { ${TYPE_REF} } } } }`,
+    );
+    console.log(`  ${nodeType}: ${shape.__type?.fields?.map((f) => `${f.name}:${named(f.type)}`).join(' ') ?? '-'}`);
+    if (shape.__type?.possibleTypes?.length) console.log(`  types: ${shape.__type.possibleTypes.map((t) => t.name).join(', ')}`);
   }
   await app.close();
 }

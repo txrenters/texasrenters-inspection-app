@@ -41,6 +41,7 @@ import {
   NOBODY,
   NO_FILTERS,
   oneCardPerJob,
+  peopleOf,
   sortVisits,
   STATUS_GROUPS,
   stepAnchor,
@@ -142,7 +143,7 @@ export function ScheduleCalendar({
   }
   const nameOf: NameOf = (row) => (row.technicianId ? (names.get(row.technicianId) ?? personOf(row)) : null);
 
-  const options = filterOptions(byDate, nameOf);
+  const options = filterOptions(byDate, nameOf, names);
   // One card a job: its inspections on the day are one visit (2026-11-20).
   const shownOn = (date: string) =>
     oneCardPerJob(calendarRows(byDate.get(date)).filter((row) => isShown(row, hidden)));
@@ -298,7 +299,7 @@ export function ScheduleCalendar({
 }
 
 /** The Type and Team pills' choices: what is on the days loaded, so nothing is offered that matches nothing. */
-function filterOptions(byDate: ReadonlyMap<string, JobberDayComparison>, nameOf: NameOf) {
+function filterOptions(byDate: ReadonlyMap<string, JobberDayComparison>, nameOf: NameOf, names: ReadonlyMap<string, string>) {
   const types = new Map<string, FilterOption>();
   const people = new Map<string, FilterOption>([[NOBODY, { value: NOBODY, label: 'Unassigned' }]]);
   for (const day of byDate.values())
@@ -306,8 +307,12 @@ function filterOptions(byDate: ReadonlyMap<string, JobberDayComparison>, nameOf:
       const type = row.inspectionType ?? UNKNOWN_TYPE;
       if (!types.has(type))
         types.set(type, { value: type, label: row.inspectionType ? typeTitle(type) : 'Type not known yet' });
-      const key = technicianKey(row.technicianId);
-      if (!people.has(key)) people.set(key, { value: key, label: nameOf(row) ?? 'Unassigned' });
+      // Everyone on it, so the second person on a shared visit can be picked too.
+      for (const id of peopleOf(row)) {
+        const key = technicianKey(id);
+        const label = id === row.technicianId ? nameOf(row) : id ? (names.get(id) ?? null) : null;
+        if (!people.has(key)) people.set(key, { value: key, label: label ?? 'Unassigned' });
+      }
     }
   const byLabel = (a: FilterOption, b: FilterOption) => a.label.localeCompare(b.label);
   const [nobody, ...rest] = [...people.values()];
@@ -577,7 +582,7 @@ function DayView({
     key: technicianKey(column.technicianId),
     date,
     rows: sortVisits(
-      rows.filter((row) => row.technicianId === column.technicianId),
+      rows.filter((row) => peopleOf(row).includes(column.technicianId)),
       (row) => row.property,
     ),
     name: column.name,
