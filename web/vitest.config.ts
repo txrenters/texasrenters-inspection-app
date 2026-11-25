@@ -13,6 +13,6 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     // One jsdom worker a core filled a 7 GB laptop (2026-11-25); off CI there are two at most.
-    maxWorkers: process.env.CI ? undefined : 2,
+    ...(process.env.CI ? {} : { maxWorkers: 2 }),
   },
 });

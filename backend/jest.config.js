@@ -18,5 +18,5 @@ module.exports = {
   testEnvironment: 'node',
   // Each worker compiles and loads the whole backend. One a core froze a 7 GB
   // laptop for nine minutes (2026-11-25), so off CI there are two at most.
-  maxWorkers: process.env.CI ? undefined : 2,
+  ...(process.env.CI ? {} : { maxWorkers: 2 }),
 };
