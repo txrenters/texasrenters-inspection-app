@@ -96,6 +96,21 @@ export interface JobberDayRow {
   jobberWork?: boolean;
 }
 
+/**
+ * A work order's job as booked in Jobber: its next visit still to do, else its
+ * latest one. `scheduled` false when the job has no visit the sync holds.
+ */
+export interface WorkOrderJobberSchedule {
+  scheduled: boolean;
+  /** The visit's day (Texas), when it has one. */
+  date: string | null;
+  /** The clock start; null for Anytime. */
+  startAt: string | null;
+  /** Who Jobber has on it, as Jobber names them; empty for nobody. */
+  team: string[];
+  completed: boolean;
+}
+
 /** Where a work order stands before anyone goes: approved or not, and its estimate. */
 export interface JobberDayWorkOrder {
   /** False while the maintenance app's work order has no approved date. */

@@ -59,6 +59,7 @@ import {
   type JobNextNumber,
   type AdminWorkOrder,
   type JobberDayWorkOrder,
+  type WorkOrderJobberSchedule,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -79,6 +80,7 @@ import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-r
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
+import { jobberScheduleOf } from '../work-orders/work-order-jobber-schedule';
 import { workOrderStanding } from '../work-orders/work-order-standing';
 import { workOrderView } from '../work-orders/work-order-view';
 import { OFFICE_NOTE_SELECT, officeNoteView } from './inspection-notes.service';
@@ -1773,6 +1775,8 @@ export class AdminService {
       inspectionType: true,
       // The maintenance app's work order this visit is, for the Work orders page.
       workOrderNumber: true,
+      // Its Jobber job, for the Work orders list's "In Jobber" column (2026-11-26).
+      jobberJobId: true,
       baselineInspectionId: true,
       baselineInspection: {
         select: { id: true, inspectionType: true, scheduledAt: true, completedAt: true },
@@ -1957,10 +1961,36 @@ export class AdminService {
           standingByInspection.set(handoff.inspectionId, workOrderStanding(handoff.payload));
     }
 
+    /**
+     * The Work orders list's "In Jobber" column (2026-11-26): whether each work
+     * order's Jobber job already has a visit, from the visits the sync stored.
+     * One query over the page's jobs, only for that list; no call to Jobber.
+     */
+    const scheduleByJob = new Map<string, WorkOrderJobberSchedule>();
+    const jobIds = [
+      ...new Set(items.map((item) => item.jobberJobId).filter((id): id is string => Boolean(id))),
+    ];
+    if (query.source === InspectionSource.WORK_ORDER && jobIds.length) {
+      const visits = await this.prisma.jobberVisitImport.findMany({
+        where: { organizationId: user.organizationId, jobberJobId: { in: jobIds } },
+        select: { jobberJobId: true, payload: true },
+      });
+      const today = businessDate();
+      for (const jobId of jobIds)
+        scheduleByJob.set(
+          jobId,
+          jobberScheduleOf(
+            visits.filter((visit) => visit.jobberJobId === jobId).map((visit) => visit.payload),
+            today,
+          ),
+        );
+    }
+
     const listed = this.page(
       items.map(({ rescheduleRequests, jobberCompanionOf, jobberCompanions, ...item }) => ({
         ...item,
         workOrder: standingByInspection.get(item.id) ?? null,
+        jobberSchedule: item.jobberJobId ? (scheduleByJob.get(item.jobberJobId) ?? null) : null,
         openWork: visitOpenWork({ status: item.status, rescheduleRequests, jobberCompanionOf, jobberCompanions }),
         /** The quarter of the programme it belongs to, not the one its day falls in. */
         quarter: visitQuarter(item),
