@@ -65,6 +65,9 @@ export const visitsQuery = (detailsField: string | null = VISIT_DETAILS_FIELD) =
         # returns a startAt for these, so without it an all-day visit would
         # render as whatever midnight is in the reader's timezone.
         allDay
+        # The place the office dragged it to among the day's Anytime work: Jobber's
+        # calendar lists a person's Anytime visits by it, lowest first (2026-11-25).
+        overrideOrder
         job {
           id
           jobNumber
@@ -400,6 +403,9 @@ function visitsByIdsQuery(first: number) {
         createdAt
         visitStatus
         allDay
+        # The place the office dragged it to among the day's Anytime work: Jobber's
+        # calendar lists a person's Anytime visits by it, lowest first (2026-11-25).
+        overrideOrder
         job {
           id
           jobNumber

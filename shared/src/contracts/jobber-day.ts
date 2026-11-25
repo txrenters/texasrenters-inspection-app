@@ -116,6 +116,12 @@ export interface JobberVisitExtras {
   jobNumber?: string | null;
   details?: string | null;
   address?: string | null;
+  /**
+   * Where the office dragged it among the day's Anytime work in Jobber
+   * (`overrideOrder`, 2026-11-25): Jobber lists a person's Anytime visits by
+   * it, lowest first.
+   */
+  order?: number | null;
 }
 
 export interface JobberDayOtherWork extends JobberVisitExtras {

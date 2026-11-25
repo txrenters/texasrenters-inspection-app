@@ -211,6 +211,7 @@ function workRow(work: JobberDayOtherWork): JobberDayRow {
       jobNumber: work.jobNumber ?? null,
       details: work.details ?? null,
       address: work.address ?? null,
+      order: work.order ?? null,
     },
     // Nothing to compare: it is Jobber's own work, with no inspection here to differ from.
     state: 'MATCHES',
@@ -239,14 +240,31 @@ export function calendarRows(day: JobberDayComparison | undefined): JobberDayRow
  */
 export const visitName = (row: JobberDayRow) => row.jobber?.title ?? row.property;
 
-/** A day's visits in reading order: timed ones by the clock, then Anytime by person and property. */
-export function sortVisits(rows: readonly JobberDayRow[], nameOf: (row: JobberDayRow) => string): JobberDayRow[] {
+/**
+ * A day's visits in reading order: timed ones by the clock, then Anytime in
+ * the order the office dragged them into in Jobber (2026-11-25: Jobber's
+ * calendar lists them by it, the order they are driven), then by name for
+ * any Jobber gave no place. `groupOf` keeps a column's people together
+ * (Week, Month), each person's visits in that order.
+ */
+export function sortVisits(
+  rows: readonly JobberDayRow[],
+  nameOf: (row: JobberDayRow) => string,
+  groupOf?: (row: JobberDayRow) => string,
+): JobberDayRow[] {
   return [...rows].sort((a, b) => {
     const at = visitStart(a);
     const bt = visitStart(b);
     if (at && bt && at !== bt) return at.localeCompare(bt);
     if (at && !bt) return -1;
     if (!at && bt) return 1;
+    const group = groupOf ? groupOf(a).localeCompare(groupOf(b)) : 0;
+    if (group) return group;
+    const ao = a.jobber?.order ?? null;
+    const bo = b.jobber?.order ?? null;
+    if (ao !== null && bo !== null && ao !== bo) return ao - bo;
+    if (ao !== null && bo === null) return -1;
+    if (ao === null && bo !== null) return 1;
     return nameOf(a).localeCompare(nameOf(b)) || a.property.localeCompare(b.property);
   });
 }

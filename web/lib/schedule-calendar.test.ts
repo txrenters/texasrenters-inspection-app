@@ -18,6 +18,7 @@ import {
   stepAnchor,
   sundayOf,
   texasMinutes,
+  visitName,
   visitStart,
   weekOf,
 } from './schedule-calendar';
@@ -147,6 +148,34 @@ describe('the Day view’s columns', () => {
       'a',
       'b',
     ]);
+  });
+
+  it("lists Anytime visits in the order the office dragged them into in Jobber -- Emanuel Hall's Nov 24 (2026-11-25)", () => {
+    const visit = (id: string, title: string, order: number | null, technician = 'Emanuel Hall') =>
+      row({ inspectionId: id, property: title, jobber: { startAt: null, technician, title, completed: false, order } });
+    const aspen = visit('aspen', '2939 Aspen Park Ln - Zone 2 - General Maintenance - #44767', 20);
+    const lavaca = visit('lavaca', '5814 Lavaca Lane - Zone 4 - General maintenance - 44718', 19);
+    const simeon39 = visit('44239', '74 San Simeon Dr - 74 San Simeon - Zone 3 - General Maintenance - #44239', 18);
+    const simeon24 = visit('44524', '74 San Simeon Dr - 74 San Simeon - Zone 3 - General Maintenance - #44524', 16);
+    const wilkins = visit('wilkins', '5826 Wilkins lane - 5826 Wilkins lane - Zone 3 - HVAC - #44779', 0);
+    const noPlace = visit('none', '1 Any St', null);
+    const timed = row({ inspectionId: 'timed', here: { startAt: '2026-11-24T14:00:00.000Z', technician: 'Emanuel Hall' } });
+    const ids = (rows: JobberDayRow[]) => rows.map((entry) => entry.inspectionId);
+
+    expect(ids(sortVisits([aspen, noPlace, lavaca, simeon39, timed, simeon24, wilkins], visitName))).toEqual([
+      'timed',
+      'wilkins',
+      '44524',
+      '44239',
+      'lavaca',
+      'aspen',
+      'none',
+    ]);
+
+    // Week and Month keep each person together, each in their own dragged order.
+    const kevin = visit('kevin', '3301 Omega B - Zone 1 - General Maintenance - WO#44805', 5, 'kevin granados');
+    const person = (entry: JobberDayRow) => entry.jobber?.technician ?? '';
+    expect(ids(sortVisits([lavaca, kevin, wilkins], visitName, person))).toEqual(['wilkins', 'lavaca', 'kevin']);
   });
 });
 
