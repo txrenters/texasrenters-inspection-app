@@ -434,7 +434,7 @@ describe('filling a requisition in', () => {
     // Something typed on a line with no item code is not a line yet.
     fireEvent.change(screen.getByLabelText('Notes on line 1'), { target: { value: 'Something' } });
     expect(greyed(draft)).toBe(true);
-    expect(screen.getByRole('status').textContent).toBe('Finish or delete the lines that are not filled in.');
+    expect(screen.getByRole('status').textContent).toBe('Line 1: choose its item code, or delete the line.');
 
     // Delete Line takes the line the cursor is on.
     fireEvent.focus(screen.getByLabelText('Notes on line 1'));
@@ -442,6 +442,29 @@ describe('filling a requisition in', () => {
     expect(greyed(draft)).toBe(false);
     fireEvent.click(draft);
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ lines: [], reason: '' }), false));
+  });
+
+  it('sends a line with no Direct Unit Cost as 0.00, and says which line is not finished and why (2026-11-26)', async () => {
+    const onSave = mount();
+    fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
+    fireEvent.click(screen.getByRole('option', { name: /SMK-10/ }));
+    // As for an item with no usual price: the cost is left empty. Notes and Line Amount are empty too.
+    fireEvent.change(screen.getByLabelText('Direct unit cost of Smoke alarm'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '2' } });
+    expect((screen.getByLabelText('Line amount of Smoke alarm') as HTMLInputElement).value).toBe('');
+
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(greyed(submit())).toBe(false);
+    fireEvent.click(submit());
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ lines: [expect.objectContaining({ quantity: 2, estimatedUnitCostCents: 0, notes: null })] }), true));
+
+    // Something typed that is not an amount is still said, for its line.
+    fireEvent.change(screen.getByLabelText('Direct unit cost of Smoke alarm'), { target: { value: 'abc' } });
+    expect(screen.getByRole('status').textContent).toBe('Line 1: the Direct Unit Cost is not an amount, like 3.42. Leave it empty for none.');
+    expect(greyed(submit())).toBe(true);
+    fireEvent.change(screen.getByLabelText('Direct unit cost of Smoke alarm'), { target: { value: '15.30' } });
+    fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '' } });
+    expect(screen.getByRole('status').textContent).toBe('Line 1: type how many, a whole number.');
   });
 
   it('takes an item typed by part of its description, and fills the line from it in yellow (2026-11-20)', async () => {
