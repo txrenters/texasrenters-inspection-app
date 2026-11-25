@@ -47,6 +47,13 @@ export interface JobberDayRow {
   /** The property as the office knows it: the building, else Jobber's street. */
   property: string;
   /**
+   * A work order from the maintenance app (2026-11-26): whether it is approved
+   * and its estimate, as the last hand-off said. The maintenance app now sends
+   * THMP's work orders approved or not; approving them is to be done here.
+   * Absent for anything that is not a work order.
+   */
+  workOrder?: JobberDayWorkOrder | null;
+  /**
    * Where it is on the map (2026-11-26): the inspection's building, else the
    * building Jobber's property is linked to. Null when neither is known.
    */
@@ -87,6 +94,14 @@ export interface JobberDayRow {
    * Read-only: nothing here sends it anywhere.
    */
   jobberWork?: boolean;
+}
+
+/** Where a work order stands before anyone goes: approved or not, and its estimate. */
+export interface JobberDayWorkOrder {
+  /** False while the maintenance app's work order has no approved date. */
+  approved: boolean;
+  /** Dollars; null when nobody has estimated it yet. */
+  estimate: number | null;
 }
 
 /** A row's job: its number, its title, and every kind of work in it, the lead first. */

@@ -1,12 +1,35 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { InspectionStatus, JobberConnectionStatus, JobberOutboundStatus, UserRole } from '@prisma/client';
-import { jobKindsInOrder, type JobberDayComparison } from '@texasrenters/shared';
+import {
+  InspectionSource,
+  InspectionStatus,
+  JobberConnectionStatus,
+  JobberOutboundStatus,
+  UserRole,
+  WorkOrderImportStatus,
+} from '@prisma/client';
+import { jobKindsInOrder, type JobberDayComparison, type JobberDayWorkOrder } from '@texasrenters/shared';
 
 import { businessDate, businessDayBounds, businessDayFromQuery } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { compareJobberDay, type StoredJobberVisit } from './jobber-day';
 import { getJobberConfig } from './jobber.config';
 import { jobberVisitSchema } from './jobber.schemas';
+
+/**
+ * Where a work order stands, from the hand-off the maintenance app last sent
+ * (2026-11-26: it sends THMP's work orders approved or not). Not approved
+ * while the work order has no `approved_date`; the estimate is its
+ * `cost_estimate`. A hand-off that cannot be read counts as not approved, so
+ * a card never claims an approval it has not seen.
+ */
+export function workOrderStanding(payload: unknown): JobberDayWorkOrder {
+  const order = (payload as { work_order?: { approved_date?: unknown; cost_estimate?: unknown } } | null)?.work_order;
+  const estimate = order?.cost_estimate;
+  return {
+    approved: typeof order?.approved_date === 'string' && order.approved_date.length > 0,
+    estimate: typeof estimate === 'number' && Number.isFinite(estimate) ? estimate : null,
+  };
+}
 
 /**
  * Loads one Texas day for `compareJobberDay`. Reads only: the inspections of
@@ -35,6 +58,15 @@ export class JobberDayService {
           inspectionType: true,
           scheduledStartAt: true,
           jobberVisitId: true,
+          source: true,
+          // A work order's latest hand-off: whether it is approved and its
+          // estimate, for the tag on its card (2026-11-26).
+          workOrderImports: {
+            where: { status: WorkOrderImportStatus.PROCESSED },
+            orderBy: { lastReceivedAt: 'desc' },
+            take: 1,
+            select: { payload: true },
+          },
           propertywareBuildingId: true,
           propertywareBuilding: { select: { name: true, addressLine1: true } },
           assignments: {
@@ -162,6 +194,7 @@ export class JobberDayService {
               kinds: jobKindsInOrder(row.job.inspections.map((inspection) => inspection.inspectionType)),
             }
           : null,
+        workOrder: row.source === InspectionSource.WORK_ORDER ? workOrderStanding(row.workOrderImports[0]?.payload) : null,
       })),
       visits,
       linkedElsewhere: new Map(
