@@ -33,6 +33,8 @@ export interface DayInspection {
   waitingKinds: string[];
   /** The job it was booked in, for one card a job on the Schedule. */
   job?: JobberDayJob | null;
+  /** Its building, for the map. */
+  buildingId?: string | null;
 }
 
 export interface StoredJobberVisit {
@@ -58,6 +60,8 @@ export interface DayInput {
   /** Inspections elsewhere that a visit of the day is linked to: id -> its day and status. */
   linkedElsewhere: Map<string, { date: string; status: string; property: string; technicianId: string | null }>;
   technicians: DayTechnician[];
+  /** Jobber property id -> the building it is linked to, for the map (2026-11-26). */
+  buildingOfProperty?: Map<string, string>;
   connection: {
     connected: boolean;
     lastSyncStartedAt: Date | null;
@@ -168,6 +172,9 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
   ];
   /** Somebody on Jobber work only, so the day still names them (2026-11-25). */
   const workPeople = new Set<string>();
+  // The building a Jobber property is linked to, for the map (2026-11-26).
+  const buildingOf = (payload: JobberVisit | null) =>
+    (payload?.property?.id ? input.buildingOfProperty?.get(payload.property.id) : undefined) ?? null;
   const countJobber = (payload: JobberVisit | null) => {
     // Once for each person on it, as Jobber counts a shared visit in each column.
     const people = peopleHere(payload);
@@ -237,6 +244,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       inspectionId: inspection.id,
       jobberVisitId: inspection.jobberVisitId,
       property: inspection.property,
+      buildingId: inspection.buildingId ?? buildingOf(payload),
       inspectionType: inspection.inspectionType,
       status: inspection.status,
       technicianId: inspection.technician?.id ?? null,
@@ -276,6 +284,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
         jobberVisitId: visit.jobberVisitId,
         title: payload.title ?? null,
         property: streetOf(payload),
+        buildingId: buildingOf(payload),
         technician: jobberName(payload),
         technicianId: peopleHere(payload)[0] ?? null,
         technicianIds: peopleHere(payload),
@@ -302,6 +311,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       inspectionId: visit.inspectionId,
       jobberVisitId: visit.jobberVisitId,
       property: elsewhere?.property ?? streetOf(payload),
+      buildingId: buildingOf(payload),
       inspectionType: null,
       status: elsewhere?.status ?? null,
       technicianId: elsewhere?.technicianId ?? people[0] ?? null,

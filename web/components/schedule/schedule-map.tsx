@@ -1,6 +1,6 @@
 'use client';
 
-import { OFFICE, type PropertyPosition, type TechnicianRoute } from '@texasrenters/shared';
+import { OFFICE, type JobberDayRow, type PropertyPosition, type TechnicianRoute } from '@texasrenters/shared';
 import { BuildingIcon } from 'lucide-react';
 import type { ExpressionSpecification } from 'mapbox-gl';
 import { memo, useEffect, useMemo, useRef } from 'react';
@@ -14,7 +14,7 @@ import { usePermissions } from '@/lib/auth';
 import { visitsByProperty } from '@/lib/day-visits';
 import { formatScheduledDate } from '@/lib/format';
 import { useMapAssignments, usePropertyLocations, useTechnicianRoutes } from '@/lib/queries';
-import { weekdayOf } from '@/lib/schedule-calendar';
+import { technicianKey, weekdayOf } from '@/lib/schedule-calendar';
 import { cn } from '@/lib/utils';
 
 /**
@@ -94,28 +94,47 @@ export function dayRuns(
  * for the drive already made, and a Matrix and a Directions request for the
  * drive ahead.
  */
-export function ScheduleMap({ date }: { date: string }) {
+export function ScheduleMap({
+  date,
+  rows,
+  hiddenTechnicians,
+}: {
+  date: string;
+  /**
+   * The day's visits as the calendar shows them -- its Team, Type and Status
+   * filters applied, Jobber's own work included (2026-11-26: "it also shows the
+   * property current in calendar"). The map pins these and nothing else.
+   */
+  rows: readonly JobberDayRow[];
+  /** The calendar's Team filter: a technician hidden there has no line, and no route is read for them. */
+  hiddenTechnicians: ReadonlySet<string>;
+}) {
   const { has } = usePermissions();
   const allowed = has('technicians:locate');
   const assignments = useMapAssignments(date);
   const locations = usePropertyLocations();
-  const ids = useMemo(() => (assignments.data ?? []).map((entry) => entry.technicianId), [assignments.data]);
+  const shown = useMemo(
+    () => (assignments.data ?? []).filter((entry) => !hiddenTechnicians.has(technicianKey(entry.technicianId))),
+    [assignments.data, hiddenTechnicians],
+  );
+  const ids = useMemo(() => shown.map((entry) => entry.technicianId), [shown]);
   const routes = useTechnicianRoutes(ids, date, allowed && ids.length > 0) ?? NO_ROUTES;
 
-  const { dayProperties, highlighted, visits, runs } = useMemo(() => {
+  const { dayProperties, highlighted, visits, runs, unplaced } = useMemo(() => {
     const positions = new Map<string, PropertyPosition>((locations.data ?? []).map((place) => [place.id, place]));
-    const day = assignments.data ?? [];
-    const onDay = new Set(day.flatMap((entry) => entry.stops.flatMap((stop) => (stop.buildingId ? [stop.buildingId] : []))));
+    const onDay = new Set(rows.flatMap((row) => (row.buildingId ? [row.buildingId] : [])));
     return {
       dayProperties: (locations.data ?? []).filter((place) => onDay.has(place.id)),
       highlighted: onDay,
-      visits: visitsByProperty(day),
-      runs: dayRuns(day, positions, {
+      visits: visitsByProperty(shown),
+      runs: dayRuns(shown, positions, {
         allowed,
         byTechnician: new Map(routes.map((route) => [route.technicianId, route])),
       }),
+      // On the calendar but with no place to pin: no building, or one not yet placed.
+      unplaced: locations.data ? rows.filter((row) => !row.buildingId || !positions.has(row.buildingId)).length : 0,
     };
-  }, [allowed, assignments.data, locations.data, routes]);
+  }, [allowed, locations.data, routes, rows, shown]);
 
   const drawsRoutes = runs.some((run) => run.driven.length > 1 || run.ahead.length > 1);
 
@@ -139,9 +158,14 @@ export function ScheduleMap({ date }: { date: string }) {
           ))
         ) : (
           <span className="text-muted-foreground">
-            {assignments.isLoading ? 'Loading the day…' : 'Nobody has a stop with a place on the map.'}
+            {assignments.isLoading ? 'Loading the day…' : 'Nobody shown has a stop with a place on the map.'}
           </span>
         )}
+        {unplaced ? (
+          <span className="text-muted-foreground">
+            {unplaced} on the calendar {unplaced === 1 ? 'is' : 'are'} not on the map: no place for {unplaced === 1 ? 'it' : 'them'} yet
+          </span>
+        ) : null}
         {drawsRoutes ? (
           <span className="text-muted-foreground ml-auto">From the office · solid is done, dashed is ahead</span>
         ) : null}

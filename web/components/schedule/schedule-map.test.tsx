@@ -1,4 +1,4 @@
-import type { PropertyPosition, TechnicianRoute } from '@texasrenters/shared';
+import type { JobberDayRow, PropertyPosition, TechnicianRoute } from '@texasrenters/shared';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,24 +58,46 @@ beforeEach(() => {
   seen.routeData = [];
 });
 
+/** The calendar's shown visits, as far as the map reads them: where each is. */
+const shownAt = (...buildingIds: (string | null)[]) =>
+  buildingIds.map((buildingId, index) => ({ key: `row-${index}`, buildingId }) as unknown as JobberDayRow);
+const NOBODY_HIDDEN: ReadonlySet<string> = new Set();
+const mapOf = (rows = shownAt('b-1', 'b-2', 'b-3'), hidden = NOBODY_HIDDEN) => (
+  <ScheduleMap date="2026-11-02" hiddenTechnicians={hidden} rows={rows} />
+);
+
 describe('the Schedule map', () => {
   it("draws only the day's properties, not the rest of the portfolio", () => {
-    render(<ScheduleMap date="2026-11-02" />);
+    render(mapOf());
     expect(seen.portfolio?.properties.map((property) => property.id).sort()).toEqual(['b-1', 'b-2', 'b-3']);
   });
 
+  it('pins what the calendar shows -- its filters, and Jobber’s own work -- and says what it cannot place (2026-11-26)', () => {
+    // b-far is Jobber work on the calendar no technician here has; b-2 is filtered off the calendar.
+    render(mapOf(shownAt('b-1', 'b-far', null)));
+    expect(seen.portfolio?.properties.map((property) => property.id).sort()).toEqual(['b-1', 'b-far']);
+    expect(screen.getByText(/1 on the calendar is not on the map/)).toBeTruthy();
+  });
+
+  it("follows the calendar's Team filter: no line, and no route read, for a technician hidden there (2026-11-26)", () => {
+    render(mapOf(shownAt('b-1', 'b-2'), new Set(['tech-z'])));
+    expect(seen.routes.at(-1)?.ids).toEqual(['tech-a']);
+    expect(screen.getByText('Ada Lane')).toBeTruthy();
+    expect(screen.queryByText('Zoe Park')).toBeNull();
+  });
+
   it("reads the day's saved routes once per technician on it, and only with technicians:locate", () => {
-    render(<ScheduleMap date="2026-11-02" />);
+    render(mapOf());
     expect(seen.routes.at(-1)).toEqual({ ids: ['tech-a', 'tech-z'], date: '2026-11-02', enabled: true });
 
     seen.locate = false;
-    render(<ScheduleMap date="2026-11-02" />);
+    render(mapOf());
     expect(seen.routes.at(-1)?.enabled).toBe(false);
   });
 
   it('says where the routes start once one is drawn', () => {
     seen.routeData = [route('tech-a', [[29.77, -95.41], [29.9, -95.6]], [[29.9, -95.6], [29.8, -95.5]])];
-    render(<ScheduleMap date="2026-11-02" />);
+    render(mapOf());
     expect(screen.getByText(/From the office/)).toBeTruthy();
   });
 });
