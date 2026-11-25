@@ -257,11 +257,12 @@ describe('a day against Jobber', () => {
     });
   });
 
-  it("carries what Jobber's visit popup shows: the job number, the Details and the whole address (2026-11-25)", () => {
+  it("carries what Jobber's visit popup shows -- the job number, the Details, the whole address -- and its place in the day's dragged order (2026-11-25)", () => {
     const jobberSide = {
       title: '74 San Simeon Dr - 74 San Simeon - Zone 3 - General Maintenance - #44524',
       instructions: 'Hose bib on the left side of house needs to be replaced.',
       job: { id: 'job-1', jobNumber: 20907 },
+      overrideOrder: 16,
       property: { id: 'jp-7', address: { street1: '74 San Simeon Dr', street2: null, city: 'Manvel', province: 'TX', postalCode: '77578-3287' } },
     };
     const result = day({
@@ -271,7 +272,13 @@ describe('a day against Jobber', () => {
       ],
     });
 
-    const extras = { jobNumber: '20907', details: 'Hose bib on the left side of house needs to be replaced.', address: '74 San Simeon Dr, Manvel, TX 77578-3287' };
+    const extras = {
+      jobNumber: '20907',
+      details: 'Hose bib on the left side of house needs to be replaced.',
+      address: '74 San Simeon Dr, Manvel, TX 77578-3287',
+      // Where the office dragged it among the day's Anytime work (2026-11-25).
+      order: 16,
+    };
     expect(result.rows[0].jobber).toMatchObject(extras);
     expect(result.otherWork[0]).toMatchObject(extras);
   });
