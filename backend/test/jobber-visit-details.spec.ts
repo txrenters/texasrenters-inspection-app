@@ -1,163 +1,93 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { ApplicationError } from '../src/common/errors';
+import { DAILY_CEILING, JobberVisitDetailsService } from '../src/integrations/jobber/jobber-visit-details.service';
 
-import { InspectionStatus } from '@prisma/client';
+const ORG = '30000000-0000-4000-8000-000000000001';
+const NOW = new Date('2026-11-25T18:00:00.000Z');
 
-import { VISIT_BY_ID_QUERY, VISIT_DETAILS_FIELD } from '../src/integrations/jobber/jobber.queries';
-import type { JobberVisit } from '../src/integrations/jobber/jobber.schemas';
-import {
-  JobberSyncWorker,
-  visitDetailsText,
-  type JobberSyncResult,
-} from '../src/workers/jobber-sync/jobber-sync.worker';
+const node = {
+  id: 'v-44796',
+  title: '1204 Cedar Hollow Dr - 1204 Cedar Hollow Dr - Zone 2 - General Maintenance - #44796',
+  instructions: '  Pest control - Seeing an influx of spiders and ants around the home.\n\nTenant: Jordan Example  ',
+  startAt: '2026-11-25T06:00:00Z',
+  allDay: true,
+  completedAt: null,
+  incompleteJobFormsCount: 1,
+  job: { jobNumber: 21118, title: 'General Maintenance', jobberWebUri: 'https://secure.getjobber.com/work_orders/1' },
+  client: { name: 'Jordan Example', defaultPhones: '5555550100', defaultEmails: ['jordan@example.test'], jobberWebUri: null },
+  property: { address: { street1: '1204 Cedar Hollow Dr', street2: null, city: 'Springfield', province: 'Texas', postalCode: '77000' } },
+  assignedUsers: { nodes: [{ name: { full: 'Emanuel Hall' } }] },
+  notes: { totalCount: 1, nodes: [{ message: 'Gate code 1234', createdAt: '2026-11-24T15:00:00Z' }] },
+};
 
-/**
- * The Details a coordinator writes on a Jobber visit, kept on the inspection.
- *
- * They carry what a technician needs for the visit -- filter sizes, the
- * tenant's phone, a gate code, the plan -- and the sync used to read them only
- * to type the visit, then throw them away.
- */
-
-const DETAILS =
-  'Filter Change: 20x25x1 + Pest Control + Occupied Inspection\n\nTenant: Jane Q Sample (832) 555-0101';
-
-const result = (): JobberSyncResult => ({
-  correlationId: 'c1',
-  visitsSeen: 1,
-  imported: 0,
-  rescheduled: 0,
-  unmatched: 0,
-  rejected: 0,
-  alreadyComplete: 0,
-  notSynced: 0,
-  assigned: 0,
-  completedFromJobber: 0,
-  withdrawn: 0,
-  skipped: 0,
-  truncated: false,
-});
-
-function workerFor(stored: { jobberVisitTitle: string | null; jobberVisitDetails: string | null }) {
-  const updateMany = jest.fn().mockResolvedValue({ count: 1 });
-  const prisma = {
-    jobberOutboundTask: { findMany: jest.fn().mockResolvedValue([]) },
-    inspection: {
-      findFirst: jest.fn().mockResolvedValue({
-        id: 'inspection-1',
-        status: InspectionStatus.SCHEDULED,
-        startedAt: null,
-        scheduledAt: new Date('2026-09-16T00:00:00Z'),
-        scheduledStartAt: null,
-        scheduledEndAt: null,
-        ...stored,
-      }),
-      updateMany,
-    },
-  };
-  const worker = new JobberSyncWorker(prisma as never, {} as never, {} as never);
-  // Private collaborators stubbed: this is about what happens to the text, not
-  // assignment or completion, which have their own specs.
-  const internals = worker as unknown as {
-    applyAssignment: jest.Mock;
-    completeFromJobber: jest.Mock;
-    applyChanges: (organizationId: string, visit: JobberVisit, inspectionId: string, result: JobberSyncResult) => Promise<void>;
-  };
-  internals.applyAssignment = jest.fn().mockResolvedValue(undefined);
-  internals.completeFromJobber = jest.fn().mockResolvedValue(undefined);
-  return { worker: internals, updateMany };
+function service({ stored = true, lineItems = 'ok' as 'ok' | 'fail' } = {}) {
+  const prisma = { jobberVisitImport: { findFirst: jest.fn().mockResolvedValue(stored ? { id: 'row-1' } : null) } };
+  const request = jest.fn((_org: string, query: string) => {
+    if (query.includes('VisitLineItems')) {
+      if (lineItems === 'fail') return Promise.reject(new Error("Field 'totalPrice' doesn't exist"));
+      return Promise.resolve({ visits: { nodes: [{ lineItems: { nodes: [{ name: 'Pest control', description: null, quantity: 1, totalPrice: 95 }] } }] } });
+    }
+    return Promise.resolve({ visits: { nodes: [node] } });
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { details: new JobberVisitDetailsService(prisma as any, { request } as any), request, prisma };
 }
 
-// On the day the inspection already has, all day: only the text is in question.
-const visit = (fields: Partial<JobberVisit>): JobberVisit =>
-  ({
-    id: 'visit-1',
-    title: '100 Main St - Zone 1 - Q3 2026 Tenant Benefit Package',
-    startAt: '2026-09-16T05:00:00Z',
-    allDay: true,
-    ...fields,
-  }) as JobberVisit;
+describe("a visit's details from Jobber (2026-11-25)", () => {
+  it("reads what Jobber's Visit details window shows, and writes nothing", async () => {
+    const { details, request } = service();
+    const result = await details.details(ORG, 'v-44796', NOW);
 
-describe('the Details on an inspection made from a Jobber visit', () => {
-  it('keeps them as the coordinator wrote them, and nothing for blank ones', () => {
-    expect(visitDetailsText(DETAILS)).toBe(DETAILS);
-    expect(visitDetailsText('   \n')).toBeNull();
-    expect(visitDetailsText('')).toBeNull();
-    expect(visitDetailsText(null)).toBeNull();
-    expect(visitDetailsText(undefined)).toBeNull();
-  });
-
-  it('updates them when the coordinator edits the visit, even when nothing else moved', async () => {
-    const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: 'Filter Change: 20x25x1' });
-
-    await worker.applyChanges('organization-1', visit({ instructions: DETAILS }), 'inspection-1', result());
-
-    expect(updateMany).toHaveBeenCalledWith({
-      where: { id: 'inspection-1', organizationId: 'organization-1' },
-      data: { jobberVisitDetails: DETAILS },
+    expect(result).toMatchObject({
+      title: node.title,
+      completed: false,
+      startAt: null,
+      date: '2026-11-25',
+      addressLines: ['1204 Cedar Hollow Dr', 'Springfield, Texas 77000'],
+      instructions: 'Pest control - Seeing an influx of spiders and ants around the home.\n\nTenant: Jordan Example',
+      job: { number: '21118', title: 'General Maintenance' },
+      team: ['Emanuel Hall'],
+      client: { name: 'Jordan Example', phones: ['5555550100'], emails: ['jordan@example.test'] },
+      notes: [{ message: 'Gate code 1234' }],
+      notesTotal: 1,
+      checklistsToDo: 1,
+      lineItems: [{ name: 'Pest control', quantity: 1, totalPrice: 95 }],
     });
+    for (const [, query] of request.mock.calls) expect(query).not.toMatch(/mutation/);
   });
 
-  it('updates them before a completed visit returns early', async () => {
-    // A gate code added the day before is exactly what a technician needs, and
-    // the completion and reschedule branches both return before the end.
-    const { worker, updateMany } = workerFor({ jobberVisitTitle: null, jobberVisitDetails: null });
+  it('reads Jobber again only after five minutes', async () => {
+    const { details, request } = service();
+    await details.details(ORG, 'v-44796', NOW);
+    await details.details(ORG, 'v-44796', new Date(NOW.getTime() + 4 * 60_000));
+    expect(request).toHaveBeenCalledTimes(2); // one open: the details and the line items
 
-    await worker.applyChanges(
-      'organization-1',
-      visit({ instructions: DETAILS, visitStatus: 'COMPLETED', completedAt: '2026-09-15T20:00:00Z' }),
-      'inspection-1',
-      result(),
-    );
-
-    expect(updateMany).toHaveBeenCalledWith({
-      where: { id: 'inspection-1', organizationId: 'organization-1' },
-      data: { jobberVisitTitle: visit({}).title, jobberVisitDetails: DETAILS },
-    });
-    expect(worker.completeFromJobber).toHaveBeenCalled();
+    await details.details(ORG, 'v-44796', new Date(NOW.getTime() + 6 * 60_000));
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it('writes nothing when they have not changed', async () => {
-    const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
-
-    await worker.applyChanges('organization-1', visit({ instructions: DETAILS }), 'inspection-1', result());
-
-    expect(updateMany).not.toHaveBeenCalled();
+  it('keeps the rest when the line items cannot be read', async () => {
+    const { details } = service({ lineItems: 'fail' });
+    const result = await details.details(ORG, 'v-44796', NOW);
+    expect(result.lineItems).toBeNull();
+    expect(result.instructions).toContain('Pest control');
   });
 
-  it('leaves them alone when the response did not carry the field', async () => {
-    // `instructions` absent is a query that did not ask, not a coordinator who
-    // deleted what they wrote.
-    const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
-
-    await worker.applyChanges('organization-1', visit({}), 'inspection-1', result());
-
-    expect(updateMany).not.toHaveBeenCalled();
+  it("never reads Jobber for a visit the sync does not have for the organization", async () => {
+    const { details, request } = service({ stored: false });
+    await expect(details.details(ORG, 'v-other', NOW)).rejects.toMatchObject({ code: 'JOBBER_VISIT_NOT_FOUND' });
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it('clears them when the coordinator emptied the Details', async () => {
-    const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
+  it('stops reading Jobber for the day at the ceiling, however many visits are opened', async () => {
+    const { details, request } = service();
+    for (let index = 0; index < DAILY_CEILING; index += 1) await details.details(ORG, `v-${index}`, NOW);
+    const error = await details.details(ORG, 'v-one-more', NOW).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApplicationError);
+    expect(error).toMatchObject({ code: 'JOBBER_DETAILS_CEILING' });
+    expect(request).toHaveBeenCalledTimes(DAILY_CEILING * 2);
 
-    await worker.applyChanges('organization-1', visit({ instructions: '' }), 'inspection-1', result());
-
-    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { jobberVisitDetails: null } }));
-  });
-
-  it('are fetched by the webhook path as well as the paged sync', () => {
-    // Without the field a webhook replaced the stored visit with one that had no
-    // Details, and typed a benefit-package visit without its occupied phrase.
-    expect(VISIT_BY_ID_QUERY).toContain(VISIT_DETAILS_FIELD);
-  });
-
-  it('are filled in for existing inspections from the visits the sync already stored', () => {
-    const sql = readFileSync(
-      join(__dirname, '../prisma/migrations/202609150004_inspection_jobber_visit_details/migration.sql'),
-      'utf8',
-    );
-    expect(sql).toMatch(/ADD COLUMN "jobberVisitTitle" TEXT/);
-    expect(sql).toMatch(/ADD COLUMN "jobberVisitDetails" TEXT/);
-    // Matched on organization and visit id, never on the visit id alone.
-    expect(sql).toMatch(/v\."organizationId" = i\."organizationId"/);
-    expect(sql).toMatch(/v\."jobberVisitId" = i\."jobberVisitId"/);
+    // The next Texas day starts again.
+    await details.details(ORG, 'v-one-more', new Date('2026-11-26T18:00:00.000Z'));
+    expect(request).toHaveBeenCalledTimes(DAILY_CEILING * 2 + 2);
   });
 });
