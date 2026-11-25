@@ -5,6 +5,7 @@ import type {
   JobberDayRow,
   JobberDayState,
   JobberDayTechnician,
+  JobberDayWorkOrder,
   JobberVisitExtras,
 } from '@texasrenters/shared';
 
@@ -33,6 +34,8 @@ export interface DayInspection {
   waitingKinds: string[];
   /** The job it was booked in, for one card a job on the Schedule. */
   job?: JobberDayJob | null;
+  /** A maintenance work order's approval and estimate; absent for anything else. */
+  workOrder?: JobberDayWorkOrder | null;
 }
 
 export interface StoredJobberVisit {
@@ -262,6 +265,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
       waitingToSend: inspection.waitingKinds.length > 0,
       importNote: null,
       job: inspection.job ?? null,
+      workOrder: inspection.workOrder ?? null,
     });
   }
 

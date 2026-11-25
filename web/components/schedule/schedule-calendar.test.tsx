@@ -534,3 +534,24 @@ describe('making a job from the Schedule (2026-11-20)', () => {
     expect(screen.getByRole('link', { name: 'Open job' }).getAttribute('href')).toBe('/jobs/job-1');
   });
 });
+
+describe('a work order not approved yet (2026-11-26)', () => {
+  it('is tagged on its card and in its popup, and one approved and estimated is not', async () => {
+    asked.days['2026-11-04'] = day('2026-11-04', [
+      row({ inspectionId: 'insp-wait', property: '12 Elm Ct', workOrder: { approved: false, estimate: null } }),
+      row({ inspectionId: 'insp-est', property: '9 Oak Ln', workOrder: { approved: true, estimate: null } }),
+      row({ inspectionId: 'insp-ready', property: '3 Pine Rd', workOrder: { approved: true, estimate: 240 } }),
+    ]);
+    mount();
+
+    const waiting = await screen.findByRole('button', { name: /12 Elm Ct/ });
+    expect(within(waiting).getByText('Not approved')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: /9 Oak Ln/ })).getByText('No estimate')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: /3 Pine Rd/ })).queryByText(/Not approved|No estimate/)).toBeNull();
+
+    fireEvent.click(waiting);
+    const popover = await screen.findByRole('dialog');
+    expect(within(popover).getByText('Not approved')).toBeTruthy();
+    expect(within(popover).getByText('No estimate')).toBeTruthy();
+  });
+});

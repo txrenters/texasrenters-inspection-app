@@ -82,6 +82,7 @@ export function JobberVisitPopup({
   onClose,
   onHandle,
   more,
+  flag,
 }: {
   row: JobberDayRow;
   date: string;
@@ -92,6 +93,8 @@ export function JobberVisitPopup({
   onHandle: (event: ReactPointerEvent<HTMLElement>) => void;
   /** The app's own ways on from this visit -- the inspection, the comparison -- under ···. */
   more?: ReactNode;
+  /** What the app adds under "Visit": a work order not approved or estimated yet (2026-11-26). */
+  flag?: ReactNode;
 }) {
   const jobber = row.jobber;
   const [notice, setNotice] = useState(false);
@@ -117,6 +120,7 @@ export function JobberVisitPopup({
         <div>
           <p className="text-heading leading-snug font-semibold">{jobber?.title ?? row.property}</p>
           <p className="text-muted-foreground text-xs">Visit</p>
+          {flag ? <div className="mt-1">{flag}</div> : null}
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2">
           <Checkbox checked={done} onCheckedChange={notHere} />

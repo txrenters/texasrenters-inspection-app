@@ -1,3 +1,4 @@
+import { workOrderStanding } from '../src/integrations/jobber/jobber-day.service';
 import {
   compareJobberDay,
   type DayInput,
@@ -311,5 +312,25 @@ describe('a day against Jobber', () => {
     expect(day().rows[0].job).toBeNull();
     const jobberOnly = day({ inspections: [], visits: [visit({ inspectionId: null, status: 'REJECTED' })] });
     expect(jobberOnly.rows[0].job).toBeUndefined();
+  });
+});
+
+describe("a work order's approval on the calendar (2026-11-26)", () => {
+  it('reads not approved from a hand-off with no approved date, and the estimate when there is one', () => {
+    expect(workOrderStanding({ work_order: { approved_date: null, cost_estimate: null } })).toEqual({ approved: false, estimate: null });
+    expect(workOrderStanding({ work_order: { approved_date: '2026-11-11T15:30:00+00:00', cost_estimate: 240 } })).toEqual({
+      approved: true,
+      estimate: 240,
+    });
+    // A hand-off that cannot be read never claims an approval.
+    expect(workOrderStanding(null)).toEqual({ approved: false, estimate: null });
+  });
+
+  it("carries it on the work order's row, and on nothing else", () => {
+    const result = day({
+      inspections: [inspection({ workOrder: { approved: false, estimate: null } }), inspection({ id: 'insp-2', jobberVisitId: null })],
+    });
+    expect(result.rows.find((row) => row.inspectionId === 'insp-1')?.workOrder).toEqual({ approved: false, estimate: null });
+    expect(result.rows.find((row) => row.inspectionId === 'insp-2')?.workOrder).toBeNull();
   });
 });

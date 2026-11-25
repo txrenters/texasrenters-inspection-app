@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 
 import { JobberVisitPopup, useDragged } from './jobber-visit-popup';
 import { PersonDisc } from './person-disc';
+import { WorkOrderTag } from './work-order-tag';
 
 /** Who a visit is with, as either side names them. */
 export const personOf = (row: JobberDayRow) => row.here?.technician ?? row.jobber?.technician ?? null;
@@ -79,6 +80,7 @@ export function CalendarVisit({
   const warning = jobberDayTone(row.state);
   // The other kinds of work in its job, drawn on this one card (2026-11-20).
   const more = row.job ? row.job.kinds.length - 1 : 0;
+  const needsApproval = Boolean(row.workOrder && !row.workOrder.approved);
 
   return (
     <Popover
@@ -97,6 +99,8 @@ export function CalendarVisit({
             (isOneSided(row.state) || work) && 'border border-l-[3px] border-dashed',
             work && 'border-muted-foreground/40 bg-muted/40',
             (done || group === 'cancelled') && 'opacity-70',
+            // Not approved yet (2026-11-26): an amber outline, so nobody is sent before it is.
+            needsApproval && 'border-warning border border-l-[3px] border-dashed',
             className,
           )}
           style={style}
@@ -110,6 +114,7 @@ export function CalendarVisit({
           <span className={cn('text-heading min-w-0 truncate font-medium', group === 'cancelled' && 'line-through')}>
             {label}
           </span>
+          <WorkOrderTag compact workOrder={row.workOrder} />
           {more > 0 ? (
             <span
               aria-label={`and ${more} more ${more === 1 ? 'kind' : 'kinds'} of work in the job`}
@@ -139,6 +144,7 @@ export function CalendarVisit({
           <JobberVisitPopup
             date={date}
             done={done || Boolean(row.jobber.completed)}
+            flag={<WorkOrderTag workOrder={row.workOrder} />}
             more={
               <>
                 {row.job ? (
@@ -173,6 +179,7 @@ export function CalendarVisit({
               : `${row.job ? `Job ${row.job.number}` : typeTitle(row.inspectionType)} · ${STATUS_WORDS[group] ?? humanize(row.status)}`}
           </p>
           <p className="text-heading mt-0.5 font-semibold">{label}</p>
+          <WorkOrderTag className="mt-1" workOrder={row.workOrder} />
           {label !== row.property ? <p className="text-muted-foreground mt-0.5 text-xs">{row.property}</p> : null}
           {row.job ? <p className="text-muted-foreground mt-0.5 text-xs">{row.job.title}</p> : null}
         </div>
