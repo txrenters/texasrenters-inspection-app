@@ -13,6 +13,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { WorkOrderDialog } from '@/components/work-order-dialog';
 import { WorkOrderMatchingActions } from '@/components/work-order-matching-actions';
 import { workOrderGaps, WorkOrderTag } from '@/components/schedule/work-order-tag';
+import { businessTimeOfDay } from '@/lib/clock';
 import { EMPTY, formatScheduledDate, humanize } from '@/lib/format';
 import { useInspections } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
@@ -91,6 +92,14 @@ const columns: Array<Column<WorkOrderRow>> = [
       ),
   },
   {
+    // Whether its Jobber job already has a visit (2026-11-26), from what the
+    // sync stored -- 7 days back to 60 ahead. Nothing here asks Jobber.
+    key: 'jobber',
+    header: 'In Jobber',
+    hideBelow: 'md',
+    cell: (row) => <InJobber schedule={row.jobberSchedule} />,
+  },
+  {
     key: 'scheduled',
     header: 'Scheduled',
     hideBelow: 'md',
@@ -114,6 +123,28 @@ const columns: Array<Column<WorkOrderRow>> = [
     cell: (row) => formatScheduledDate(row.createdAt),
   },
 ];
+
+/** Booked in Jobber: the day and who; or done there; or not booked; or no Jobber job at all. */
+function InJobber({ schedule }: { schedule: WorkOrderRow['jobberSchedule'] }) {
+  if (!schedule) return <span className="text-muted-foreground text-xs">No Jobber job</span>;
+  if (!schedule.scheduled)
+    return (
+      <span className="border-warning/50 bg-warning/15 text-warning rounded-full border px-1.5 text-xs leading-5 font-semibold whitespace-nowrap">
+        Not scheduled
+      </span>
+    );
+  const when = `${schedule.date ? formatScheduledDate(schedule.date) : EMPTY} · ${
+    schedule.startAt ? businessTimeOfDay(schedule.startAt) : 'Anytime'
+  }`;
+  return (
+    <div className="grid gap-0.5 text-xs">
+      <span className={schedule.completed ? 'text-muted-foreground' : 'text-success font-medium'}>
+        {schedule.completed ? `Done · ${when}` : `Scheduled · ${when}`}
+      </span>
+      <span className="text-muted-foreground">{schedule.team.length ? schedule.team.join(', ') : 'Nobody on it yet'}</span>
+    </div>
+  );
+}
 
 export default function WorkOrdersPage() {
   const [state, setState] = useUrlState({ page: 1, q: '' });

@@ -1,7 +1,7 @@
 import type { InspectionType } from '../enums/index.js';
 import type { FindingRejectReason } from './ai-guidance.js';
 import type { JobAreaNote, OfficeNote } from './job-notes.js';
-import type { JobberDayWorkOrder } from './jobber-day.js';
+import type { JobberDayWorkOrder, WorkOrderJobberSchedule } from './jobber-day.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { PropertyServiceStatus } from './property-service.js';
@@ -711,6 +711,13 @@ export interface AdminInspection {
    * null anywhere else.
    */
   workOrder?: JobberDayWorkOrder | null;
+  /**
+   * Whether the work order's Jobber job has a visit booked (2026-11-26: "a
+   * checker whether the app is already scheduled in jobber"). From the visits
+   * the sync stored -- 7 days back to 60 ahead -- never a call to Jobber. Only
+   * on the Work orders list; null there when the work order has no Jobber job.
+   */
+  jobberSchedule?: WorkOrderJobberSchedule | null;
   /**
    * The move-in a move-out is compared against: the latest that qualifies, as
    * the comparison and the AI analysis both choose it. Not `baselineInspection`,

@@ -96,6 +96,34 @@ describe('each row', () => {
     expect(screen.getByText('Unassigned')).toBeInTheDocument();
   });
 
+  it('says in In Jobber whether its Jobber job is booked -- the day and who -- not booked, or has no Jobber job (2026-11-26)', () => {
+    mount({}, [
+      row({
+        id: 'wo-booked',
+        workOrderNumber: 44911,
+        jobberSchedule: { scheduled: true, date: '2026-11-28', startAt: null, team: ['Ada Lane'], completed: false },
+      }),
+      row({
+        id: 'wo-nobody',
+        workOrderNumber: 44912,
+        jobberSchedule: { scheduled: true, date: '2026-11-29', startAt: null, team: [], completed: false },
+      }),
+      row({
+        id: 'wo-open',
+        workOrderNumber: 44913,
+        jobberSchedule: { scheduled: false, date: null, startAt: null, team: [], completed: false },
+      }),
+      row({ id: 'wo-none', workOrderNumber: 44914, jobberSchedule: null }),
+    ]);
+
+    expect(screen.getByRole('columnheader', { name: 'In Jobber' })).toBeInTheDocument();
+    expect(screen.getByText('Scheduled · Nov 28, 2026 · Anytime')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lane')).toBeInTheDocument();
+    expect(screen.getByText('Nobody on it yet')).toBeInTheDocument();
+    expect(screen.getByText('Not scheduled')).toBeInTheDocument();
+    expect(screen.getByText('No Jobber job')).toBeInTheDocument();
+  });
+
   it('says in Approval which are not approved yet or have no estimate, and which are ready (2026-11-26)', () => {
     mount({}, [
       row({ id: 'wo-wait', workOrderNumber: 44901, workOrder: { approved: false, estimate: null } }),
