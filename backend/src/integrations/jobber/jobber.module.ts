@@ -14,6 +14,7 @@ import { InvoiceTakeoverController } from './invoice-takeover.controller';
 import { InvoiceTakeoverService } from './invoice-takeover.service';
 import { JobberClient } from './jobber.client';
 import { JobberDayActionsService } from './jobber-day-actions.service';
+import { JobberVisitDetailsService } from './jobber-visit-details.service';
 import { JobberDayService } from './jobber-day.service';
 import { JobberMirrorService } from './jobber-mirror.service';
 import { JOBBER_CONFIG, getJobberConfig } from './jobber.config';
@@ -39,6 +40,7 @@ import { JobberTokenService } from './jobber.tokens.service';
     JobberService,
     JobberDayService,
     JobberDayActionsService,
+    JobberVisitDetailsService,
     JobberSyncWorker,
     JobberOutboundWorker,
     JobberInvoiceWorker,

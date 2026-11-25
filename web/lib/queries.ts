@@ -92,6 +92,7 @@ import type {
   JobNextNumber,
   JobberConnection,
   JobberDayComparison,
+  JobberVisitDetails,
   JobberAssignee,
   JobberPropertyLink,
   JobberSyncResult,
@@ -133,6 +134,7 @@ export const keys = {
   all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
   jobberDay: (date: string) => ['admin', 'jobber', 'day', date] as const,
+  jobberVisitDetails: (jobberVisitId: string) => ['admin', 'jobber', 'visit-details', jobberVisitId] as const,
   tenants: (query: Record<string, string | number | boolean | undefined>) =>
     ['admin', 'tenants', query] as const,
   clientErrors: (query: Record<string, string | number | boolean | undefined>) =>
@@ -1457,6 +1459,22 @@ export const jobberDayQuery = (date: string) => ({
 });
 export const useJobberDay = (date: string, enabled = true) =>
   useQuery({ ...jobberDayQuery(date), enabled });
+
+/**
+ * One visit's "Visit details", read from Jobber only while the window is open
+ * (2026-11-25). The server keeps a visit five minutes and caps a day's reads;
+ * here it is read once an open -- no polling, no refetch on focus.
+ */
+export const useJobberVisitDetails = (jobberVisitId: string | null, enabled: boolean) =>
+  useQuery({
+    queryKey: keys.jobberVisitDetails(jobberVisitId ?? ''),
+    queryFn: ({ signal }) =>
+      api<JobberVisitDetails>(`${JOBBER}/day/visits/${encodeURIComponent(jobberVisitId!)}/details`, { signal }),
+    enabled: enabled && Boolean(jobberVisitId),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 
 /**
  * The actions on a difference with Jobber. Each queues through the

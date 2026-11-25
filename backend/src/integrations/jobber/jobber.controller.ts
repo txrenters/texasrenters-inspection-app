@@ -23,6 +23,7 @@ import {
 } from '../../common/auth';
 import { JobberClient } from './jobber.client';
 import { JobberDayActionsService } from './jobber-day-actions.service';
+import { JobberVisitDetailsService } from './jobber-visit-details.service';
 import { JobberDayService } from './jobber-day.service';
 import { JobberMirrorService } from './jobber-mirror.service';
 import {
@@ -58,6 +59,7 @@ export class JobberIntegrationController {
     private readonly days: JobberDayService,
     private readonly dayActions: JobberDayActionsService,
     private readonly mirror: JobberMirrorService,
+    private readonly visitDetails: JobberVisitDetailsService,
   ) {}
 
   /**
@@ -72,6 +74,18 @@ export class JobberIntegrationController {
   @RequirePermissions('inspections:read')
   day(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
     return this.days.day(request.user.organizationId, date);
+  }
+
+  /**
+   * One visit's "Visit details", as Jobber's window shows them (2026-11-25).
+   * Unlike the day, this reads Jobber -- once an open, a visit kept five
+   * minutes, an organization capped a day (JobberVisitDetailsService) -- and
+   * writes nothing.
+   */
+  @Get('day/visits/:jobberVisitId/details')
+  @RequirePermissions('inspections:read')
+  visitDetailsOf(@Req() request: AuthenticatedRequest, @Param('jobberVisitId') jobberVisitId: string) {
+    return this.visitDetails.details(request.user.organizationId, jobberVisitId);
   }
 
   /*

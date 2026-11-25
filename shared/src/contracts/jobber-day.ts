@@ -160,3 +160,31 @@ export interface JobberDayComparison {
   /** Jobber work that is not an inspection, listed so the counts add up. */
   otherWork: JobberDayOtherWork[];
 }
+
+/**
+ * Everything Jobber's "Visit details" window shows for one visit (2026-11-25):
+ * read from Jobber when the office opens it, never written back.
+ */
+export interface JobberVisitDetails {
+  jobberVisitId: string;
+  title: string | null;
+  completed: boolean;
+  /** The clock start, or null for Anytime. */
+  startAt: string | null;
+  /** The Texas day it is on. */
+  date: string | null;
+  /** The address one line a part, as Jobber prints it. */
+  addressLines: string[];
+  instructions: string | null;
+  job: { number: string | null; title: string | null; url: string | null } | null;
+  team: string[];
+  client: { name: string | null; phones: string[]; emails: string[]; url: string | null } | null;
+  notes: { message: string; createdAt: string | null }[];
+  notesTotal: number;
+  /** Checklists still to fill in on it, as Jobber counts them. */
+  checklistsToDo: number | null;
+  /** Null when Jobber's line items could not be read. */
+  lineItems: { name: string | null; description: string | null; quantity: number | null; totalPrice: number | null }[] | null;
+  /** When this was read from Jobber. */
+  readAt: string;
+}

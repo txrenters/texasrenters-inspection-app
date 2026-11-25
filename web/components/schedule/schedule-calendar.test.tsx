@@ -14,7 +14,35 @@ import { ScheduleCalendar, type ScheduleCalendarState } from './schedule-calenda
 
 const asked = vi.hoisted(() => ({ dates: [] as string[], days: {} as Record<string, unknown> }));
 const lists = vi.hoisted(() => ({ calls: [] as unknown[] }));
+// What Visit details asked Jobber for: only ever while its window is open.
+const details = vi.hoisted(() => ({ asked: [] as string[] }));
 vi.mock('@/lib/queries', () => ({
+  useJobberVisitDetails: (jobberVisitId: string, enabled: boolean) => {
+    if (enabled) details.asked.push(jobberVisitId);
+    return {
+      isPending: false,
+      isError: false,
+      data: enabled
+        ? {
+            jobberVisitId,
+            title: '3301 Omega B - Zone 1 - General Maintenance - WO#44805',
+            completed: false,
+            startAt: null,
+            date: '2026-11-04',
+            addressLines: ['3301 Omega B', 'Springfield, Texas 77000'],
+            instructions: 'Pest control - Seeing an influx of spiders and ants around the home.\n\nScope of Work - Pest Control',
+            job: { number: '21118', title: 'General Maintenance', url: null },
+            team: ['Ada Lane'],
+            client: { name: 'Jordan Example', phones: ['5555550100'], emails: [], url: null },
+            notes: [{ message: 'Gate code 1234', createdAt: '2026-11-03T15:00:00Z' }],
+            notesTotal: 1,
+            checklistsToDo: 1,
+            lineItems: [],
+            readAt: '2026-11-04T15:00:00Z',
+          }
+        : undefined,
+    };
+  },
   jobberDayQuery: (date: string) => ({
     queryKey: ['jobber-day', date],
     queryFn: async () => {
@@ -151,8 +179,9 @@ describe('the Day view', () => {
     fireEvent.click(await screen.findByRole('button', { name: /40 Jobber St/ }));
 
     const popover = await screen.findByRole('dialog');
-    expect(within(popover).getAllByText('Only in Jobber').length).toBeGreaterThan(0);
-    expect(within(popover).getByRole('link', { name: 'See it against Jobber' }).getAttribute('href')).toBe(
+    // Under ···, as Jobber keeps its other actions: the comparison, named for how it differs.
+    fireEvent.keyDown(within(popover).getByRole('button', { name: 'More' }), { key: 'Enter' });
+    expect((await screen.findByRole('menuitem', { name: 'Only in Jobber' })).getAttribute('href')).toBe(
       '/schedule?mode=compare&view=day&date=2026-11-04',
     );
   });
@@ -207,17 +236,60 @@ describe('Jobber work that is not an inspection (2026-11-25)', () => {
     expect(within(popover).getByText('Ada Lane')).toBeTruthy();
   });
 
-  it('opens as Jobber work, with nothing to open here and nothing that changes it', async () => {
+  it("is laid out as Jobber's popup, its buttons there and none of them changing Jobber yet (2026-11-25)", async () => {
     mount();
     fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
 
     const popover = await screen.findByRole('dialog');
-    // Laid out as Jobber's own popup: Visit, its Completed box, Start.
     expect(within(popover).getByText('Visit')).toBeTruthy();
-    expect(within(popover).getByText('Not completed')).toBeTruthy();
     expect(within(popover).getByText('Start')).toBeTruthy();
+    // "Completed", ticked or not as in Jobber -- never "Not completed".
+    const completed = within(popover).getByRole('checkbox', { name: 'Completed' });
+    expect(completed.getAttribute('aria-checked')).toBe('false');
+    expect(within(popover).queryByText('Not completed')).toBeNull();
+    for (const name of ['Add a technician', 'Remove Ada Lane', 'Find a time', 'Edit', 'Details', 'More', 'Move', 'Close'])
+      expect(within(popover).getByRole('button', { name })).toBeTruthy();
+
+    // Ticking it, adding or removing a person, Find a time and Edit say where it is done for now.
+    for (const control of [completed, within(popover).getByRole('button', { name: 'Remove Ada Lane' })]) {
+      fireEvent.click(control);
+      expect(within(popover).getByRole('status').textContent).toContain('Do it in Jobber for now');
+      expect(completed.getAttribute('aria-checked')).toBe('false');
+    }
+    expect(within(popover).getByRole('link', { name: 'Open Jobber’s calendar' }).getAttribute('href')).toBe(
+      'https://secure.getjobber.com/schedule/day/2026/11/04',
+    );
     expect(within(popover).queryByRole('link', { name: 'Open inspection' })).toBeNull();
-    expect(within(popover).queryByRole('checkbox')).toBeNull();
+  });
+
+  it('is moved by its handle, as Jobber’s is', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
+    const popover = await screen.findByRole('dialog');
+
+    fireEvent.pointerDown(within(popover).getByRole('button', { name: 'Move' }), { clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 60, clientY: 40 });
+    fireEvent.pointerUp(window);
+    expect(popover.style.transform).toBe('translate(50px, 30px)');
+  });
+
+  it('opens Visit details from Details -- the whole instructions, the job, the team and the tabs -- read only then', async () => {
+    details.asked = [];
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /General Maintenance - WO#44805/ }));
+    const popover = await screen.findByRole('dialog');
+    expect(details.asked).toEqual([]);
+
+    fireEvent.click(within(popover).getByRole('button', { name: 'Details' }));
+    const window_ = await screen.findByRole('dialog', { name: 'Visit details' });
+    expect(details.asked).toContain('v-omega');
+    expect(within(window_).getByText(/Scope of Work - Pest Control/)).toBeTruthy();
+    expect(within(window_).getByText('Job # 21118')).toBeTruthy();
+    expect(within(window_).getByRole('button', { name: 'Mark Complete' })).toBeTruthy();
+    for (const tab of ['Info', 'Client', /Notes/, /Checklists/]) expect(within(window_).getByRole('tab', { name: tab })).toBeTruthy();
+
+    fireEvent.click(within(window_).getByRole('button', { name: 'Mark Complete' }));
+    expect(within(window_).getByRole('status').textContent).toContain('Do it in Jobber for now');
   });
 });
 
@@ -236,6 +308,7 @@ describe("an inspection's name on the calendar (2026-11-25)", () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /12 Elm Ct - Zone 3 - Occupied Inspection/ }));
     const popover = await screen.findByRole('dialog');
+    // Under Details, as Jobber's popup names the property.
     expect(within(popover).getByText('12 Elm Ct')).toBeTruthy();
     // No Jobber visit to name it: the property, as before.
     expect(screen.getByRole('button', { name: /9 Oak Ln/ })).toBeTruthy();
