@@ -16,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
 import { comparisonWaitingOn } from '@/lib/comparison-waiting';
+import { photoPlace } from '@/lib/photo-file-name';
 import { useComparisonReport, useInspectionComparison } from '@/lib/queries';
 
 /**
@@ -119,6 +120,10 @@ export default function ComparisonReportPage() {
             captureTimeSource: photo.captureTimeSource,
           }))}
           onClose={() => setViewing(null)}
+          place={photoPlace({
+            propertywareBuilding: report.data?.property,
+            propertywareUnit: { name: report.data?.property.unitName },
+          })}
           startIndex={viewing.index}
         />
       ) : null}

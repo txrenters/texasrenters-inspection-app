@@ -282,9 +282,12 @@ export function AreaDetailPanel({
   onTabChange,
   onOpenPhoto,
   stepping,
+  place,
 }: {
   inspectionId: string;
   areaId: string;
+  /** The property, leading a downloaded photograph's file name. */
+  place?: string | null;
   /** Controlled by the workspace so it survives switching area. */
   tab: string;
   onTabChange: (tab: string) => void;
@@ -808,6 +811,7 @@ export function AreaDetailPanel({
         <EvidenceViewer
           items={viewerItems}
           onClose={() => setViewerIndex(null)}
+          place={place}
           startIndex={viewerIndex}
         />
       ) : null}

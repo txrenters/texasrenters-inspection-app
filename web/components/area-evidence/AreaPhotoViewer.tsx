@@ -39,8 +39,11 @@ export function AreaPhotoViewer({
   startPhotoId,
   onAreaChange,
   onClose,
+  place,
 }: {
   inspectionId: string;
+  /** The property, leading a downloaded photograph's file name. */
+  place?: string | null;
   /** The areas in the order to walk them: the list as filtered, so a filter narrows the walk. */
   areas: AreaEvidenceSummaryItem[];
   startAreaId: string;
@@ -74,6 +77,12 @@ export function AreaPhotoViewer({
     () => typeof window !== 'undefined' && Boolean(window.matchMedia?.(PANEL_BY_DEFAULT).matches),
   );
   const canReview = usePermissions().has('findings:review');
+  /**
+   * Each photograph's turn, held here because every area mounts a fresh
+   * viewer: a kitchen photograph turned upright stays upright after a look at
+   * the bathroom and back, until the viewer closes. Never saved.
+   */
+  const [turns, setTurns] = useState<Record<string, number>>({});
 
   const previous = nextAreaWithPhotos(areas, at.areaId, -1);
   const next = nextAreaWithPhotos(areas, at.areaId, 1);
@@ -176,8 +185,11 @@ export function AreaPhotoViewer({
       onArea={(direction) => void cross(direction, 'first')}
       onBeyond={(direction) => void cross(direction, direction === 1 ? 'first' : 'last')}
       onClose={onClose}
+      onTurn={(id, quarter) => setTurns((current) => ({ ...current, [id]: quarter }))}
+      place={place}
       position={ordinal === -1 ? undefined : `Area ${ordinal + 1} of ${areas.length}`}
       startIndex={startIndex}
+      turns={turns}
     />
   );
 }

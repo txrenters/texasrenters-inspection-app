@@ -27,6 +27,7 @@ import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented';
 import { usePermissions } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
+import { photoPlace } from '@/lib/photo-file-name';
 import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
@@ -532,6 +533,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                 areaId={selectedId}
                 inspectionId={inspectionId}
                 onOpenPhoto={(photoId) => setPhotoViewer({ areaId: selectedId, photoId })}
+                place={photoPlace(inspection)}
                 stepping={stepping}
                 onTabChange={selectTab}
                 tab={activeTab}
@@ -575,6 +577,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           inspectionId={inspectionId}
           onAreaChange={select}
           onClose={() => setPhotoViewer(null)}
+          place={photoPlace(inspection)}
           startAreaId={photoViewer.areaId}
           startPhotoId={photoViewer.photoId}
         />

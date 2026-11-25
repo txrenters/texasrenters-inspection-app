@@ -129,6 +129,12 @@
   /* Page and card titles. The foreground in the classic console; a deeper ink
      than the body text in the Jobber shell, as Jobber draws its headings. */
   --color-heading: var(--heading);
+  --color-viewer: var(--viewer);
+  --color-viewer-raised: var(--viewer-raised);
+  --color-viewer-foreground: var(--viewer-foreground);
+  --color-viewer-muted: var(--viewer-muted);
+  --color-viewer-accent: var(--viewer-accent);
+  --color-viewer-accent-foreground: var(--viewer-accent-foreground);
 
   /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
      renders during the swap window and on any build where the font fails to
@@ -314,6 +320,17 @@
   --heading: var(--foreground);
   --font-ui: var(--font-geist);
   --font-display-face: var(--font-geist);
+
+  /* The photo viewer (2026-11-26, approved on the canvas): a deep navy in both
+     themes, because a photograph reads best on dark whatever the page is. Not
+     redeclared under .dark on purpose. The accent is the lime of Download and
+     the photo picked in the strip; its ink is the navy, at 8.8:1. */
+  --viewer: oklch(0.22 0.026 228);
+  --viewer-raised: oklch(0.3 0.03 228.1);
+  --viewer-foreground: oklch(0.961 0.006 223.5);
+  --viewer-muted: oklch(0.778 0.021 224.4);
+  --viewer-accent: oklch(0.803 0.163 130.2);
+  --viewer-accent-foreground: oklch(0.258 0.04 229.5);
 }
 
 .dark {
