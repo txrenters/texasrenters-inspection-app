@@ -296,3 +296,30 @@ describe.each([
     expect(contrast(colour(scope, 'card'), colour(scope, 'sidebar'))).toBeGreaterThan(1.05);
   });
 });
+
+/**
+ * The photo viewer (2026-11-26): one deep navy in both themes, declared once
+ * in `:root` and never redeclared under `.dark`, because a photograph reads
+ * best on dark whatever the page around it is.
+ */
+describe('photo viewer', () => {
+  const pair = (text: string, surface: string) => contrast(colour(':root', text), colour(':root', surface));
+
+  it.each([
+    ['viewer-foreground', 'viewer'],
+    ['viewer-foreground', 'viewer-raised'],
+    ['viewer-muted', 'viewer'],
+    ['viewer-muted', 'viewer-raised'],
+    ['viewer-accent-foreground', 'viewer-accent'],
+  ])('%s is readable on %s', (text, surface) => {
+    expect(pair(text, surface)).toBeGreaterThanOrEqual(AA_BODY);
+  });
+
+  it('marks the photo picked in the strip clearly on the navy', () => {
+    expect(pair('viewer-accent', 'viewer')).toBeGreaterThanOrEqual(3);
+  });
+
+  it('is the same navy in dark mode', () => {
+    expect(() => readToken('.dark', 'viewer')).toThrow();
+  });
+});

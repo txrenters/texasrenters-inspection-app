@@ -51,13 +51,18 @@ async function open() {
   return screen.getByTestId('photo-viewport');
 }
 
-const zoomShown = () => screen.getByText(/%$/).textContent;
+/** The zoom as the toolbar says it: "Fit" for the whole photograph, a percentage past it. */
+const zoomShown = () => screen.getByTestId('zoom-level').textContent;
+const percent = () => Number.parseInt(zoomShown() ?? '0', 10);
 /**
  * The zoom once the photograph on screen has arrived. The zoom controls are
  * only there while a photograph is, and the next one has not always been
  * fetched ahead by the time a key steps on to it.
  */
-const zoomShownOnArrival = async () => (await screen.findByText(/%$/)).textContent;
+const zoomShownOnArrival = async () => {
+  await screen.findByRole('img');
+  return zoomShown();
+};
 
 function wheel(target: HTMLElement, deltaY: number) {
   const event = new WheelEvent('wheel', {
@@ -76,26 +81,26 @@ function wheel(target: HTMLElement, deltaY: number) {
 describe('zooming with the mouse wheel', () => {
   it('zooms in when the wheel rolls forward, and out again when it rolls back', async () => {
     const viewport = await open();
-    expect(zoomShown()).toBe('100%');
+    expect(zoomShown()).toBe('Fit');
 
     wheel(viewport, -300);
-    const zoomedIn = Number.parseInt(zoomShown() ?? '0', 10);
+    const zoomedIn = percent();
     expect(zoomedIn).toBeGreaterThan(100);
 
     wheel(viewport, 150);
-    const zoomedBack = Number.parseInt(zoomShown() ?? '0', 10);
+    const zoomedBack = percent();
     expect(zoomedBack).toBeLessThan(zoomedIn);
-    expect(zoomedBack).toBeGreaterThanOrEqual(100);
+    expect(zoomedBack).toBeGreaterThan(100);
   });
 
   it('never goes below the whole photograph, or past the most detailed zoom', async () => {
     const viewport = await open();
 
     wheel(viewport, 5_000);
-    expect(zoomShown()).toBe('100%');
+    expect(zoomShown()).toBe('Fit');
 
     wheel(viewport, -50_000);
-    expect(zoomShown()).toBe('600%');
+    expect(zoomShown()).toBe('800%');
   });
 
   it('keeps the page underneath from scrolling or zooming', async () => {
@@ -109,10 +114,10 @@ describe('double-click', () => {
     const viewport = await open();
 
     fireEvent.doubleClick(viewport, { clientX: 200, clientY: 150 });
-    expect(zoomShown()).toBe('250%');
+    expect(zoomShown()).toBe('200%');
 
     fireEvent.doubleClick(viewport, { clientX: 200, clientY: 150 });
-    expect(zoomShown()).toBe('100%');
+    expect(zoomShown()).toBe('Fit');
   });
 });
 
@@ -145,13 +150,42 @@ describe('dragging a zoomed photograph', () => {
 });
 
 describe('the buttons and keys', () => {
-  it('step the zoom', async () => {
+  it('step the zoom through the steps the canvas drew', async () => {
     await open();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
-    expect(zoomShown()).toBe('150%');
+    const steps = [];
+    for (let press = 0; press < 7; press += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+      steps.push(zoomShown());
+    }
+    expect(steps).toEqual(['150%', '200%', '300%', '400%', '600%', '800%', '800%']);
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+
+    fireEvent.keyDown(window, { key: '-' });
+    expect(zoomShown()).toBe('600%');
     fireEvent.keyDown(window, { key: '0' });
-    expect(zoomShown()).toBe('100%');
+    expect(zoomShown()).toBe('Fit');
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled();
+  });
+
+  it('go back to the whole photograph with Fit', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(zoomShown()).toBe('200%');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fit the whole photo' }));
+    expect(zoomShown()).toBe('Fit');
+  });
+
+  it('step on from a zoom the wheel left between two steps', async () => {
+    const viewport = await open();
+    wheel(viewport, -300);
+    expect(percent()).toBeGreaterThan(150);
+    expect(percent()).toBeLessThan(200);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(zoomShown()).toBe('200%');
   });
 
   it('start every photograph whole', async () => {
@@ -161,17 +195,23 @@ describe('the buttons and keys', () => {
 
     fireEvent.keyDown(window, { key: 'ArrowRight' });
 
-    expect(await zoomShownOnArrival()).toBe('100%');
+    expect(await zoomShownOnArrival()).toBe('Fit');
   });
 });
 
 describe('downloading', () => {
-  it('names the file for the area, the shot and the photograph', async () => {
+  it('saves the original, named for the area, the shot and the Texas day it was taken', async () => {
+    const saved: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push(this.download);
+      });
     await open();
 
-    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute(
-      'download',
-      'living-room-move-out-windows-locks-p1.jpg',
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await vi.waitFor(() => expect(saved).toEqual(['Living Room - Move-out - WINDOWS & LOCKS - 2026-09-11.jpg']));
+    click.mockRestore();
   });
 });

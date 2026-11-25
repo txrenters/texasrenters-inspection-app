@@ -334,3 +334,40 @@ describe("a work order's approval on the calendar (2026-11-26)", () => {
     expect(result.rows.find((row) => row.inspectionId === 'insp-2')?.workOrder).toBeNull();
   });
 });
+
+describe("where a day's visits are on the map (2026-11-26)", () => {
+  const buildingOfProperty = new Map([
+    ['jp-1', 'b-cedar'],
+    ['jp-9', 'b-thistle'],
+  ]);
+
+  it("puts an inspection at its own building, and Jobber's visits at the building their property is linked to", () => {
+    const result = day({
+      inspections: [inspection({ buildingId: 'b-own' })],
+      visits: [
+        visit(),
+        visit({ jobberVisitId: 'v-9', inspectionId: null, payload: { property: { id: 'jp-9', address: { street1: '806 Thistle Row' } } } }),
+        visit({
+          jobberVisitId: 'v-w',
+          inspectionId: null,
+          status: 'SKIPPED_NOT_SYNCED',
+          payload: { property: { id: 'jp-1', address: { street1: '1204 Cedar Hollow Dr' } } },
+        }),
+      ],
+      buildingOfProperty,
+    });
+
+    expect(result.rows.find((row) => row.inspectionId === 'insp-1')?.buildingId).toBe('b-own');
+    expect(result.rows.find((row) => row.jobberVisitId === 'v-9')?.buildingId).toBe('b-thistle');
+    expect(result.otherWork[0].buildingId).toBe('b-cedar');
+  });
+
+  it('leaves a visit off the map when its property is linked to no building', () => {
+    const result = day({
+      inspections: [],
+      visits: [visit({ jobberVisitId: 'v-x', inspectionId: null, payload: { property: { id: 'jp-unlinked', address: { street1: '1 Nowhere Ln' } } } })],
+      buildingOfProperty,
+    });
+    expect(result.rows[0].buildingId).toBeNull();
+  });
+});

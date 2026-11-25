@@ -12,11 +12,12 @@ import {
   type VisitServicesReport,
 } from '@texasrenters/shared';
 import { ChevronDownIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
-import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
+import { JobPhotosViewer, ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/format';
+import { businessDayOf, photoPlace } from '@/lib/photo-file-name';
 
 /**
  * What was done on a visit, as cards (the office, 2026-11-06: "arrange it with
@@ -136,7 +137,35 @@ function filterPhotos(report: VisitServicesReport): ServicePhoto[] {
     if (!filter.photoId) continue;
     byPhoto.set(filter.photoId, [...(byPhoto.get(filter.photoId) ?? []), filterLabel(filter)]);
   }
-  return [...byPhoto].map(([id, labels]) => ({ id, label: labels.join(', '), captureType: 'SERIAL_OR_LABEL' }));
+  return [...byPhoto].map(([id, labels]) => ({
+    id,
+    label: labels.join(', '),
+    captureType: 'SERIAL_OR_LABEL',
+    title: VISIT_SERVICE_LABEL.filterChange,
+  }));
+}
+
+/** A service's own photograph, when the technician took one: pest control's, flea treatment's. */
+function servicePhoto(service: ReportableVisitService, report: VisitServicesReport): ServicePhoto[] {
+  const outcome = report.services[service];
+  const label = VISIT_SERVICE_LABEL[service];
+  if (!outcome?.photoId) return [];
+  // Beside the title in the viewer, as the card says it (the Viewer board).
+  const detail = outcome.done === false ? ['Not done', outcome.reason?.trim()].filter(Boolean).join(' · ') : 'Done';
+  return [{ id: outcome.photoId, label, captureType: 'OTHER', title: label, detail }];
+}
+
+/**
+ * Every job photograph of the visit, in the order its cards show them: each
+ * service's own photograph, then the filters' under the filter change. One
+ * viewer walks them all.
+ */
+export function visitPhotos(report: VisitServicesReport): ServicePhoto[] {
+  const byId = new Map<string, ServicePhoto>();
+  for (const service of REPORTABLE_VISIT_SERVICES)
+    for (const photo of [...servicePhoto(service, report), ...(service === 'filterChange' ? filterPhotos(report) : [])])
+      if (!byId.has(photo.id)) byId.set(photo.id, photo);
+  return [...byId.values()];
 }
 
 function FilterRegisters({ filters, overdue }: { filters: readonly VisitFilterOutcome[]; overdue: boolean }) {
@@ -204,7 +233,7 @@ function serviceCard(service: ReportableVisitService, report: VisitServicesRepor
   const extra = SERVICE_CARDS[service]?.(report, context) ?? null;
   if (!outcome && !extra) return null;
   const done = outcome?.done ?? true;
-  const photo: ServicePhoto[] = outcome?.photoId ? [{ id: outcome.photoId, label: VISIT_SERVICE_LABEL[service], captureType: 'OTHER' }] : [];
+  const photo = servicePhoto(service, report);
   const standard =
     outcome?.reason || photo.length ? (
       <>
@@ -252,9 +281,12 @@ export function VisitWork({
   report,
   status,
   showInspection,
+  technicianName,
 }: {
   inspection: AdminInspection;
   report: VisitServicesReport | null;
+  /** Who did the work, for the line under each photograph in the viewer. */
+  technicianName?: string | null;
   /** How the visit stands, which is how its inspection stands. */
   status: CardStatus;
   /** The inspection has begun, so there is something of it to speak of. */
@@ -264,13 +296,25 @@ export function VisitWork({
   // "Still uploading" four days on told the office to wait for a photograph
   // that was never coming (5706 Micah Ln, 2026-10-02 to 10-06).
   const overdue = submittedAt ? Date.now() - Date.parse(submittedAt) > PHOTO_OVERDUE_MS : false;
+  const photos = useMemo(() => (report ? visitPhotos(report) : []), [report]);
   const cards = [
     ...(report ? serviceCards(report, overdue) : []),
     ...(showInspection ? [inspectionCard(inspection, status)].filter((card): card is WorkCard => card !== null) : []),
   ];
   if (!cards.length) return null;
   const reportedAt = inspection.servicesReportedAt ?? null;
+  const place = photoPlace(inspection);
+  // The line under each photograph in the viewer: where, when it was reported, who.
+  const caption = [place, reportedAt ? `Work done reported ${formatDateTime(reportedAt)}` : null, technicianName]
+    .filter(Boolean)
+    .join(' · ');
   return (
+    <JobPhotosViewer
+      caption={caption || null}
+      day={businessDayOf(reportedAt ?? submittedAt)}
+      photos={photos}
+      place={place}
+    >
     <section aria-label="Work done" className="grid gap-2">
       <h3 className="text-muted-foreground text-xs">
         Work done
@@ -282,5 +326,6 @@ export function VisitWork({
         </VisitFoldCard>
       ))}
     </section>
+    </JobPhotosViewer>
   );
 }

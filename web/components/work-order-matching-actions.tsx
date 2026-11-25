@@ -82,7 +82,11 @@ export function WorkOrderMatchingActions() {
     <div className="flex flex-wrap items-center gap-2">
       {status.data ? (
         <Badge variant={status.data.live ? 'success' : 'outline'}>
-          {status.data.live ? 'Auto-assign on' : 'Auto-assign trial: suggests only'}
+          {status.data.mode === 'calendar'
+            ? 'Auto-assign test: on the calendar only, nobody told'
+            : status.data.live
+              ? 'Auto-assign on'
+              : 'Auto-assign trial: suggests only'}
         </Badge>
       ) : null}
       <WorkOrderCrewButton />

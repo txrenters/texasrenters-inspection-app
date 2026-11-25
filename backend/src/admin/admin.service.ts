@@ -4400,12 +4400,17 @@ export class AdminService {
    *
    * Never moves anyone. A visit the office has already put someone on keeps
    * them, and so does one that is no longer scheduled; the answer is false.
+   *
+   * `quiet` (the office's test, 2026-11-26): the assignment and its audit row
+   * only, so it is on the Schedule -- no Jobber push, no event to the
+   * technician's phone, no email.
    */
   async autoAssignWorkOrder(
     actor: AuthenticatedUser,
     inspectionId: string,
     technicianId: string,
     metadata: Prisma.InputJsonObject,
+    { quiet = false }: { quiet?: boolean } = {},
   ): Promise<boolean> {
     const assigned = await this.prisma.$transaction(async (tx) => {
       const inspection = await tx.inspection.findFirst({
@@ -4420,7 +4425,12 @@ export class AdminService {
       if (current) return false;
       await this.requireTechnician(actor.organizationId, technicianId, tx);
       const assignment = await tx.inspectionAssignment.create({
-        data: { inspectionId, technicianId, assignedById: null, reason: 'Matched to the work order' },
+        data: {
+          inspectionId,
+          technicianId,
+          assignedById: null,
+          reason: quiet ? 'Matched to the work order (test: calendar only)' : 'Matched to the work order',
+        },
         select: { id: true },
       });
       await tx.auditLog.create({
@@ -4433,7 +4443,7 @@ export class AdminService {
           metadata: { assignmentId: assignment.id, technicianId, ...metadata },
         },
       });
-      if (getJobberConfig().pushEditsEnabled)
+      if (!quiet && getJobberConfig().pushEditsEnabled)
         await requestVisitPush(tx, {
           organizationId: actor.organizationId,
           inspectionId,
@@ -4443,8 +4453,10 @@ export class AdminService {
       return true;
     }, ADMIN_TRANSACTION_OPTIONS);
     if (!assigned) return false;
-    this.technicianEvents?.publish(technicianId, inspectionId, 'ASSIGNED');
-    this.notifyAssignmentByEmail(actor.organizationId, inspectionId, technicianId);
+    if (!quiet) {
+      this.technicianEvents?.publish(technicianId, inspectionId, 'ASSIGNED');
+      this.notifyAssignmentByEmail(actor.organizationId, inspectionId, technicianId);
+    }
     await this.cacheInvalidation?.publish({
       type: 'inspection.changed',
       organizationId: actor.organizationId,

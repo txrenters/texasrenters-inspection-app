@@ -67,6 +67,7 @@ export class JobberDayService {
             take: 1,
             select: { payload: true },
           },
+          propertywareBuildingId: true,
           propertywareBuilding: { select: { name: true, addressLine1: true } },
           assignments: {
             where: { isCurrent: true },
@@ -135,6 +136,19 @@ export class JobberDayService {
       return { ...row, payload: parsed?.success ? parsed.data : null };
     });
 
+    // The building each Jobber property is linked to, so Jobber's own work is
+    // on the Schedule's map too (2026-11-26). Stored links only: nothing is
+    // geocoded or asked of Jobber.
+    const jobberProperties = [
+      ...new Set(visits.map((visit) => visit.payload?.property?.id).filter((id): id is string => Boolean(id))),
+    ];
+    const propertyLinks = jobberProperties.length
+      ? await this.prisma.jobberPropertyLink.findMany({
+          where: { organizationId, jobberPropertyId: { in: jobberProperties }, propertywareBuildingId: { not: null } },
+          select: { jobberPropertyId: true, propertywareBuildingId: true },
+        })
+      : [];
+
     // A visit of the day whose inspection sits on another day here.
     const ofTheDay = new Set(inspections.map((row) => row.id));
     const elsewhereIds = visits
@@ -169,6 +183,7 @@ export class JobberDayService {
         jobberVisitId: row.jobberVisitId,
         property:
           row.propertywareBuilding?.addressLine1 ?? row.propertywareBuilding?.name ?? 'Property snapshot',
+        buildingId: row.propertywareBuildingId,
         technician: row.assignments[0]?.technician ?? null,
         waitingKinds: row.jobberOutboundTasks.map((task) => task.kind),
         job: row.job
@@ -195,6 +210,9 @@ export class JobberDayService {
         ]),
       ),
       technicians: [...people.values()],
+      buildingOfProperty: new Map(
+        propertyLinks.map((link) => [link.jobberPropertyId, link.propertywareBuildingId!] as [string, string]),
+      ),
       connection: connection
         ? {
             connected: connection.status === JobberConnectionStatus.CONNECTED,

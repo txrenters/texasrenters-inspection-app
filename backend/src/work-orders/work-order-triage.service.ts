@@ -70,9 +70,27 @@ const MAX_SKILLS = 4;
 /** How many waiting work orders one "check open work orders" press reads, at most. */
 export const OPEN_CHECK_LIMIT = 100;
 
+/**
+ * What a pick does (`WORK_ORDER_AUTO_ASSIGN`):
+ *
+ * - unset -- **suggest**: recorded as SUGGESTED, nobody assigned;
+ * - `calendar` -- **calendar**: assigned here, so it is in the technician's
+ *   column on the Schedule, and nothing else -- not sent to Jobber, no email,
+ *   no event to the technician's phone (the office, 2026-11-26: "for now in
+ *   test, do not sync yet, it stays on calendar first, no notification yet to
+ *   techs or whatsoever");
+ * - `assign` -- **assign**: assigned, emailed, the phone told, and sent to
+ *   Jobber when Jobber edits are on.
+ */
+export type AutoAssignMode = 'suggest' | 'calendar' | 'assign';
+export function autoAssignMode(): AutoAssignMode {
+  const value = process.env.WORK_ORDER_AUTO_ASSIGN?.trim().toLowerCase();
+  return value === 'assign' || value === 'calendar' ? value : 'suggest';
+}
+
 /** Whether a pick is acted on, or only recorded for the office to check. */
 export function autoAssignLive(): boolean {
-  return process.env.WORK_ORDER_AUTO_ASSIGN?.trim().toLowerCase() === 'assign';
+  return autoAssignMode() !== 'suggest';
 }
 
 /** Why there is no reading to match on. */
@@ -293,14 +311,22 @@ export class WorkOrderTriageService {
         technicianId: result.picked.technicianId,
         reason: `Would assign ${reason}`,
       });
-    const assigned = await this.admin.autoAssignWorkOrder(actor, inspectionId, result.picked.technicianId, {
-      workOrderKey: handoff.idempotency_key,
-      skills: reading.skillKeys,
-      scope: reading.scope,
-      confidence: reading.confidence,
-      tier: result.picked.tier,
-      reason,
-    });
+    const mode = autoAssignMode();
+    const assigned = await this.admin.autoAssignWorkOrder(
+      actor,
+      inspectionId,
+      result.picked.technicianId,
+      {
+        workOrderKey: handoff.idempotency_key,
+        skills: reading.skillKeys,
+        scope: reading.scope,
+        confidence: reading.confidence,
+        tier: result.picked.tier,
+        reason,
+        mode,
+      },
+      { quiet: mode === 'calendar' },
+    );
     return this.record(organizationId, inspectionId, inputHash, {
       ...facts,
       ranking,

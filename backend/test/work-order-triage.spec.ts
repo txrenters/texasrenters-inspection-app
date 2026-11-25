@@ -191,13 +191,38 @@ describe('WorkOrderTriageService', () => {
       machine,
       VISIT,
       'tech-kevin',
-      expect.objectContaining({ skills: ['faucet-leak'], scope: 'MINOR' }),
+      expect.objectContaining({ skills: ['faucet-leak'], scope: 'MINOR', mode: 'assign' }),
+      { quiet: false },
     );
     expect(row()).toMatchObject({
       outcome: WorkOrderTriageOutcome.ASSIGNED,
       technicianId: 'tech-kevin',
       reason: 'Kevin: Faucet Leak; minor job.',
     });
+  });
+
+  it('in the calendar test, assigns the technician who fits -- quietly: not to Jobber, nobody told (2026-11-26)', async () => {
+    process.env.WORK_ORDER_AUTO_ASSIGN = 'calendar';
+    aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+    const { service, admin, row } = harness();
+    await service.triage(machine, VISIT, handoff());
+    expect(admin.autoAssignWorkOrder).toHaveBeenCalledWith(
+      machine,
+      VISIT,
+      'tech-kevin',
+      expect.objectContaining({ mode: 'calendar' }),
+      { quiet: true },
+    );
+    expect(row()).toMatchObject({ outcome: WorkOrderTriageOutcome.ASSIGNED, technicianId: 'tech-kevin' });
+  });
+
+  it('reads anything but "assign" or "calendar" as the trial', async () => {
+    process.env.WORK_ORDER_AUTO_ASSIGN = 'yes';
+    aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+    const { service, admin, row } = harness();
+    await service.triage(machine, VISIT, handoff());
+    expect(admin.autoAssignWorkOrder).not.toHaveBeenCalled();
+    expect(row()).toMatchObject({ outcome: WorkOrderTriageOutcome.SUGGESTED });
   });
 
   describe('already working nearby (2026-11-25)', () => {
@@ -266,7 +291,7 @@ describe('WorkOrderTriageService', () => {
       ],
     });
     await service.triage(machine, VISIT, handoff());
-    expect(admin.autoAssignWorkOrder).toHaveBeenCalledWith(machine, VISIT, 'tech-amy', expect.anything());
+    expect(admin.autoAssignWorkOrder).toHaveBeenCalledWith(machine, VISIT, 'tech-amy', expect.anything(), { quiet: false });
     expect(row()).toMatchObject({ technicianId: 'tech-amy' });
   });
 

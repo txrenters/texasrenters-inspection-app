@@ -313,6 +313,7 @@ export function VisitCard({
           // Nobody got in, so there is no inspection to speak of: the alert above says why.
           showInspection={(done || Boolean(worked)) && visitStateOf(inspection) !== 'COULD_NOT_GET_IN'}
           status={state}
+          technicianName={technicianName}
         />
       </CardContent>
     </Card>
