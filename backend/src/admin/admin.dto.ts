@@ -643,6 +643,12 @@ export class UnassignDto {
   @IsString() @MinLength(2) @MaxLength(500) reason!: string;
 }
 
+/** Who did a finished visit, corrected (`AdminService.changeDoneTechnician`). */
+export class DoneTechnicianDto {
+  @IsUUID() technicianId!: string;
+  @IsString() @MinLength(2) @MaxLength(500) reason!: string;
+}
+
 export class AssignmentListQueryDto extends PaginationDto {
   @IsOptional() @IsUUID() inspectionId?: string;
   /**

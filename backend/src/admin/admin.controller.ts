@@ -56,6 +56,7 @@ import {
   AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
+  DoneTechnicianDto,
   ChargeReviewDto,
   ChargeRuleDto,
   CommitInspectionImportDto,
@@ -1247,6 +1248,16 @@ export class AdminController {
     @Body() body: AssignmentDto,
   ) {
     return this.service.reassign(request.user, id, body);
+  }
+  /** Who did a finished visit, corrected; see `AdminService.changeDoneTechnician`. */
+  @Post('inspections/:inspectionId/done-technician')
+  @RequirePermissions('inspections:assign')
+  changeDoneTechnician(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: DoneTechnicianDto,
+  ) {
+    return this.service.changeDoneTechnician(request.user, id, body);
   }
   @Post('inspections/:inspectionId/unassign')
   @RequirePermissions('inspections:assign')

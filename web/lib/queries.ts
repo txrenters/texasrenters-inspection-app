@@ -3238,6 +3238,22 @@ export function useAdminMutations() {
         refreshInspection(variables.id);
       },
     }),
+    /**
+     * Who did a finished visit, corrected. Not a reassignment: nobody is sent
+     * or told; the record changes, and Jobber's visit with it.
+     */
+    changeDoneTechnician: useMutation({
+      mutationFn: ({ id, ...input }: { id: string; technicianId: string; reason: string }) =>
+        api<AdminAssignment>(`/api/v1/admin/inspections/${id}/done-technician`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshInspection(variables.id);
+        void verifyAffectedQueries(client, [['admin', 'inspection', variables.id, 'audit']]);
+      },
+    }),
     unassign: useMutation({
       mutationFn: ({ id, reason }: { id: string; reason: string }) =>
         api<AdminAssignment>(`/api/v1/admin/inspections/${id}/unassign`, {

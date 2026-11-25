@@ -31,44 +31,85 @@ const NONE = '__none__';
 
 const NOTE_LIMIT = 500;
 
+/**
+ * Who is on an inspection: assign, reassign -- or, once the visit is done,
+ * correct who did it (`afterVisit`, the office 2026-11-25: "it says Kevin but
+ * we should have an option to replace it, like Moses").
+ *
+ * The correction sends nobody and tells nobody: the visit is over. It changes
+ * the record, which the timesheet, Actual vs Budget and a new invoice read,
+ * and Jobber's visit with it. So the reason is required, not optional.
+ */
 export function AssignmentDialog({
   inspectionId,
   current,
+  afterVisit = false,
+  bookedWith,
   onClose,
 }: {
   inspectionId: string;
   current?: AdminAssignment;
+  /** The visit is done: change who did it, rather than who is sent. */
+  afterVisit?: boolean;
+  /** The other inspection on the same Jobber visit, "HVAC", which changes with this one. */
+  bookedWith?: string | null;
   onClose: () => void;
 }) {
   const [technicianId, setTechnicianId] = useState('');
   const [reason, setReason] = useState('');
   const technicians = useTechnicians({ page: 1, pageSize: 100, active: true });
   const mutations = useAdminMutations();
-  const mutation = current ? mutations.reassign : mutations.assign;
+  const routing = current ? mutations.reassign : mutations.assign;
+  const mutation = afterVisit ? mutations.changeDoneTechnician : routing;
+  const reasonRequired = afterVisit;
+  const ready = Boolean(technicianId) && (!reasonRequired || reason.trim().length >= 2);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
-      await mutation.mutateAsync({
-        id: inspectionId,
-        technicianId,
-        reason: reason.trim() || undefined,
-        idempotencyKey: crypto.randomUUID(),
-      });
+      if (afterVisit)
+        await mutations.changeDoneTechnician.mutateAsync({
+          id: inspectionId,
+          technicianId,
+          reason: reason.trim(),
+        });
+      else
+        await routing.mutateAsync({
+          id: inspectionId,
+          technicianId,
+          reason: reason.trim() || undefined,
+          idempotencyKey: crypto.randomUUID(),
+        });
       onClose();
     } catch {
       // The mutation surfaces the sanitized API error inline.
     }
   }
 
+  const title = afterVisit ? 'Change technician' : current ? 'Reassign inspection' : 'Assign inspection';
+  const action = afterVisit ? 'Change technician' : current ? 'Reassign' : 'Assign';
+
   return (
     <Dialog onOpenChange={(next) => (next ? undefined : onClose())} open>
       <DialogContent>
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>{current ? 'Reassign inspection' : 'Assign inspection'}</DialogTitle>
+            <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
-              {current ? (
+              {afterVisit ? (
+                <>
+                  {current ? (
+                    <>
+                      This visit is done and shows{' '}
+                      <span className="text-foreground font-medium">{current.technician?.displayName}</span>.
+                    </>
+                  ) : (
+                    'This visit is done and shows no technician.'
+                  )}{' '}
+                  Choose who did it. Nobody is notified, and Jobber&apos;s visit is changed to
+                  match. {current ? 'The previous technician stays in the history.' : null}
+                </>
+              ) : current ? (
                 <>
                   Currently assigned to{' '}
                   <span className="text-foreground font-medium">
@@ -83,7 +124,7 @@ export function AssignmentDialog({
           </DialogHeader>
 
           <Field>
-            <FieldLabel htmlFor="technician">Technician</FieldLabel>
+            <FieldLabel htmlFor="technician">{afterVisit ? 'Who did it' : 'Technician'}</FieldLabel>
             <Select
               disabled={technicians.isLoading}
               onValueChange={(next) => setTechnicianId(next === NONE ? '' : next)}
@@ -98,22 +139,37 @@ export function AssignmentDialog({
                   .filter((item) => item.id !== current?.technicianId)
                   .map((item) => (
                     <SelectItem key={item.id} value={item.id}>
-                      {item.displayName} · {item.workload?.current ?? 0} current
+                      {/* What they have on now says nothing about a visit already done. */}
+                      {afterVisit
+                        ? item.displayName
+                        : `${item.displayName} · ${item.workload?.current ?? 0} current`}
                     </SelectItem>
                   ))}
               </SelectContent>
             </Select>
+            {afterVisit && bookedWith ? (
+              <FieldDescription>
+                The {bookedWith} inspection on the same Jobber visit changes with it, once it is done.
+              </FieldDescription>
+            ) : null}
           </Field>
 
           <Field>
             <FieldLabel htmlFor="reason">
-              {current ? 'Reason for reassignment' : 'Assignment note'}
+              {afterVisit ? 'Reason' : current ? 'Reason for reassignment' : 'Assignment note'}
             </FieldLabel>
             <Textarea
               id="reason"
               maxLength={NOTE_LIMIT}
               onChange={(event) => setReason(event.target.value)}
-              placeholder={current ? 'Why is this being reassigned?' : 'Optional assignment note'}
+              placeholder={
+                afterVisit
+                  ? 'Who actually went, and how you know'
+                  : current
+                    ? 'Why is this being reassigned?'
+                    : 'Optional assignment note'
+              }
+              required={reasonRequired}
               value={reason}
             />
             <FieldDescription>
@@ -131,9 +187,9 @@ export function AssignmentDialog({
             <Button onClick={onClose} type="button" variant="outline">
               Cancel
             </Button>
-            <Button disabled={!technicianId || mutation.isPending} type="submit">
+            <Button disabled={!ready || mutation.isPending} type="submit">
               {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? 'Saving…' : current ? 'Reassign' : 'Assign'}
+              {mutation.isPending ? 'Saving…' : action}
             </Button>
           </DialogFooter>
         </form>
