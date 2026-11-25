@@ -688,7 +688,7 @@ function WeekView({
   const grid = days.map((date) => ({
     key: date,
     date,
-    rows: sortVisits(shownOn(date), personFirst(nameOf)),
+    rows: sortVisits(shownOn(date), visitName, personFirst(nameOf)),
   }));
   const menu = (column: GridColumn, cell: ReactElement) => (
     <DayMenu actions={dayMenu} date={column.date} key={column.key}>
@@ -808,7 +808,7 @@ function MonthView({
         <div className="grid grid-cols-7">
           {grid.map((date, index) => {
             const own = inMonth.has(date);
-            const rows = own ? sortVisits(shownOn(date), personFirst(nameOf)) : [];
+            const rows = own ? sortVisits(shownOn(date), visitName, personFirst(nameOf)) : [];
             const working = rows.filter(counts).length;
             const cell = (
               <div

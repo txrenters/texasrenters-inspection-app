@@ -39,6 +39,8 @@ export const jobberVisitSchema = z.object({
   // Jobber returns a startAt even for all-day visits, so this is the only
   // reliable way to know the visit has no real clock time.
   allDay: z.boolean().nullish(),
+  // Where the office dragged it among the day's Anytime work; lowest first.
+  overrideOrder: z.number().int().nullish(),
   job: z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() }).nullish(),
   client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
   /**
