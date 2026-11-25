@@ -232,6 +232,13 @@ export function calendarRows(day: JobberDayComparison | undefined): JobberDayRow
   return [...day.rows, ...(day.otherWork ?? []).map(workRow)];
 }
 
+/**
+ * What a visit is called on the calendar (2026-11-25: "the name of the
+ * calendar ... the same exactly as in jobber"): Jobber's own title for the
+ * visit, word for word; the property only when Jobber has no visit for it.
+ */
+export const visitName = (row: JobberDayRow) => row.jobber?.title ?? row.property;
+
 /** A day's visits in reading order: timed ones by the clock, then Anytime by person and property. */
 export function sortVisits(rows: readonly JobberDayRow[], nameOf: (row: JobberDayRow) => string): JobberDayRow[] {
   return [...rows].sort((a, b) => {

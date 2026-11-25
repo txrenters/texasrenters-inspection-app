@@ -48,6 +48,7 @@ import {
   technicianKey,
   texasMinutes,
   UNKNOWN_TYPE,
+  visitName,
   visitStart,
   weekdayOf,
   type CalendarFilters,
@@ -583,7 +584,7 @@ function DayView({
     date,
     rows: sortVisits(
       rows.filter((row) => peopleOf(row).includes(column.technicianId)),
-      (row) => row.property,
+      visitName,
     ),
     name: column.name,
     technicianId: column.technicianId,
