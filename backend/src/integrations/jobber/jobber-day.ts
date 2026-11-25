@@ -125,6 +125,7 @@ function extrasOf(payload: JobberVisit | null): JobberVisitExtras {
     jobNumber: jobNumber === null || jobNumber === undefined || jobNumber === '' ? null : String(jobNumber),
     details: payload?.instructions?.trim() || null,
     address: [street, address?.city?.trim(), region].filter(Boolean).join(', ') || null,
+    order: payload?.overrideOrder ?? null,
   };
 }
 
