@@ -231,8 +231,16 @@ function workRow(work: JobberDayOtherWork): JobberDayRow {
  */
 export function calendarRows(day: JobberDayComparison | undefined): JobberDayRow[] {
   if (!day) return [];
-  return [...day.rows, ...(day.otherWork ?? []).map(workRow)];
+  return [...day.rows.filter(readyForCalendar), ...(day.otherWork ?? []).map(workRow)];
 }
+
+/**
+ * A work order not approved yet stays off the calendar (the office,
+ * 2026-11-26: "the calendar, that is where we pass the work orders that ...
+ * ready to get automated"). It waits on the Work orders page, tagged, until
+ * the approval comes; everything else is on the calendar as before.
+ */
+export const readyForCalendar = (row: JobberDayRow) => !row.workOrder || row.workOrder.approved;
 
 /**
  * What a visit is called on the calendar (2026-11-25: "the name of the

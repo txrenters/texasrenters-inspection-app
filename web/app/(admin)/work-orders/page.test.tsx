@@ -95,6 +95,20 @@ describe('each row', () => {
     expect(screen.getByText('Pest control')).toBeInTheDocument();
     expect(screen.getByText('Unassigned')).toBeInTheDocument();
   });
+
+  it('says in Approval which are not approved yet or have no estimate, and which are ready (2026-11-26)', () => {
+    mount({}, [
+      row({ id: 'wo-wait', workOrderNumber: 44901, workOrder: { approved: false, estimate: null } }),
+      row({ id: 'wo-quote', workOrderNumber: 44902, workOrder: { approved: true, estimate: null } }),
+      row({ id: 'wo-ready', workOrderNumber: 44903, workOrder: { approved: true, estimate: 240 } }),
+    ]);
+
+    expect(screen.getByRole('columnheader', { name: 'Approval' })).toBeInTheDocument();
+    expect(screen.getAllByText('Not approved')).toHaveLength(1);
+    // Not approved and not quoted either: both say so, the approval first.
+    expect(screen.getAllByText('No estimate')).toHaveLength(2);
+    expect(screen.getByText('Approved · $240.00')).toBeInTheDocument();
+  });
 });
 
 describe('when nothing has arrived', () => {

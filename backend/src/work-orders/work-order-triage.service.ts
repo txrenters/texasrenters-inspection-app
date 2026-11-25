@@ -21,6 +21,7 @@ import { withTenant } from '../database/tenant-context';
 import { crewFilter } from './work-order-crew';
 import { askAi, jsonIn } from '../technician/ai-text';
 import { workOrderHandoffSchema, type WorkOrderHandoff } from './work-order-handoff.schema';
+import { workOrderStanding } from './work-order-standing';
 import {
   pickedReason,
   rankWorkOrderTechnicians,
@@ -224,6 +225,9 @@ export class WorkOrderTriageService {
     // Nothing to send anyone to, or somebody is already going: no reading, no cost.
     if (!inspection || inspection.status !== InspectionStatus.SCHEDULED) return null;
     if (inspection.assignments.length) return null;
+    // Not approved yet (2026-11-26): not ready to automate, so not read. The
+    // re-send that carries the approval comes back through here.
+    if (!workOrderStanding(handoff).approved) return null;
 
     const catalog = await this.prisma.technicianSkill.findMany({
       where: { organizationId, isActive: true },

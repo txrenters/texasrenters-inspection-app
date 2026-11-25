@@ -1,6 +1,7 @@
 import type { InspectionType } from '../enums/index.js';
 import type { FindingRejectReason } from './ai-guidance.js';
 import type { JobAreaNote, OfficeNote } from './job-notes.js';
+import type { JobberDayWorkOrder } from './jobber-day.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { PropertyServiceStatus } from './property-service.js';
@@ -704,6 +705,12 @@ export interface AdminInspection {
    * cannot claim a baseline that `generate` would then refuse.
    */
   baselineMissing?: boolean;
+  /**
+   * A maintenance work order's approval and estimate, for the Work orders
+   * list's Approval column (2026-11-26). Only on that list (`source=WORK_ORDER`);
+   * null anywhere else.
+   */
+  workOrder?: JobberDayWorkOrder | null;
   /**
    * The move-in a move-out is compared against: the latest that qualifies, as
    * the comparison and the AI analysis both choose it. Not `baselineInspection`,
