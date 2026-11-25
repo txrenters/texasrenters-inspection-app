@@ -11,7 +11,7 @@ import { businessTimeOfDay } from '@/lib/clock';
 import { formatScheduledDate, humanize, initials } from '@/lib/format';
 import { typeTitle, typeTone } from '@/lib/inspection-type-tone';
 import { JOBBER_DAY_LABEL, isOneSided, jobberDayTone } from '@/lib/jobber-day';
-import { statusGroup, visitStart, weekdayOf } from '@/lib/schedule-calendar';
+import { statusGroup, visitName, visitStart, weekdayOf } from '@/lib/schedule-calendar';
 import { cn } from '@/lib/utils';
 
 /** Who a visit is with, as either side names them. */
@@ -93,7 +93,7 @@ export function CalendarVisit({
   // Jobber work that is not an inspection (2026-11-25): Jobber's title and tick, nothing to open here.
   const work = Boolean(row.jobberWork);
   const done = group === 'done' || (work && Boolean(row.jobber?.completed));
-  const label = work ? (row.jobber?.title ?? row.property) : row.property;
+  const label = visitName(row);
   const start = visitStart(row);
   const time = businessTimeOfDay(start);
   const person = named !== undefined ? named : personOf(row);
@@ -160,7 +160,7 @@ export function CalendarVisit({
               : `${row.job ? `Job ${row.job.number}` : typeTitle(row.inspectionType)} · ${STATUS_WORDS[group] ?? humanize(row.status)}`}
           </p>
           <p className="text-heading mt-0.5 font-semibold">{label}</p>
-          {work && label !== row.property ? <p className="text-muted-foreground mt-0.5 text-xs">{row.property}</p> : null}
+          {label !== row.property ? <p className="text-muted-foreground mt-0.5 text-xs">{row.property}</p> : null}
           {row.job ? <p className="text-muted-foreground mt-0.5 text-xs">{row.job.title}</p> : null}
         </div>
         {/* What Jobber's popup shows under Details (2026-11-25): the job, and what to do there. */}
@@ -201,7 +201,6 @@ export function CalendarVisit({
           </dd>
           <dt className="text-muted-foreground">Jobber</dt>
           <dd className="min-w-0">
-            {row.jobber?.title && !work ? <span className="block truncate">{row.jobber.title}</span> : null}
             <span className={cn(differs ? (warning === 'destructive' ? 'text-destructive' : 'text-warning') : 'text-muted-foreground')}>
               {work ? 'From Jobber, not an inspection' : differs ? JOBBER_DAY_LABEL[row.state] : 'Matches Jobber'}
             </span>

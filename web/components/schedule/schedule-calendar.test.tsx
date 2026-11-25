@@ -221,6 +221,27 @@ describe('Jobber work that is not an inspection (2026-11-25)', () => {
   });
 });
 
+describe("an inspection's name on the calendar (2026-11-25)", () => {
+  it("is Jobber's title for its visit, word for word, with the property under it in the popup", async () => {
+    asked.days['2026-11-04'] = day('2026-11-04', [
+      row({
+        inspectionId: 'insp-elm',
+        property: '12 Elm Ct',
+        jobberVisitId: 'v-elm',
+        jobber: { startAt: null, technician: 'Ada Lane', title: '12 Elm Ct - Zone 3 - Occupied Inspection', completed: false },
+      }),
+      row({ inspectionId: 'insp-oak', property: '9 Oak Ln' }),
+    ]);
+    mount();
+
+    fireEvent.click(await screen.findByRole('button', { name: /12 Elm Ct - Zone 3 - Occupied Inspection/ }));
+    const popover = await screen.findByRole('dialog');
+    expect(within(popover).getByText('12 Elm Ct')).toBeTruthy();
+    // No Jobber visit to name it: the property, as before.
+    expect(screen.getByRole('button', { name: /9 Oak Ln/ })).toBeTruthy();
+  });
+});
+
 describe('a visit with two people on it (2026-11-25)', () => {
   it("is in both their columns on the Day view, as on Jobber's calendar", async () => {
     asked.days['2026-11-04'] = day('2026-11-04', [
