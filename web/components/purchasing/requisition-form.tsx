@@ -83,6 +83,13 @@ const ALL = 'all';
 const chosen = (value: string) => (value === NONE ? null : value);
 const whole = (value: string) => (/^\d+$/.test(value.trim()) && Number(value) > 0 ? Number(value.trim()) : null);
 const money = (value: string) => (value.trim() ? parseMoney(value) : null);
+/**
+ * A line's Direct Unit Cost: left empty it is 0.00 (2026-11-26). An item with no
+ * usual price came onto the line with an empty cost, the line read as not filled
+ * in and was never saved, so the requisition stayed empty and could not be sent
+ * for approval. Null only for something typed that is not an amount.
+ */
+const costOf = (line: Pick<LineDraft, 'cost'>) => (line.cost.trim() ? parseMoney(line.cost) : 0);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 /** An amount for a field that may hold none. */
 const dollars0 = (cents: number | null | undefined) => (cents == null ? '' : dollars(cents));
@@ -418,9 +425,10 @@ export function RequisitionForm({
   }
 
   // What the form holds, as the request; a row with something in it but not finished is null. Blank rows are not lines.
+  // An item and how many make a line; the cost, notes and the rest may be left empty.
   const parse = (line: LineDraft): RequisitionLineInput | null => {
     const quantity = whole(line.quantity);
-    const cost = money(line.cost);
+    const cost = costOf(line);
     const item = itemOf.get(line.itemId);
     if (line.itemId === NONE || quantity === null || cost === null || cost < 0) return null;
     const description = line.description.trim();
@@ -443,6 +451,18 @@ export function RequisitionForm({
     return quote.vendorId !== NONE && total !== null && total >= 0 ? { vendorId: quote.vendorId, totalCents: total, delivery: quote.delivery.trim() || null, chosen: quote.chosen } : null;
   });
   const complete = parsedLines.every(Boolean) && parsedQuotes.every(Boolean);
+  // What is not finished yet, said for the first line or quote it is on (2026-11-26), not "the lines".
+  const unfinished = (() => {
+    const at = lines.findIndex((line) => !isBlank(line) && !parse(line));
+    if (at >= 0) {
+      const line = lines[at]!;
+      const n = at + 1;
+      if (line.itemId === NONE) return `Line ${n}: choose its item code, or delete the line.`;
+      if (whole(line.quantity) === null) return `Line ${n}: type how many, a whole number.`;
+      return `Line ${n}: the Direct Unit Cost is not an amount, like 3.42. Leave it empty for none.`;
+    }
+    return parsedQuotes.some((quote) => !quote) ? 'A quote needs its vendor and its total.' : null;
+  })();
   const input: SaveRequisitionInput = {
     xeroTenantId: companyId,
     neededBy: neededBy || null,
@@ -463,7 +483,7 @@ export function RequisitionForm({
   const totalCents = reading ? reading.estimatedTotalCents : requisitionTotalCents(input.lines);
   const totalQuantity = shownLines.reduce((sum, line) => sum + line.quantity, 0);
   // With the files attached so far: above the office's amount, the quote must be one of them.
-  const problem = complete ? requisitionSubmitProblem({ ...input, files: requisition?.files ?? [] }, choices.settings) : 'Finish or delete the lines that are not filled in.';
+  const problem = complete ? requisitionSubmitProblem({ ...input, files: requisition?.files ?? [] }, choices.settings) : unfinished;
   // The approval step its amount falls in (Purchasing Setup, 2026-11-20): who approves it and the quotes it needs.
   const stepIndex = choices.settings.steps.indexOf(approvalStepFor(totalCents, choices.settings.steps));
   const step = choices.settings.steps[stepIndex]!;
@@ -698,7 +718,7 @@ export function RequisitionForm({
         onToggle={toggle}
         orderHint={can?.order ? 'Makes a draft purchase order for each vendor on this requisition that has none yet.' : undefined}
         releaseHint={can?.approveBlocked ?? undefined}
-        saveHint={editing && !complete ? 'Finish or delete the lines that are not filled in.' : undefined}
+        saveHint={editing && !complete ? (unfinished ?? undefined) : undefined}
         saving={pending}
         scanning={scanning}
         sendHint={editing ? (problem ?? undefined) : 'Sent already.'}
@@ -1022,7 +1042,8 @@ export function RequisitionForm({
                               // Left, it shows quantity × cost: the amount itself when it divides, else to the cent.
                               onBlur={() => setLine(line.key, { amount: null })}
                               onChange={(event) => setAmount(line, event.target.value)}
-                              value={line.amount ?? (whole(line.quantity) && money(line.cost) !== null ? dollars(whole(line.quantity)! * money(line.cost)!) : '')}
+                              placeholder={isBlank(line) ? '' : '0.00'}
+                              value={line.amount ?? (whole(line.quantity) && line.cost.trim() && money(line.cost) !== null ? dollars(whole(line.quantity)! * money(line.cost)!) : '')}
                             />
                           </td>
                           <td className={cn(CELL, fill('expected'))}>
