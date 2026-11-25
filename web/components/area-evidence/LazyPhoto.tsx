@@ -1,21 +1,22 @@
 'use client';
 
 import type { PhotoCaptureTimeSource } from '@texasrenters/shared';
-import { SparklesIcon } from 'lucide-react';
+import { SparklesIcon, ZoomInIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { PhotoStamp } from '@/components/photo-stamp';
-import { apiBlob } from '@/lib/api';
 
-/**
- * Gallery width. The endpoint caches this variant beside the original, so the
- * expensive re-encode happens once per photo rather than once per view.
+import { cachedThumbnail, loadThumbnail } from './photo-cache';
+
+/*
+ * Gallery width: `THUMBNAIL_WIDTH` (320) in the photo cache. The endpoint caches
+ * this variant beside the original, so the expensive re-encode happens once per
+ * photo rather than once per view, and the cache keeps it for the viewer's strip.
  *
  * The previous gallery fetched each photo's **full-resolution original** on
  * mount, for every photo at once, proxied through the API — hundreds of
  * megabytes for a photo-heavy inspection before anything appeared.
  */
-const GALLERY_WIDTH = 320;
 
 const CAPTURE_LABELS: Record<string, string> = {
   AREA_OVERVIEW: 'Area overview',
@@ -74,7 +75,7 @@ export function LazyPhoto({
   compact?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [objectUrl, setObjectUrl] = useState<string | null>(() => cachedThumbnail(photo.contentPath));
   const [error, setError] = useState(false);
   const holder = useRef<HTMLButtonElement | null>(null);
 
@@ -97,22 +98,21 @@ export function LazyPhoto({
     return () => observer.disconnect();
   }, [visible]);
 
+  // Through the shared thumbnail cache, which owns the object URL: the
+  // viewer's strip shows this same thumbnail without asking for it again.
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    let created: string | null = null;
-    void apiBlob(`${photo.contentPath}?w=${GALLERY_WIDTH}`)
-      .then((blob) => {
-        if (cancelled) return;
-        created = URL.createObjectURL(blob);
-        setObjectUrl(created);
-      })
-      .catch(() => {
+    loadThumbnail(photo.contentPath).then(
+      (url) => {
+        if (!cancelled) setObjectUrl(url);
+      },
+      () => {
         if (!cancelled) setError(true);
-      });
+      },
+    );
     return () => {
       cancelled = true;
-      if (created) URL.revokeObjectURL(created);
     };
   }, [visible, photo.contentPath]);
 
@@ -123,7 +123,7 @@ export function LazyPhoto({
   return (
     <button
       aria-label={`Open ${alt}`}
-      className="group focus-visible:ring-ring/50 grid gap-1 text-left focus-visible:ring-[3px] focus-visible:outline-none"
+      className="group focus-visible:ring-ring/50 grid cursor-zoom-in gap-1 text-left focus-visible:ring-[3px] focus-visible:outline-none"
       onClick={onOpen}
       ref={holder}
       type="button"
@@ -158,6 +158,15 @@ export function LazyPhoto({
             {error ? 'Unavailable' : ''}
           </span>
         )}
+        {/* A magnifier under the pointer: this opens the viewer (the Where board). */}
+        {objectUrl && onOpen ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 grid place-content-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+          >
+            <ZoomInIcon className="size-6" />
+          </span>
+        ) : null}
       </span>
       {!compact ? (
         <span className="text-muted-foreground truncate text-xs">
