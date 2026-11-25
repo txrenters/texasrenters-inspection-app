@@ -293,7 +293,7 @@ export function ScheduleCalendar({
             />
           )}
         </div>
-        {mapOn ? <ScheduleMap date={anchor} /> : null}
+        {mapOn ? <ScheduleMap date={anchor} hiddenTechnicians={hidden.technicians} rows={shownOn(anchor)} /> : null}
       </div>
     </>
   );

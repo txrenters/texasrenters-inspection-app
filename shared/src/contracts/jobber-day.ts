@@ -46,6 +46,11 @@ export interface JobberDayRow {
   jobberVisitId: string | null;
   /** The property as the office knows it: the building, else Jobber's street. */
   property: string;
+  /**
+   * Where it is on the map (2026-11-26): the inspection's building, else the
+   * building Jobber's property is linked to. Null when neither is known.
+   */
+  buildingId?: string | null;
   /** e.g. OCCUPIED; null for a Jobber-only visit whose type is not known yet. */
   inspectionType: string | null;
   /** The inspection's own status here; null when there is no inspection. */
@@ -126,6 +131,8 @@ export interface JobberVisitExtras {
 
 export interface JobberDayOtherWork extends JobberVisitExtras {
   jobberVisitId: string;
+  /** The building Jobber's property is linked to, for the map; null when unlinked. */
+  buildingId?: string | null;
   title: string | null;
   property: string;
   technician: string | null;

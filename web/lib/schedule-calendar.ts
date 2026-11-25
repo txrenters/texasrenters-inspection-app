@@ -198,6 +198,7 @@ function workRow(work: JobberDayOtherWork): JobberDayRow {
     inspectionId: null,
     jobberVisitId: work.jobberVisitId,
     property: work.property,
+    buildingId: work.buildingId ?? null,
     inspectionType: null,
     status: null,
     technicianId: work.technicianId ?? null,
