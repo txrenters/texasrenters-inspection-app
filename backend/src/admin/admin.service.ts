@@ -5,6 +5,7 @@ import {
   EvidenceRequestStatus,
   FindingReviewStatus,
   FindingSource,
+  InspectionSource,
   InspectionStatus,
   InspectionType,
   JobberConnectionStatus,
@@ -17,6 +18,7 @@ import {
   ResponsibilityClassification,
   UserRole,
   VideoRecordingType,
+  WorkOrderImportStatus,
 } from '@prisma/client';
 
 import {
@@ -56,6 +58,7 @@ import {
   type JobInspectionType,
   type JobNextNumber,
   type AdminWorkOrder,
+  type JobberDayWorkOrder,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -76,6 +79,7 @@ import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-r
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
+import { workOrderStanding } from '../work-orders/work-order-standing';
 import { workOrderView } from '../work-orders/work-order-view';
 import { OFFICE_NOTE_SELECT, officeNoteView } from './inspection-notes.service';
 import {
@@ -1932,9 +1936,31 @@ export class AdminService {
       if (!baseline) missingBaseline.add(item.id);
     }
 
+    /**
+     * The Work orders list's Approval column (2026-11-26): where each work order
+     * stands, from its latest hand-off. Read only for that list -- one query
+     * over the page's own ids -- so no other list pays for it.
+     */
+    const standingByInspection = new Map<string, JobberDayWorkOrder>();
+    if (query.source === InspectionSource.WORK_ORDER && items.length) {
+      const handoffs = await this.prisma.workOrderImport.findMany({
+        where: {
+          organizationId: user.organizationId,
+          inspectionId: { in: items.map((item) => item.id) },
+          status: WorkOrderImportStatus.PROCESSED,
+        },
+        orderBy: { lastReceivedAt: 'desc' },
+        select: { inspectionId: true, payload: true },
+      });
+      for (const handoff of handoffs)
+        if (handoff.inspectionId && !standingByInspection.has(handoff.inspectionId))
+          standingByInspection.set(handoff.inspectionId, workOrderStanding(handoff.payload));
+    }
+
     const listed = this.page(
       items.map(({ rescheduleRequests, jobberCompanionOf, jobberCompanions, ...item }) => ({
         ...item,
+        workOrder: standingByInspection.get(item.id) ?? null,
         openWork: visitOpenWork({ status: item.status, rescheduleRequests, jobberCompanionOf, jobberCompanions }),
         /** The quarter of the programme it belongs to, not the one its day falls in. */
         quarter: visitQuarter(item),

@@ -12,6 +12,7 @@ import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { WorkOrderDialog } from '@/components/work-order-dialog';
 import { WorkOrderMatchingActions } from '@/components/work-order-matching-actions';
+import { workOrderGaps, WorkOrderTag } from '@/components/schedule/work-order-tag';
 import { EMPTY, formatScheduledDate, humanize } from '@/lib/format';
 import { useInspections } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
@@ -24,10 +25,10 @@ import { useDebouncedValue } from '@/lib/use-debounced-value';
  * Each one arrived through POST /gateway/work-orders and was filed as a
  * MAINTENANCE or PEST_CONTROL visit with the work order's number on it (see
  * docs/integrations/TX_MAINTENANCE_WORK_ORDERS.md). Only those visits are
- * listed: a visit the office created by hand is not a work order, and a work
- * order the maintenance app is still holding -- over its approval line with no
- * owner approval yet -- has not arrived. Nothing is approved, held or sent from
- * here; that stays with the maintenance app.
+ * listed: a visit the office created by hand is not a work order. Since
+ * 2026-11-26 the maintenance app can send work orders before anyone approved
+ * them; the Approval column says which, and those stay off the calendar until
+ * approved. Nothing is approved, held or sent from here yet.
  */
 
 type WorkOrderRow = NonNullable<ReturnType<typeof useInspections>['data']>['items'][number];
@@ -70,6 +71,24 @@ const columns: Array<Column<WorkOrderRow>> = [
     key: 'status',
     header: 'Status',
     cell: (row) => <StatusBadge value={visitStateOf(row)} />,
+  },
+  {
+    // Where it stands before anyone goes (2026-11-26). A work order not approved
+    // yet is listed here and kept off the calendar until it is.
+    key: 'approval',
+    header: 'Approval',
+    cell: (row) =>
+      row.workOrder ? (
+        workOrderGaps(row.workOrder).length ? (
+          <WorkOrderTag workOrder={row.workOrder} />
+        ) : (
+          <span className="text-success text-xs font-medium">
+            Approved{row.workOrder.estimate !== null ? ` · $${row.workOrder.estimate.toFixed(2)}` : ''}
+          </span>
+        )
+      ) : (
+        <span className="text-muted-foreground text-xs">{EMPTY}</span>
+      ),
   },
   {
     key: 'scheduled',

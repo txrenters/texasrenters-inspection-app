@@ -216,6 +216,26 @@ describe('WorkOrderTriageService', () => {
     expect(row()).toMatchObject({ outcome: WorkOrderTriageOutcome.ASSIGNED, technicianId: 'tech-kevin' });
   });
 
+  it('leaves a work order sent before anyone approved it alone -- no reading, nobody picked -- until the approval comes (2026-11-26)', async () => {
+    aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');
+    const { service, admin, row } = harness();
+    const unapproved = {
+      ...handoff(),
+      approval: { rule: 'sent_unapproved', threshold: 300, estimate: null, problems: [] },
+    } as unknown as WorkOrderHandoff;
+
+    expect(await service.triage(machine, VISIT, unapproved)).toBeNull();
+    expect(admin.autoAssignWorkOrder).not.toHaveBeenCalled();
+    expect(row()).toBeNull();
+
+    const approved = {
+      ...unapproved,
+      work_order: { ...unapproved.work_order, approved_date: '2026-12-03T15:30:00+00:00' },
+    } as WorkOrderHandoff;
+    await service.triage(machine, VISIT, approved);
+    expect(admin.autoAssignWorkOrder).toHaveBeenCalled();
+  });
+
   it('reads anything but "assign" or "calendar" as the trial', async () => {
     process.env.WORK_ORDER_AUTO_ASSIGN = 'yes';
     aiAnswers('{"skills":["faucet-leak"],"scope":"MINOR","confidence":90,"summary":"Dripping faucet"}');

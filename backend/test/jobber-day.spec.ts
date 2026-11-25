@@ -1,4 +1,4 @@
-import { workOrderStanding } from '../src/integrations/jobber/jobber-day.service';
+import { workOrderStanding } from '../src/work-orders/work-order-standing';
 import {
   compareJobberDay,
   type DayInput,
@@ -315,15 +315,20 @@ describe('a day against Jobber', () => {
   });
 });
 
-describe("a work order's approval on the calendar (2026-11-26)", () => {
-  it('reads not approved from a hand-off with no approved date, and the estimate when there is one', () => {
-    expect(workOrderStanding({ work_order: { approved_date: null, cost_estimate: null } })).toEqual({ approved: false, estimate: null });
-    expect(workOrderStanding({ work_order: { approved_date: '2026-11-11T15:30:00+00:00', cost_estimate: 240 } })).toEqual({
+describe("a work order's approval (2026-11-26)", () => {
+  it("is not approved only when the maintenance app sent it unapproved and nobody has approved it since", () => {
+    const unapproved = { work_order: { approved_date: null, cost_estimate: null }, approval: { rule: 'sent_unapproved' } };
+    expect(workOrderStanding(unapproved)).toEqual({ approved: false, estimate: null });
+    expect(workOrderStanding({ ...unapproved, work_order: { approved_date: '2026-12-03T15:30:00+00:00', cost_estimate: 240 } })).toEqual({
       approved: true,
       estimate: 240,
     });
-    // A hand-off that cannot be read never claims an approval.
-    expect(workOrderStanding(null)).toEqual({ approved: false, estimate: null });
+    // Sent under the maintenance app's own rules -- under the threshold, an emergency -- it is ready, approved date or not.
+    expect(workOrderStanding({ work_order: { approved_date: null, cost_estimate: 120 }, approval: { rule: 'under_threshold' } })).toEqual({
+      approved: true,
+      estimate: 120,
+    });
+    expect(workOrderStanding({ work_order: { approved_date: null, cost_estimate: null } }).approved).toBe(true);
   });
 
   it("carries it on the work order's row, and on nothing else", () => {
