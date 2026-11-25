@@ -1773,6 +1773,8 @@ export interface AdminWorkOrderMatching {
 /** Whether matching assigns, or only records who it would assign (the trial). */
 export interface WorkOrderMatchingStatus {
   live: boolean;
+  /** suggest: recorded only; calendar: assigned here and nothing sent or told (the test); assign: assigned, told and sent. */
+  mode?: 'suggest' | 'calendar' | 'assign';
 }
 
 /** Loading the Technicians' Scope of Work sheet; `applied` false is the preview. */

@@ -11,7 +11,7 @@ import {
 } from '../common/auth';
 import { TechnicianScopeSheetService } from './technician-scope-sheet';
 import { WorkOrderCrewService } from './work-order-crew';
-import { autoAssignLive, WorkOrderTriageService } from './work-order-triage.service';
+import { autoAssignLive, autoAssignMode, WorkOrderTriageService } from './work-order-triage.service';
 
 export class ImportScopeSheetDto {
   /** False, or left out, only says what an import would do. */
@@ -57,7 +57,7 @@ export class WorkOrderMatchingController {
   @Get()
   @RequirePermissions('technicians:skills')
   status() {
-    return { live: autoAssignLive() };
+    return { live: autoAssignLive(), mode: autoAssignMode() };
   }
 
   @Post('import-skills')
